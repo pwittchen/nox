@@ -237,7 +237,7 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
   pointer: Open, Copy Link, Reveal in Finder.
 
 ### 5.6 Command palette
-- `⌘⇧P` or the `⌘` title-bar icon opens a floating panel just below the title bar, like kayet's:
+- `⌘K` or the `⌘` title-bar icon opens a floating panel just below the title bar, like kayet's:
   a search field, a filtered list of commands (fuzzy match) with their shortcuts right-aligned,
   `↑` / `↓` navigate, `↵` runs, `Esc` closes, the footer hints the keys.
 - Lists every command in 10 (keyboard shortcuts), plus `Switch Theme…`, `Switch Appearance…`,
@@ -573,9 +573,9 @@ for WCAG AA against `bg` in both variants.
 | Equalize panes                  | `⌘⌃=`               |
 | Maximize / restore pane         | `⌘⇧↵`               |
 | Toggle sidebar (left mode only) | `⌘\`                |
-| Command palette                 | `⌘⇧P`               |
+| Command palette                 | `⌘K`                |
 | Find                            | `⌘F`                |
-| Clear buffer                    | `⌘K`                |
+| Clear buffer                    | `⌘⇧K`               |
 | Copy / Paste / Select all       | `⌘C` / `⌘V` / `⌘A`  |
 | Font bigger / smaller / reset   | `⌘+` / `⌘-` / `⌘0`  |
 | Previous / next prompt          | `⌘↑` / `⌘↓`         |
@@ -661,7 +661,7 @@ check_for_updates = true
 # action = "shortcut"; "" unbinds and passes the key to the program
 # split_vertical = "cmd-d"
 # split_horizontal = "cmd-shift-d"
-# command_palette = "cmd-shift-p"
+# command_palette = "cmd-k"
 # send text: map a key to bytes written to the PTY
 # "alt-left" = { send = "\u001bb" }
 
@@ -798,5 +798,3 @@ shell ◀───────────────────────�
   the focused pane's cwd with Copy Path / Reveal in Finder. Confirm or replace (e.g. workspace
   switcher, new-window button).
 - Multiple windows and "move tab to new window" — v2?
-- Should `⌘K` (clear buffer, iTerm convention) or the command palette (kayet convention) own
-  `⌘K`? Spec picks clear buffer, palette on `⌘⇧P`.
