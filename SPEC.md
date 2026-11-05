@@ -54,8 +54,9 @@ accessibility settings, notifications) goes through AppKit.
 | Regex (links)       | `regex`                                                                 |
 | Paths               | `dirs`                                                                  |
 | Logging             | `log` + `env_logger` (`~/.nox/nox.log` in release)                      |
-| Packaging           | `cargo-bundle` / `cargo-packager` → `.app`, `.dmg`; `codesign` + `notarytool` |
-| CI                  | GitHub Actions, macOS arm64 runners                                     |
+| Packaging           | `cargo-bundle` / `cargo-packager` → `.app`, `.dmg`; `codesign` + `notarytool` (Developer ID, see 15) |
+| Auto-update         | **Sparkle 2** (`Sparkle.framework`, driven via `objc2` from `nox_mac`), appcast + EdDSA-signed archives on GitHub Releases |
+| CI                  | GitHub Actions, macOS arm64 runners; signing, notarization and releases on tag push (see 15) |
 
 - **GPUI dependency**: pinned to an exact version (a crates.io `gpui` release, or a Zed git
   revision if needed for a fix), upgraded deliberately — its API changes between versions.
@@ -64,8 +65,9 @@ accessibility settings, notifications) goes through AppKit.
 - Target: **macOS on Apple Silicon only** (`aarch64-apple-darwin`), macOS 13 Ventura or newer.
   Release profile: `opt-level = 3`, `lto = "fat"`, `codegen-units = 1`, `strip = true`,
   `panic = "abort"`.
-- Distribution: signed + notarized `nox.app` in `nox-macos-aarch64.dmg`, and a Homebrew cask in
-  `pwittchen/tap`, as for kayet.
+- Distribution: signed + notarized `nox.app` in `nox-macos-aarch64.dmg`, published as a GitHub
+  Release, and a Homebrew cask in `pwittchen/tap`, as for kayet. Installed copies update
+  themselves from GitHub Releases once the repository is public (see 15).
 
 ### Why GPUI + alacritty_terminal
 The terminal grid is the product, so it is drawn by the same GPU renderer as the rest of the UI,
@@ -383,7 +385,7 @@ corner or a divider.
 - Live window resize draws synchronously with the resize (GPUI renders from the view's
   `setFrameSize` / display link during live resize); the `NSWindow` background color is set to
   the theme's `bg` so newly exposed areas never flash white. **This is verified in the first
-  prototype** (see 15); if GPUI shows stretched frames, patch the Metal layer setup
+  prototype** (see 16); if GPUI shows stretched frames, patch the Metal layer setup
   (`presentsWithTransaction` during live resize) in the pinned GPUI revision.
 - Font size changes (`⌘+`, `⌘-`, `⌘0`) resize the grid, not the window, and apply to all panes
   (`font.size_applies_to = "all" | "pane"`).
@@ -655,7 +657,8 @@ restore_session = true
 confirm_close = true
 quit_when_last_tab_closed = true
 dock_bounce_on_bell = true
-check_for_updates = true
+check_for_updates = true      # daily check against GitHub Releases (see 15)
+auto_install_updates = false  # true: download in the background, install on quit
 
 [keys]
 # action = "shortcut"; "" unbinds and passes the key to the program
@@ -725,7 +728,8 @@ nox/
 │   ├── nox_config/             # no GPUI: config model, load/validate, toml_edit writes, watcher
 │   ├── nox_theme/              # no GPUI: theme parsing, bundled themes, color resolution
 │   ├── nox_mac/                # objc2: NSMenu context menus, accessibility flags,
-│   │                           #   Dock bounce, notifications, NSWindow background color
+│   │                           #   Dock bounce, notifications, NSWindow background color,
+│   │                           #   Sparkle updater controller (feature `updater`)
 │   └── nox_ui/                 # GPUI views and elements:
 │       ├── workspace.rs        #   window root: title bar, tab bar/sidebar, active tab
 │       ├── tab_bar.rs          #   pills (top/bottom) and sidebar rows (left)
@@ -737,9 +741,14 @@ nox/
 │       ├── text_input.rs
 │       ├── dialog.rs, toast.rs
 │       └── theme.rs            #   Theme global (Hsla), applying nox_theme output
+├── .github/workflows/
+│   ├── ci.yml                  # PRs + master: fmt, clippy, test, bench, unsigned bundle
+│   └── release.yml             # tag v*: build, sign, notarize, staple, appcast, release, cask
 ├── assets/
 │   ├── icons/                  # SVG line icons (1.5px stroke)
-│   └── app/                    # .icns, Info.plist, entitlements
+│   └── app/                    # .icns, Info.plist, nox.entitlements
+├── scripts/
+│   └── release/                # sign.sh, notarize.sh, make_dmg.sh, appcast.sh (run by CI and locally)
 ├── themes/                     # bundled theme files (see 9)
 ├── SPEC.md
 ├── ARCH.md
@@ -787,7 +796,132 @@ shell ◀───────────────────────�
   Polish dead keys), live resize with 4 panes, ProMotion scrolling with momentum, each tabs
   position, every bundled theme in both variants, Reduce Motion / Increase Contrast.
 
-## 15. Risks & Open Questions
+## 15. Release, Signing & Updates
+
+### 15.1 Versioning
+- SemVer. The workspace `version` in `Cargo.toml` is the single source of truth; a release is
+  cut by pushing a tag `vX.Y.Z` that matches it (the release workflow fails on a mismatch).
+- `CFBundleShortVersionString` = `X.Y.Z`; `CFBundleVersion` = a monotonically increasing build
+  number (`github.run_number` of the release workflow), which is what Sparkle compares.
+- A tag with a pre-release suffix (`v1.2.0-beta.1`) produces a GitHub **pre-release** and goes
+  to the beta channel only (see 15.3).
+
+### 15.2 Code signing and notarization (GitHub Actions)
+nox is distributed outside the Mac App Store, so it is signed with a **Developer ID
+Application** certificate, uses the hardened runtime and is notarized by Apple; Gatekeeper opens
+it without warnings, also when downloaded from a browser.
+
+Repository secrets, available only to the `release` GitHub environment (protected: tags `v*`
+on `master`, required reviewer = owner), never to PR workflows or forks:
+
+| Secret                         | Content                                                       |
+|--------------------------------|---------------------------------------------------------------|
+| `MACOS_CERTIFICATE_P12`        | Developer ID Application certificate + private key, `.p12`, base64 |
+| `MACOS_CERTIFICATE_PASSWORD`   | password of the `.p12`                                        |
+| `MACOS_SIGNING_IDENTITY`       | `Developer ID Application: Piotr Wittchen (TEAMID)`           |
+| `APPLE_TEAM_ID`                | 10-character team ID                                          |
+| `APPSTORE_API_KEY_P8`          | App Store Connect API key (`.p8`, base64), role Developer, for `notarytool` |
+| `APPSTORE_API_KEY_ID`, `APPSTORE_API_ISSUER_ID` | key and issuer IDs of that API key           |
+| `SPARKLE_ED_PRIVATE_KEY`       | EdDSA private key for signing update archives (see 15.3)      |
+| `HOMEBREW_TAP_TOKEN`           | fine-grained PAT with write access to `pwittchen/homebrew-tap` only |
+
+An App Store Connect API key is used instead of Apple ID + app-specific password: no 2FA, can
+be revoked independently, not tied to a personal login.
+
+`release.yml` (runs on `macos-15` arm64, triggered by `push: tags: ['v*']`):
+
+1. Check out, verify tag == workspace version, `cargo test --release`.
+2. `cargo build --release --target aarch64-apple-darwin`, bundle `nox.app` (Info.plist with
+   version numbers from 15.1, `SUFeedURL`, `SUPublicEDKey`), embed `Sparkle.framework` in
+   `Contents/Frameworks`.
+3. Create a temporary keychain (random password), import the `.p12`, allow `codesign` to use it
+   without prompts (`security set-key-partition-list`); the keychain is deleted in an
+   `always()` cleanup step.
+4. Sign **inside-out**, never with `--deep`: Sparkle's XPC services, `Autoupdate`, `Updater.app`,
+   then `Sparkle.framework`, then `nox.app` — each with
+   `codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY"`, the app
+   with `--entitlements assets/app/nox.entitlements`.
+5. Entitlements are minimal: hardened runtime, **no** App Sandbox (a terminal must run arbitrary
+   programs with the user's permissions), no `disable-library-validation`, no JIT. Anything
+   added later must be justified in the PR.
+6. Build `nox-macos-aarch64.dmg` (app + `/Applications` symlink, background, icon layout), sign
+   the dmg.
+7. Notarize: `xcrun notarytool submit nox-macos-aarch64.dmg --key … --key-id … --issuer …
+   --wait --timeout 30m`; on rejection, fetch and print `notarytool log` and fail.
+8. Staple: `xcrun stapler staple` on `nox.app` and the dmg, so first launch works offline.
+9. Verify, fail the release on any error: `codesign --verify --strict --verbose=2 nox.app`,
+   `spctl --assess --type execute -vv nox.app`, `spctl --assess --type open
+   --context context:primary-signature -vv nox-macos-aarch64.dmg`, `stapler validate`.
+10. Produce the update archive and appcast (15.3), `SHA256SUMS`.
+11. Create the GitHub Release for the tag (notes from the matching `CHANGELOG.md` section) with
+    assets: `nox-macos-aarch64.dmg`, `nox-macos-aarch64.zip`, `appcast.xml`, `SHA256SUMS`.
+    Created as a draft and published only after every asset is uploaded, so the updater never
+    sees a half-uploaded release.
+12. Bump the cask in `pwittchen/tap` (version + sha256) through a commit with
+    `HOMEBREW_TAP_TOKEN` (stable releases only).
+
+The same steps live in `scripts/release/*.sh`, so a release can be built and notarized locally
+from a Mac with the certificate in the login keychain, if CI is unavailable.
+
+`ci.yml` (PRs and `master`) builds and tests and produces an **unsigned** (ad-hoc signed)
+`nox.app` artifact; it has no access to signing secrets.
+
+### 15.3 Automatic updates
+Updates are delivered with **Sparkle 2**, the de-facto standard for non-App-Store Mac apps:
+native AppKit UI, EdDSA-signed archives, atomic replace + relaunch,
+and it does not fight with Homebrew (the cask declares `auto_updates true`).
+
+- **Feed**: `SUFeedURL = https://github.com/pwittchen/nox/releases/latest/download/appcast.xml`.
+  GitHub redirects `latest/download` to the newest non-prerelease release, so no extra hosting
+  (no Pages, no server) is needed.
+- **Appcast**: generated in CI by Sparkle's `generate_appcast` (or `sign_update` + a template)
+  from the notarized `nox-macos-aarch64.zip` (`ditto -c -k --keepParent nox.app`, made *after*
+  stapling). Each item has `sparkle:version` (= `CFBundleVersion`), `sparkle:shortVersionString`,
+  `sparkle:minimumSystemVersion` (`13.0`), `sparkle:edSignature`, length, and
+  `sparkle:releaseNotesLink` pointing to the GitHub Release page. The appcast carries the full
+  history of the last few stable releases (CI downloads the previous `appcast.xml` and appends).
+- **Trust**: two independent checks — Sparkle verifies the EdDSA signature against
+  `SUPublicEDKey` in Info.plist, and that the new app is signed by the same Developer ID team.
+  The EdDSA private key exists only as a GitHub secret plus an offline backup (losing it means
+  users must reinstall manually; leaking it is mitigated by the Developer ID check).
+- **Behaviour**:
+  - `app.check_for_updates = true` → Sparkle checks once a day (`SUScheduledCheckInterval =
+    86400`) and on launch if the last check was more than a day ago; never on the
+    keystroke-to-pixel path and never before the first prompt is drawn (startup target in 12).
+  - A found update shows Sparkle's standard native window with release notes;
+    "Install and Relaunch" quits nox. Before quitting, the usual close confirmation applies
+    (`app.confirm_close`, running processes), and the session is saved so tabs, splits and
+    working directories come back after relaunch (see 6.6).
+  - `app.auto_install_updates = true` → downloaded silently, installed on the next quit.
+  - **nox → Check for Updates…** (menu bar) and the palette command "Check for Updates" trigger
+    a user-initiated check, which also reports "nox is up to date".
+  - No system profiling (`SUEnableSystemProfiling = false`); the only request is an HTTPS GET to
+    github.com.
+- **Channels**: stable by default. `app.update_channel = "beta"` (undocumented in the default
+  config) also accepts pre-releases: CI publishes a separate `appcast-beta.xml` asset and nox
+  sets `feedURLString` from the delegate accordingly.
+
+### 15.4 Before the repository is public
+Release assets of a private repository are not downloadable anonymously, so the updater cannot
+work until the repo is public. Until then:
+
+- The `updater` cargo feature is **off** in release builds: Sparkle is not embedded, the menu
+  item and palette command are hidden, `check_for_updates` is ignored. Signing and notarization
+  work from day one, so private builds are already Gatekeeper-clean.
+- GitHub Releases are still created (private), the dmg is shared manually; the cask bump step is
+  skipped (`if: github.event.repository.private == false`).
+- Going public = flip the repo visibility, enable the `updater` feature in `release.yml`, cut a
+  release. That release is the first one able to update itself; users of earlier private builds
+  install it once manually (or via `brew install --cask pwittchen/tap/nox`).
+
+### 15.5 Testing
+- `ci.yml` checks that `Info.plist` contains `SUFeedURL` / `SUPublicEDKey` when the `updater`
+  feature is on, and that the bundled Sparkle version matches the pinned one.
+- Before the first public release, and after each Sparkle upgrade: install release N-1 from its
+  dmg, publish N as a pre-release on the beta channel, verify update → relaunch → session
+  restored, then verify a tampered archive (bad EdDSA signature) is rejected.
+
+## 16. Risks & Open Questions
 
 - **First milestone is a prototype** that de-risks GPUI before the UI is built out: one window,
   one pane, `cat` of a 100 MB file, trackpad scrolling with sub-line offset and momentum, live
