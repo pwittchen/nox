@@ -24,7 +24,8 @@ accessibility settings, notifications) goes through AppKit.
   sidebar** (configurable).
 - Smooth, pixel-precise scrolling with trackpad momentum; smooth live window resize without
   flicker, stretching or garbled content.
-- Configuration in `~/.nox/config.toml`, applied live on save.
+- Configuration in `~/.nox/config.toml`, applied live on save; editable by hand in any editor
+  or in the built-in Settings window, both always in sync.
 - Every kayet theme bundled, plus the built-in `nox` palette; light/dark following the system.
 
 ### Non-Goals (v1)
@@ -33,7 +34,8 @@ accessibility settings, notifications) goes through AppKit.
 - Inline images (Sixel, Kitty graphics, iTerm `imgcat` protocol).
 - Font ligatures (the grid is drawn cell by cell).
 - AI features.
-- Multiple windows (one window; work is organized in tabs and panes). See ROADMAP.
+- Multiple terminal windows (one window; work is organized in tabs and panes; the Settings
+  window, see 5.9, is the only other window). See ROADMAP.
 - Session restoration of running processes (layout + working directories only, see 6.6).
 - Intel Macs, Linux, Windows builds. GPUI and `alacritty_terminal` don't preclude them, but they
   are not built or tested.
@@ -303,6 +305,31 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 - The palette search, find bar and inline rename use one small single-line text input
   component (from `gpui-component`, or own on top of GPUI's `EntityInputHandler`): caret,
   selection, `⌥`/`⌘` word and line movement, copy / paste, undo, IME marked text.
+
+### 5.9 Settings window
+- `⌘,` / nox → Settings… opens a separate, single-instance Settings window (a second `⌘,`
+  focuses it). It is a view over `config.toml` (see 11), not a separate store: the file stays
+  the single source of truth.
+- Layout: a sidebar of sections mirroring the config tables — General (`[app]`), Appearance
+  (`[ui]`, theme, mode), Tabs (`[tabs]`), Font (`[font]`), Terminal (`[terminal]`), Shell
+  (`[shell]`, `[shell.env]`), Icons (`[icons]`), Keys (`[keys]`) — and a scrollable form on the
+  right. Each setting shows a label, a one-line description and the matching config key in muted
+  monospace (`tabs.position`), so the UI teaches the file.
+- Controls by type: switches for booleans, segmented controls / popups for enums, steppers or
+  sliders with a numeric field for numbers, text inputs (see 5.8) for strings, a font picker
+  (installed monospace families), a theme picker with live preview, key-value tables for
+  `[icons]` and `[shell.env]`, and a shortcut recorder for `[keys]` (click, press the
+  combination; conflicts are flagged).
+- Changes apply immediately (no Save button) and are written to `config.toml` at once.
+- Settings that differ from the default show a small "reset" control; resetting removes the key
+  from the file, so it falls back to the default again.
+- A search field at the top filters settings across all sections by label, description and key.
+- Footer: **Open config.toml** (opens the file in the external editor, see 11) and **Reveal in
+  Finder**.
+- Edits made to the file outside the window (vim, any editor) show up in the open window right
+  away (same file watcher as live reload). If the file fails to parse, the window shows a banner
+  with the line and error plus **Open config.toml**, and its controls are disabled until the
+  file is valid again — nox never overwrites a file it couldn't parse.
 
 ## 6. Panes and Tabs Behavior
 
@@ -632,7 +659,8 @@ for WCAG AA against `bg` in both variants.
 | Previous / next prompt          | `⌘↑` / `⌘↓`         |
 | Restart exited pane             | `⌘R`                |
 | Switch appearance               | `⌘⇧L`               |
-| Settings (open config.toml)     | `⌘,`                |
+| Settings window                 | `⌘,`                |
+| Open config.toml in editor      | `⌥⌘,`               |
 | Full screen                     | `⌃⌘F`               |
 | Quit                            | `⌘Q`                |
 
@@ -642,9 +670,19 @@ Help), so they show up in macOS's Help search and display their shortcuts.
 ## 11. Configuration
 
 Location: `~/.nox/config.toml` (directory created on first launch). Missing file or keys →
-defaults; the file is written with defaults and comments on first launch only, afterwards nox
-never rewrites the user's file except to change a value the user picked in the UI (theme,
-mode, tabs position, sidebar), preserving comments and order (`toml_edit`).
+defaults; the file is written with defaults and comments on first launch only.
+
+All settings live in this one plain-text file, and there are two equal ways to change them:
+- **By hand**, in any editor (vim, an external GUI editor, …). nox picks the change up on save
+  (see live reload below).
+- **In the Settings window** (see 5.9), or through UI shortcuts that change a value (theme
+  picker, appearance, tabs position, sidebar visibility / width, font size reset).
+
+Whatever the UI changes is written back to `config.toml` immediately. Writes are surgical
+(`toml_edit`): only the affected key is added, changed or removed; comments, ordering, blank
+lines and unknown keys are preserved. Writes are atomic (temp file + rename) and nox ignores the
+file-watch event caused by its own write. nox never writes to a file that currently fails to
+parse.
 
 ```toml
 [ui]
@@ -734,8 +772,10 @@ y = 0
 - `font.family`: `"mono"` is SF Mono; any other value is a family or comma-separated list,
   always followed by SF Mono, so a font that isn't installed falls back to it (with a notice).
 - Key syntax follows GPUI keystrokes (`cmd-shift-d`, `ctrl-tab`, `alt-left`).
-- `⌘,` / nox → Settings… opens `config.toml` in a new tab with `$VISUAL` / `$EDITOR`
-  (fallback: `open -t`, i.e. the default text editor — kayet if installed).
+- `⌘,` / nox → Settings… opens the Settings window (see 5.9). `⌥⌘,` / nox → Open Config File
+  (also in the palette and the Settings window footer) opens `config.toml` in a new tab with
+  `$VISUAL` / `$EDITOR` (fallback: `open -t`, i.e. the default text editor — kayet if
+  installed).
 - **Live reload**: the file is watched (`notify`, debounced 150 ms); valid changes apply
   immediately to the UI and every pane (font, theme, padding, tabs position, cursor, keys).
   Shell settings apply to new panes only. Window geometry and the session are owned by the
@@ -794,6 +834,7 @@ nox/
 │       ├── terminal_element.rs #   custom Element: cells → quads + shaped runs
 │       ├── scroll.rs           #   pixel accumulator, sub-line offset, overlay scrollbar
 │       ├── palette.rs          #   command palette + pickers
+│       ├── settings.rs         #   Settings window: sections, controls, search (see 5.9)
 │       ├── text_input.rs
 │       ├── dialog.rs, toast.rs
 │       └── theme.rs            #   Theme global (Hsla), applying nox_theme output
@@ -846,7 +887,8 @@ shell ◀───────────────────────�
 - `nox_config` / `nox_theme`: defaults, partial files, invalid values, comment-preserving
   writes, every bundled theme parses and meets WCAG AA for `text` on `bg` in both variants.
 - `nox_ui`: GPUI tests (`#[gpui::test]`, `TestAppContext`) for tab and pane actions, tabs
-  position switching, palette filtering and theme live-preview/restore.
+  position switching, palette filtering and theme live-preview/restore, Settings window
+  controls writing the expected key to the file and reflecting external edits.
 - Benches in CI (see 12).
 - Manual checklist before release: vim, htop, less, tmux, ssh, `fzf`, emoji/CJK, IME (Japanese,
   Polish dead keys), live resize with 4 panes, ProMotion scrolling with momentum, each tabs
