@@ -27,6 +27,8 @@ accessibility settings, notifications) goes through AppKit.
 - Configuration in `~/.nox/config.toml`, applied live on save; editable by hand in any editor
   or in the built-in Settings window, both always in sync.
 - Every kayet theme bundled, plus the built-in `nox` palette; light/dark following the system.
+- JetBrains Mono as the default terminal font, with a curated set of other terminal fonts and
+  interface fonts bundled to choose from (see 5.10).
 
 ### Non-Goals (v1)
 - Plugins / extensions / scripting API.
@@ -180,8 +182,9 @@ so they carry over unchanged.
 Follows the kayet / zora design language (zora `docs/design.md` "App Direction" takes
 precedence where details differ):
 
-- Native Apple feel: system font (`.SystemUIFont`, SF Pro) for chrome, SF Mono default for the
-  terminal, native context menus (see 5.5), standard macOS shortcuts and menu bar. Respect
+- Native Apple feel: system font (`.SystemUIFont`, SF Pro — the same as zora and kayet) for
+  chrome by default, JetBrains Mono for the terminal (both changeable, see 5.10), native context
+  menus (see 5.5), standard macOS shortcuts and menu bar. Respect
   Reduce Motion, Reduce Transparency and Increase Contrast — read from
   `NSWorkspace.accessibilityDisplayShould…` via `objc2` and re-read on
   `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification`.
@@ -316,8 +319,8 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
   right. Each setting shows a label, a one-line description and the matching config key in muted
   monospace (`tabs.position`), so the UI teaches the file.
 - Controls by type: switches for booleans, segmented controls / popups for enums, steppers or
-  sliders with a numeric field for numbers, text inputs (see 5.8) for strings, a font picker
-  (installed monospace families), a theme picker with live preview, key-value tables for
+  sliders with a numeric field for numbers, text inputs (see 5.8) for strings, font pickers
+  (see 5.10), a theme picker with live preview, key-value tables for
   `[icons]` and `[shell.env]`, and a shortcut recorder for `[keys]` (click, press the
   combination; conflicts are flagged).
 - Changes apply immediately (no Save button) and are written to `config.toml` at once.
@@ -330,6 +333,28 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
   away (same file watcher as live reload). If the file fails to parse, the window shows a banner
   with the line and error plus **Open config.toml**, and its controls are disabled until the
   file is valid again — nox never overwrites a file it couldn't parse.
+
+### 5.10 Fonts
+Two independent settings: the terminal font (`font.family`) and the interface font
+(`ui.font_family`, used for tabs, sidebar, pane headers, palette, dialogs and Settings).
+
+- **Terminal font** — default **JetBrains Mono**. Bundled alternatives (all monospace, all
+  under SIL OFL 1.1): Geist Mono, IBM Plex Mono, Fira Code, Cascadia Code, Iosevka, Hack,
+  Source Code Pro, Commit Mono. The system fonts SF Mono and Menlo are also offered (not
+  bundled, always present on macOS). Ligatures stay off regardless of the font (see 2).
+- **Interface font** — default **system** (`.SystemUIFont`, SF Pro), the same as in zora and
+  kayet. Bundled alternatives (SIL OFL 1.1): Geist, Inter, IBM Plex Sans.
+- Bundled fonts ship inside the `.app` (`assets/fonts/`, Regular / Bold / Italic / Bold Italic
+  for terminal fonts; Regular / Medium / Semibold for interface fonts) and are registered for
+  the process only at startup (`CTFontManagerRegisterFontsForURL` with
+  `kCTFontManagerScopeProcess`) — nothing is installed system-wide. Their OFL license texts are
+  included in the bundle and in About → Acknowledgements.
+- Any installed family can be used too, by name in `config.toml` or in the picker.
+- Settings → Font has two pickers: terminal (bundled fonts first, then installed monospace
+  families) and interface (bundled fonts first, then all installed families). Each entry is
+  rendered in its own face; the choice applies live, like every other setting.
+- A family that isn't found falls back to the default (JetBrains Mono / SF Pro) with a notice
+  (see 5.7).
 
 ## 6. Panes and Tabs Behavior
 
@@ -688,6 +713,7 @@ parse.
 [ui]
 theme = "nox"                # palette: "nox" or a theme from ~/.nox/themes/ or bundled (see 9)
 mode = "system"              # "system" | "light" | "dark"
+font_family = "system"       # interface font: "system" (SF Pro) | "Geist" | "Inter" | "IBM Plex Sans" | any installed family
 pane_header = true           # title + split/maximize/close controls above each pane
 dim_inactive_panes = 0.15    # 0.0 disables
 focus_follows_mouse = false
@@ -709,7 +735,7 @@ icons = true                 # process icons in tabs and pane headers (see 4.6)
 # "work-cli" = "~/.nox/icons/work.svg"
 
 [font]
-family = "mono"              # "mono" (SF Mono) or font names, e.g. "JetBrains Mono, Sarasa Mono J"
+family = "JetBrains Mono"    # terminal font: a bundled one (see 5.10), "SF Mono", "Menlo" or font names, e.g. "Iosevka, Sarasa Mono J"
 size = 13
 line_height = 1.2
 letter_spacing = 0
@@ -769,8 +795,10 @@ x = 0
 y = 0
 ```
 
-- `font.family`: `"mono"` is SF Mono; any other value is a family or comma-separated list,
-  always followed by SF Mono, so a font that isn't installed falls back to it (with a notice).
+- `font.family`: a family or comma-separated list, always followed by JetBrains Mono, so a font
+  that isn't installed falls back to it (with a notice). Default `"JetBrains Mono"`.
+- `ui.font_family`: `"system"` is SF Pro (`.SystemUIFont`); any other value is a family, falling
+  back to SF Pro (with a notice) if it isn't found. Bundled fonts: see 5.10.
 - Key syntax follows GPUI keystrokes (`cmd-shift-d`, `ctrl-tab`, `alt-left`).
 - `⌘,` / nox → Settings… opens the Settings window (see 5.9). `⌥⌘,` / nox → Open Config File
   (also in the palette and the Settings window footer) opens `config.toml` in a new tab with
@@ -843,6 +871,7 @@ nox/
 │   └── release.yml             # tag v*: build, sign, notarize, staple, appcast, release, cask
 ├── assets/
 │   ├── icons/                  # SVG line icons (1.5px stroke)
+│   ├── fonts/                  # bundled terminal + interface fonts and their OFL licenses (see 5.10)
 │   └── app/                    # .icns, Info.plist, nox.entitlements
 ├── scripts/
 │   └── release/                # sign.sh, notarize.sh, make_dmg.sh, appcast.sh (run by CI and locally)
