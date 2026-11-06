@@ -98,8 +98,19 @@ so they carry over unchanged.
 - The tab's title is the title of its **focused pane** (see 4.4), prefixed by its index:
   `1 ~`, `2 ~/Development/nox`, `3 vim`. The user can rename a tab (see 6.5); a renamed tab
   keeps its name instead of following the focused pane.
-- Activity: a tab in the background that receives output shows a small dot; a bell in it shows
-  the dot in the accent color until the tab is visited.
+- Status dot: a small dot on the tab tells what its panes are doing (as in the screenshot on
+  `#469 - cleanup after migration`):
+  - **yellow** (`ansi.yellow`) — **running**: a command is executing in one of the tab's panes.
+    Shown on every tab, the active one included, for as long as the command runs.
+  - **blue** (`ansi.blue`) — **done**: a command finished while the tab was not active. It stays
+    until the tab is visited; a command that finishes in the active tab leaves no dot.
+  - **accent** — **bell**: a bell rang in a background tab (see 7.10); until the tab is visited.
+  - Priority when several apply: bell > running > done. No dot when the tab is idle and seen.
+- "Running" means, with shell integration (see 4.5), the span between OSC 133 `C` (command
+  start) and `D` (command end); without it, the PTY's foreground process (`tcgetpgrp`) is not
+  the shell. "Done" is the transition back to the prompt (OSC 133 `D`, or the foreground process
+  returning to the shell). Long-lived interactive programs (`vim`, `claude`, `ssh`) count as
+  running while they are in the foreground.
 
 ### 4.3 Pane
 - A pane is one terminal session: one PTY, one shell process, one `alacritty_terminal::Term`.
@@ -172,8 +183,8 @@ so they carry over unchanged.
 - An icon for an unknown process is the default `>_`; it is never blank.
 - User mappings in config (`[icons]`, see 11) add executables to a built-in icon or point to a
   custom SVG in `~/.nox/icons/`; they take precedence over the built-in table.
-- A small activity / bell dot (see 4.2) overlays the icon's top-right corner instead of taking
-  extra space (as in the screenshot on `aif claude`).
+- The status dot (running / done / bell, see 4.2) overlays the icon's top-right corner instead
+  of taking extra space (as in the screenshot on `#469 - cleanup after migration`).
 - `tabs.icons = false` hides process icons and shows the plain `>_` everywhere.
 
 ## 5. UI
@@ -267,7 +278,7 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 
 - `tabs.position = "left"`: tabs are rows in a sidebar on the left (`bg-sidebar`), one row per
   tab: process icon (see 4.6), index, title; a second muted line shows the working directory when it differs from
-  the title. The active row has a subtle background pill. Activity dot on the right.
+  the title. The active row has a subtle background pill. Status dot (see 4.2) on the right.
 - Drag to reorder, double-click to rename, context menu as for pills (see 5.5).
 - Sidebar width: drag its 1px divider, min 160 px, max 360 px, default 220 px; persisted.
 - `⌘\` or the sidebar toggle `[◧]` in the title bar hides and shows it; the state is persisted.
