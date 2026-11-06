@@ -92,7 +92,8 @@ so they carry over unchanged.
 ### 4.2 Tab
 - A tab holds a **layout**: a tree of panes (see 4.3). It always has at least one pane.
 - The tab's title is the title of its **focused pane** (see 4.4), prefixed by its index:
-  `1 ~`, `2 ~/Development/nox`, `3 vim`. A user-renamed tab keeps its name.
+  `1 ~`, `2 ~/Development/nox`, `3 vim`. The user can rename a tab (see 6.5); a renamed tab
+  keeps its name instead of following the focused pane.
 - Activity: a tab in the background that receives output shows a small dot; a bell in it shows
   the dot in the accent color until the tab is visited.
 
@@ -345,13 +346,19 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 ### 6.5 Tabs
 - `⌘T` new tab (after the current one), `⌘⇧W` close tab, `⌘1…⌘8` go to tab N, `⌘9` last tab,
   `⌘⇧[` / `⌘⇧]` (and `⌃⇧⇥` / `⌃⇥`) previous / next, wrapping. `⌘⇧←` / `⌘⇧→` move the tab.
+- **Renaming**: the user can edit a tab's name at any time — double-click the pill / sidebar row,
+  `⌘⇧I`, the tab context menu (Rename Tab…) or the palette. The title turns into an inline text
+  input (see 5.8) prefilled with the current name and fully selected; `Enter` or clicking away
+  confirms, `Esc` cancels, an empty name restores the automatic title (see 4.2). The index
+  prefix stays and is not editable. A custom name is kept until changed or cleared, and
+  survives moving the tab and session restore.
 - Each tab keeps its own layout, focus, maximize state and per-pane scroll position.
 - Switching tabs is instant: panes of inactive tabs keep reading and parsing output but are not
   rendered; the shown tab draws from its current grid in the next frame.
 
 ### 6.6 Session restore
 - On quit, the tab order, each tab's layout tree (directions, ratios), each pane's working
-  directory and custom names, and the active tab are saved to `~/.nox/session.toml`.
+  directory and custom name, each tab's custom name, and the active tab are saved to `~/.nox/session.toml`.
 - On launch with `app.restore_session = true` (default), that layout is re-created with fresh
   shells in the saved directories. Scrollback and running programs are not restored.
 
