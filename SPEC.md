@@ -103,7 +103,8 @@ so they carry over unchanged.
   - **yellow** (`ansi.yellow`) — **running**: a command is executing in one of the tab's panes.
     Shown on every tab, the active one included, for as long as the command runs.
   - **blue** (`ansi.blue`) — **done**: a command finished while the tab was not active. It stays
-    until the tab is visited; a command that finishes in the active tab leaves no dot.
+    until the tab is visited; a command that finishes in the active tab leaves no dot. It may
+    also play the attention sound and post a notification (see 7.11).
   - **accent** — **bell**: a bell rang in a background tab (see 7.10); until the tab is visited.
   - Priority when several apply: bell > running > done. No dot when the tab is idle and seen.
 - "Running" means, with shell integration (see 4.5), the span between OSC 133 `C` (command
@@ -435,8 +436,8 @@ Two independent settings: the terminal font (`font.family`) and the interface fo
   hyperlinks, OSC 52 clipboard (alacritty `ClipboardStore` / `ClipboardLoad` events; nox allows
   write only by default, `terminal.osc52 = "write" | "read-write" | "off"`).
 - Handled by nox before the parser (see 8, OSC sniffer): OSC 7 (cwd), OSC 133 (prompt marks),
-  OSC 9 / OSC 777 notifications (shown as macOS notifications via `UNUserNotificationCenter`
-  when the window isn't focused).
+  OSC 9 / OSC 777 notifications (trigger the attention sound and a macOS notification, see
+  7.11).
 - Unicode: wide characters and emoji per alacritty's width tables; combining characters kept in
   the cell. Glyphs missing from the configured font fall back through Core Text's cascade list
   (so CJK and emoji render without configuration).
@@ -551,6 +552,52 @@ corner or a divider.
   `accent` for 150 ms; `"sound"` plays `NSBeep`). A bell in a background tab marks the tab (see
   4.2); with the window unfocused it bounces the Dock icon once
   (`NSApp.requestUserAttention`, `app.dock_bounce_on_bell = true`).
+
+### 7.11 Attention: sound and notifications
+- When a job in a pane has finished, or stopped and waits for the user to act, nox lets the user
+  know in two independent ways, each of which can be turned off: a soft chime and a macOS system
+  notification. So the user can look away while a job runs and come back when needed.
+- Triggers, in a pane the user isn't looking at (a background tab, or any pane while the nox
+  window is unfocused):
+  - **done**: a command finishes (the "done" transition, see 4.2), if it ran for at least
+    `terminal.attention_min_duration` seconds (default 10), so quick commands stay quiet;
+  - **attention**: a program asks for it with an OSC 9 / OSC 777 notification (see 7.1), e.g. a
+    coding agent like `claude` finishing its turn or waiting for a permission prompt.
+- Nothing fires for the pane the user is looking at (focused window, active tab), so typing at a
+  prompt never chimes or notifies.
+
+**Sound**
+- A bundled, soft and light tone (`assets/sounds/attention.caf`, ~0.3 s, gentle attack, no sharp
+  transients, quiet by default), played through `NSSound` at `terminal.attention_sound_volume`
+  (0.0–1.0, default 0.4). It respects the system output device and mute.
+- Not irritating: several triggers within 3 s (e.g. several panes finishing together) play one
+  chime; the same pane chimes at most once until it is visited again. It is independent of
+  `terminal.bell` (7.10), which only reacts to the BEL character.
+
+**System notification**
+- Posted through `UNUserNotificationCenter` (`nox_mac`), so it shows in Notification Center and
+  follows the user's Focus / Do Not Disturb and per-app notification settings.
+- Content:
+  - done: title `<command> finished` (e.g. `cargo build finished`), or `<command> failed (exit
+    1)` when the exit status from OSC 133 `D` is non-zero; body: the tab title and the running
+    time (`2 ~/Development/nox · 2m 14s`). Without shell integration the command is the process
+    name and no exit status is shown.
+  - attention: the title and body the program sent (OSC 777 `notify;title;body`, OSC 9 body
+    only, titled with the process name, e.g. `claude`).
+- Clicking the notification brings nox to the front, switches to the tab and focuses the pane.
+- One notification per pane at a time (`threadIdentifier` per pane, a new one replaces the old);
+  a pane's notifications are removed from Notification Center when it is visited or closed.
+- Notifications are silent at the system level; the sound is nox's own chime above, so the two
+  never play twice and each toggle does what it says.
+- Permission is requested the first time a notification would be posted, not at launch. If the
+  user has denied it, Settings → Terminal shows that next to the switch with an **Open System
+  Settings** button (Notifications pane).
+
+**Settings**
+- Both are on by default and turned off separately: `terminal.attention_sound = false`,
+  `terminal.notifications = false`, in Settings → Terminal (two switches, a volume slider with a
+  preview button, a "notify for commands longer than" stepper) or in `config.toml` by hand. Like
+  every setting, the change applies immediately from either place (see 5.9 and 11).
 
 ## 8. Performance Design
 
@@ -768,6 +815,10 @@ word_separators = " ()[]{}',\"`│"
 option_as_meta = "left"      # "left" | "right" | "both" | "none"
 bold_is_bright = false
 bell = "visual"              # "visual" | "sound" | "none"
+attention_sound = true       # soft chime when a job finishes or waits for input unseen (see 7.11)
+attention_sound_volume = 0.4 # 0.0–1.0
+notifications = true         # macOS notification when a job finishes or waits for input unseen (see 7.11)
+attention_min_duration = 10  # s; shorter commands finish without a chime or notification
 close_on_exit = "clean"      # "always" | "clean" | "never"
 osc52 = "write"              # "write" | "read-write" | "off"
 kitty_keyboard = false
@@ -816,7 +867,8 @@ y = 0
   `$VISUAL` / `$EDITOR` (fallback: `open -t`, i.e. the default text editor — kayet if
   installed).
 - **Live reload**: the file is watched (`notify`, debounced 150 ms); valid changes apply
-  immediately to the UI and every pane (font, theme, padding, tabs position, cursor, keys).
+  immediately to the UI and every pane (font, theme, padding, tabs position, cursor, keys,
+  sounds).
   Shell settings apply to new panes only. Window geometry and the session are owned by the
   running app and not reloaded.
 - A file that fails to parse keeps the last good config and shows a notice with the line and
@@ -883,6 +935,7 @@ nox/
 ├── assets/
 │   ├── icons/                  # SVG line icons (1.5px stroke)
 │   ├── fonts/                  # bundled terminal + interface fonts and their OFL licenses (see 5.10)
+│   ├── sounds/                 # attention.caf (see 7.11)
 │   └── app/                    # .icns, Info.plist, nox.entitlements
 ├── scripts/
 │   └── release/                # sign.sh, notarize.sh, make_dmg.sh, appcast.sh (run by CI and locally)
