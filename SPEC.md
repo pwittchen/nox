@@ -129,6 +129,48 @@ so they carry over unchanged.
   OSC 7 (cwd) and OSC 133 (prompt marks). Prompt marks enable "jump to previous/next prompt"
   (`⌘↑` / `⌘↓`). Without it everything still works; titles fall back to process inspection.
 
+### 4.6 Process icons
+- Every tab and every pane header shows an icon of **what runs in it**, so tabs can be told apart
+  at a glance (as in the screenshot: the Claude mark on `aif claude`, `>_` on `aif terminal`).
+- The icon follows the **focused pane** of the tab and updates live when the foreground program
+  changes (`claude` starts → Claude icon; it exits → back to `>_`).
+- Detection, in order:
+  1. a user override for the tab / pane (context menu: Set Icon…, also in the palette),
+  2. the foreground process of the PTY (`tcgetpgrp` + `proc_pidinfo` / `proc_pidpath`), matched
+     by executable name; for interpreters (`node`, `python`, `java`, `bun`, `deno`, `ruby`) also
+     by their arguments, so `node …/claude` resolves to Claude and `java -jar app.jar` to Java,
+  3. the title set via OSC 0/2, matched by known prefixes (e.g. `✳ Claude Code`),
+  4. otherwise the default terminal icon `>_`.
+  Refreshed together with the title (see 4.4): on prompt marks, focus and at most every 500 ms
+  while output flows; a lookup is a map hit, never a filesystem scan.
+- Built-in set (bundled SVGs, monochrome line style matching 5.1, optionally tinted with the
+  tool's brand color at low saturation so it reads in both light and dark mode):
+  - **AI coding agents**: Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Aider, Cursor
+    Agent, opencode, Amp, Goose, Ollama.
+  - **Languages / runtimes / REPLs**: Python (`python`, `ipython`, `uv`, `poetry`), Java (`java`,
+    `jshell`), Kotlin, Scala (`sbt`), Node.js (`node`, `npm`, `pnpm`, `yarn`, `npx`), Bun, Deno,
+    Ruby (`ruby`, `irb`, `rails`), Go, Rust (`cargo`, `rustc`), Swift (`swift`, `xcodebuild`),
+    PHP, Elixir (`iex`, `mix`), Haskell (`ghci`), Lua, R, Julia, .NET (`dotnet`).
+  - **Build tools**: Gradle, Maven, Make, CMake, Bazel.
+  - **Version control**: Git (`git`, `lazygit`, `tig`, `gh`), Jujutsu (`jj`).
+  - **Containers / cloud / infra**: Docker (`docker`, `docker-compose`, `lazydocker`),
+    Kubernetes (`kubectl`, `k9s`, `helm`), Terraform / OpenTofu, AWS CLI, gcloud, Azure CLI,
+    Fly (`fly`, `flyctl`).
+  - **Editors**: Vim / Neovim, Emacs, Helix, nano, micro.
+  - **Databases**: PostgreSQL (`psql`, `pgcli`), MySQL, SQLite, Redis (`redis-cli`), MongoDB
+    (`mongosh`).
+  - **Remote / network**: SSH (`ssh`, `mosh`, `et`), with the host shown in the title.
+  - **Monitoring / tools**: htop / btop / top, tmux, zellij, man / less, curl / wget,
+    ffmpeg, Homebrew (`brew`).
+  - **Shells**: zsh, bash, fish, nu — all shown as the default `>_` unless a nested shell
+    differs from the login shell.
+- An icon for an unknown process is the default `>_`; it is never blank.
+- User mappings in config (`[icons]`, see 11) add executables to a built-in icon or point to a
+  custom SVG in `~/.nox/icons/`; they take precedence over the built-in table.
+- A small activity / bell dot (see 4.2) overlays the icon's top-right corner instead of taking
+  extra space (as in the screenshot on `aif claude`).
+- `tabs.icons = false` hides process icons and shows the plain `>_` everywhere.
+
 ## 5. UI
 
 ### 5.1 Look
@@ -173,8 +215,8 @@ Title bar (left to right):
 - Traffic lights (native).
 - **Directory chip** `[▢ ~]`: the working directory of the focused pane, shortened. Click → menu:
   Copy Path, Reveal in Finder. In `left` mode this slot holds the sidebar toggle instead.
-- **Tab strip**: one pill per tab, with a small terminal icon (`>_`, tinted with `ansi.green` at
-  low alpha when the tab is active, muted otherwise), the index and the title. Active tab:
+- **Tab strip**: one pill per tab, with a process icon (see 4.6; the default `>_` is tinted with
+  `ansi.green` at low alpha when the tab is active, muted otherwise), the index and the title. Active tab:
   `bg-elevated` fill with a hairline border; inactive: no fill, `text-muted` label. Pills share
   the available width, between 120 px and 260 px each; when they don't fit, the strip scrolls
   horizontally (trackpad / wheel), keeping the active tab in view. Hovering a pill shows its `×`
@@ -188,7 +230,7 @@ Title bar (left to right):
 Pane card:
 - Each tab's content is a card inset 6 px from the window edges, `bg` fill, 1px `border`
   hairline, 10px corners — as in the screenshot.
-- **Pane header** (per pane, 28 px, `ui.pane_header = true`): terminal icon + pane title on the
+- **Pane header** (per pane, 28 px, `ui.pane_header = true`): process icon (see 4.6) + pane title on the
   left; on the right, shown on hover of the header (always shown for the focused pane at 60%
   opacity): **split vertically** (◫), **split horizontally** (⊟), **maximize / restore** (⤢),
   **close** (×). With a single pane in the tab the header still shows (it carries the title);
@@ -218,7 +260,7 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 ```
 
 - `tabs.position = "left"`: tabs are rows in a sidebar on the left (`bg-sidebar`), one row per
-  tab: icon, index, title; a second muted line shows the working directory when it differs from
+  tab: process icon (see 4.6), index, title; a second muted line shows the working directory when it differs from
   the title. The active row has a subtle background pill. Activity dot on the right.
 - Drag to reorder, double-click to rename, context menu as for pills (see 5.5).
 - Sidebar width: drag its 1px divider, min 160 px, max 360 px, default 220 px; persisted.
@@ -232,7 +274,7 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 - Shown as real `NSMenu`s (`popUpMenuPositioningItem:atLocation:inView:` via `objc2`); the
   chosen item is dispatched back as a GPUI action. (GPUI's own drawn menus are not used, so they
   look and behave like every other Mac app.)
-- Tab: New Tab, Rename Tab…, Duplicate Tab (same cwd), Move Left / Right, Close Tab, Close Other
+- Tab: New Tab, Rename Tab…, Set Icon…, Duplicate Tab (same cwd), Move Left / Right, Close Tab, Close Other
   Tabs.
 - Pane (right-click in the terminal): Copy, Paste, Select All, Clear Buffer, Split Vertically,
   Split Horizontally, Maximize Pane, Rename Pane…, Close Pane. With a URL or path under the
@@ -613,6 +655,13 @@ sidebar_visible = true       # left mode only
 sidebar_width = 220          # left mode only
 show_index = true            # "1 ~" vs "~"
 title = "auto"               # "auto" (see 4.4) | "cwd" | "process"
+icons = true                 # process icons in tabs and pane headers (see 4.6)
+
+[icons]
+# executable = built-in icon name, or a path to an SVG in ~/.nox/icons/
+# "my-agent" = "claude"
+# "jbang" = "java"
+# "work-cli" = "~/.nox/icons/work.svg"
 
 [font]
 family = "mono"              # "mono" (SF Mono) or font names, e.g. "JetBrains Mono, Sarasa Mono J"
