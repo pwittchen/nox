@@ -1,13 +1,22 @@
 # PRs and master: fmt, clippy, tests, benches (regression gate), unsigned app bundle.
 # No access to signing secrets (SPEC §15.2).
+#
+# Skipped when:
+# - only Markdown files changed (README.md, SPEC.md, docs …);
+# - the commit message (push) or the PR title (pull request) contains #no-deploy.
 name: ci
 on:
   pull_request:
+    paths-ignore: ['**.md']
   push:
     branches: [master]
+    paths-ignore: ['**.md']
 
 jobs:
   check:
+    if: >-
+      ${{ !contains(github.event.head_commit.message || '', '#no-deploy')
+      && !contains(github.event.pull_request.title || '', '#no-deploy') }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
