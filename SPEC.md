@@ -35,6 +35,8 @@ accessibility settings, notifications) goes through AppKit.
   panes run an agent and what state it is in, tells the user when one needs them, and lets
   agents in different tabs, panes and workspaces see each other, exchange messages, wait for
   each other and avoid editing the same files (see 4.8, 7.12, 7.13).
+- Close nox and open it again (or reboot) and the work is back: every workspace with its tabs
+  and splits, and every agent resumed in its conversation (see 6.6).
 
 ### Non-Goals (v1)
 - Plugins / extensions; a general scripting API beyond the `nox` CLI / control socket for agents
@@ -46,7 +48,9 @@ accessibility settings, notifications) goes through AppKit.
   service. It hosts agents; it isn't one.
 - Multiple terminal windows (one window; work is organized in workspaces, tabs and panes; the Settings
   window, see 5.9, is the only other window). See ROADMAP.
-- Session restoration of running processes (layout + working directories only, see 6.6).
+- Session restoration of running processes: shells start fresh, scrollback is not kept. What
+  comes back is all workspaces with their layouts and working directories, and agent
+  conversations through each agent's own resume feature (see 6.6).
 - Intel Macs, Linux, Windows builds. GPUI and `alacritty_terminal` don't preclude them, but they
   are not built or tested.
 
@@ -502,13 +506,39 @@ Two independent settings: the terminal font (`font.family`) and the interface fo
   rendered; the shown tab draws from its current grid in the next frame.
 
 ### 6.6 Session restore
-- On quit, the workspaces (order, name, root, color, active tab) and, per workspace, the tab
-  order, each tab's layout tree (directions, ratios), each pane's working directory and custom
-  name, each tab's custom name, and which agent ran in each pane are saved to
-  `~/.nox/session.toml`, together with the active workspace.
-- On launch with `app.restore_session = true` (default), that layout is re-created with fresh
-  shells in the saved directories. Scrollback and running programs are not restored; agents can
-  be relaunched with their resume command (see 7.12). Messages survive (see 7.13); claims don't.
+Closing nox and opening it again brings back the work as it was left: every workspace, its
+tabs and splits, and the agent sessions that were running in them.
+
+**What is saved** (`~/.nox/session.toml`)
+- All workspaces: order, name, root, color, extra env, active tab, and which workspace is
+  active.
+- Per workspace: the tab order, each tab's custom name, layout tree (directions, ratios),
+  focused pane and maximize state; per pane its working directory and custom name.
+- Per agent pane: the agent kind (`[agents.<name>]`), its name (4.8), the working directory it
+  was started in, the command line it was started with, and its **agent session id** when known
+  (below).
+- The session is written on quit, and also on every structural change (debounced 1 s) and every
+  30 s while something changes, atomically (temp file + rename). So it survives a crash, a
+  force quit, a logout or a reboot, not only a clean `⌘Q`. Quitting via an update
+  (Sparkle, 15.3) saves it too.
+
+**What is restored** (on launch, `app.restore_session = true`, default)
+- Every workspace with its tabs, splits, names, colors and the active workspace / tab / pane,
+  with fresh shells in the saved directories. Workspaces in the background are restored too,
+  not only the active one; their shells start lazily, when the workspace is first shown, unless
+  they hold agents to resume (`workspaces.lazy_restore = true`), which keeps launch within the
+  startup target (12).
+- Agent sessions are resumed in the panes they ran in (see 7.12, "Resuming agents"), so each
+  conversation continues where it stopped, in the right directory, in the right workspace.
+- Messages survive (7.13); claims don't, since their holders restart.
+- Not restored: scrollback, and processes other than agents (a `vim`, a dev server). With
+  `[[tabs]] command` in a project file (4.7), startup commands of a workspace can be re-run on
+  restore (`workspaces.rerun_startup_commands = false` by default).
+- If a saved directory no longer exists, the pane starts in the workspace root (or `~`) with a
+  notice. If a saved root is gone, the workspace is restored without a root, marked in the
+  switcher, and can be pointed at a new folder.
+- Starting with `⇧` held, or with `nox --no-restore`, skips restoring once (the session file is
+  kept and restored the next time).
 
 ### 6.7 Workspaces
 - **Create**:
@@ -730,7 +760,8 @@ explicit status reporting (below) makes them precise.
 - Sources, the first available wins:
   1. **Explicit report**: `nox status working | needs-input | idle [-m "message"]` from the CLI
      or the MCP server (see 7.13), typically called from the agent's hooks — for Claude Code:
-     `UserPromptSubmit` → working, `Notification` → needs input, `Stop` → idle. **Install Agent
+     `UserPromptSubmit` → working, `Notification` → needs input, `Stop` → idle; each report also
+     carries the agent's session id, used to resume it later (see "Resuming agents"). **Install Agent
      Hooks…** (palette, Settings → Agents) offers ready-made hooks for Claude Code, Codex and
      Gemini CLI: it shows the exact change to the agent's settings file (user or project level)
      as a diff and writes it only after the user confirms; nothing is ever installed silently.
@@ -776,10 +807,36 @@ explicit status reporting (below) makes them precise.
 - **New Agent Tab** (`⌥⌘T`): a picker of the configured agents (`[agents.<name>]`, see 11);
   the chosen one starts in a new tab in the workspace root, through the user's shell so their
   `PATH` and aliases apply.
-- On session restore (6.6), panes that ran an agent can be relaunched with its `resume` command
-  (e.g. `claude --continue`): `agents.restore = "ask"` (default) shows one sheet listing them
-  with checkboxes, `"resume"` relaunches all, `"off"` restores plain shells. This starts a fresh
-  process; the conversation continues through the agent's own resume feature.
+
+**Resuming agents**
+- After nox is closed and opened again (6.6), every pane that ran an agent relaunches it so its
+  conversation continues. This starts a fresh process; the conversation itself is restored by
+  the agent's own resume feature (nox stores no conversation content).
+- **Session id**: to resume the *right* conversation — several agents of the same kind often
+  share a directory — nox remembers each agent's session id. It learns it from:
+  1. an explicit report: `nox status … --session <id>` (the hooks installed by Install Agent
+     Hooks pass it, e.g. Claude Code hooks receive `session_id`),
+  2. the agent's command line, when it was started with a session flag (`--resume <id>`,
+     `codex resume <id>`),
+  3. otherwise none.
+- Resume command, per agent in `[agents.<name>]` (11): `resume` with a `{session}` placeholder
+  (e.g. `claude --resume {session}`) when the id is known; `resume_last` (e.g.
+  `claude --continue`) otherwise. If two agent panes of the same kind in the same directory
+  have no session id, `resume_last` would open the same conversation twice, so only the first
+  uses it and the others are listed in the resume sheet as "session unknown" (start fresh or
+  skip).
+- `agents.restore`: `"resume"` (default) relaunches all agents right away, `"ask"` shows one
+  sheet listing them per workspace with checkboxes (`Resume` / `Start Shells`), `"off"` restores
+  plain shells. A per-pane override is in the pane context menu (Resume Agent on Restore).
+- The agent is started through the user's shell in the saved directory, with the pane's
+  original env (`NOX_*` ids are new, but its name stays, so other agents and the message bus
+  still find it). If the resume command fails (exits non-zero within 5 s, e.g. the session was
+  deleted), the pane keeps the output and shows `[resume failed — ↵ start a new session, ⌘R
+  retry]`.
+- Agents with no `resume` / `resume_last` configured come back as a shell in the saved
+  directory with the original command line typed at the prompt but not run.
+- **Resume All Agents** (palette) re-runs resumption manually, e.g. after starting with
+  `--no-restore` or choosing "Start Shells".
 
 **Feeding context to agents**
 - **Copy Last Output** (`⌥⌘C`): copies the output of the last finished command in the focused
@@ -828,7 +885,7 @@ text between them. Everything goes through nox and stays visible to the user.
 |------------------------------------------------------|-----------------------------------------------------------------|
 | `nox ls [--all]`                                     | workspaces, tabs and panes: id, name, program, agent state, cwd, branch |
 | `nox name <name>`                                    | name the calling pane (e.g. `backend`, `reviewer`)              |
-| `nox status <state> [-m msg]`                        | report the calling agent's state (see 7.12)                     |
+| `nox status <state> [-m msg] [--session id]`         | report the calling agent's state and session id (see 7.12)      |
 | `nox read <pane> [--lines N \| --scrollback \| --last-output]` | text of another pane: the visible screen by default, plain text without escape sequences |
 | `nox send <pane> <text> [--submit]`                  | type text into another pane as a bracketed paste; `--submit` also presses `↵` |
 | `nox msg <to> <text>`                                | post a message to a pane (by name / id) or to `all` in the workspace |
@@ -1096,10 +1153,12 @@ new_tab_cwd = "inherit"      # "inherit" (focused pane's cwd) | "root" (workspac
 close_when_empty = true      # closing a workspace's last tab closes the workspace
 worktree_dir = ""            # empty: next to the workspace root; else a path for new worktrees (see 7.12)
 worktree_opens = "tab"       # "tab" | "workspace"
+lazy_restore = true          # start background workspaces' shells when first shown (agents resume right away)
+rerun_startup_commands = false # re-run project file tab commands on session restore (see 6.6)
 
 [agents]
 keep_awake = true            # prevent system sleep while an agent is working
-restore = "ask"              # relaunch agents on session restore: "ask" | "resume" | "off"
+restore = "resume"           # resume agent sessions on relaunch: "resume" | "ask" | "off" (see 7.12)
 cooperation = true           # control socket, `nox` CLI and MCP server (see 7.13)
 scope = "workspace"          # which panes an agent can see and reach: "workspace" | "all"
 deliver = "inbox"            # messages: "inbox" | "type" (also typed into idle agents)
@@ -1110,11 +1169,13 @@ claim_ttl = 1800             # s; unrenewed claims expire
 # detection (4.8), extra executables in `match`.
 [agents.claude]
 command = "claude"
-resume = "claude --continue"
+resume = "claude --resume {session}" # when the session id is known
+resume_last = "claude --continue"    # otherwise: latest session in that directory
 
 [agents.codex]
 command = "codex"
-resume = "codex resume --last"
+resume = "codex resume {session}"
+resume_last = "codex resume --last"
 
 # [agents.my-agent]
 # command = "my-agent --fast"
@@ -1350,6 +1411,11 @@ shell ◀───────────────────────�
 - `nox_layout`: split, close, navigate in every direction, min sizes, equalize, maximize,
   serialization — property tests (`proptest`) on random split/close sequences; workspaces:
   create, close when empty, move tab between workspaces, session round-trip.
+- Session restore: an integration test that opens several workspaces with agent panes (a fake
+  agent binary reporting session ids), kills nox with `SIGKILL`, relaunches it and checks that
+  the workspaces, layouts and directories come back and each fake agent is started with its own
+  `resume` command line; plus the cases of a missing directory, a missing root, two agents
+  without session ids in one directory, and a failing resume.
 - `nox_agents`: the state machine against recorded sessions of Claude Code, Codex and Gemini
   CLI (title changes, OSC 9/777, output bursts, hook reports), claim overlap / expiry / release
   on exit, message ordering and persistence, `.git/HEAD` parsing incl. worktrees, project file
