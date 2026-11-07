@@ -1,0 +1,19 @@
+[package]
+name = "nox_terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alacritty_terminal.workspace = true
+libc.workspace = true
+log.workspace = true
+async-channel = "2"
+
+[dev-dependencies]
+tempfile.workspace = true
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "throughput"
+harness = false

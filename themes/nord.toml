@@ -1,0 +1,42 @@
+# Nord for nox.
+# Source of truth for the colors: https://www.nordtheme.com/docs/colors-and-palettes
+# Roles follow nord-vim (frost keywords, green strings, purple numbers, grey-blue comments).
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: nord-iterm2 / nord-alacritty (arcticicestudio).
+# Bundled with nox: set `theme = "nord"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/nord.toml takes precedence.
+# Nord is a dark palette only, so it is always shown dark. See SPEC.md §9.
+
+[dark]
+bg = "#2e3440"
+bg-sidebar = "#3b4252"
+text = "#d8dee9"
+text-muted = "#7b88a1"
+border = "#434c5e"
+accent = "#88c0d0"
+selection = "#88c0d033"
+caret = "#d8dee9"
+hl-keyword = "#81a1c1"
+hl-string = "#a3be8c"
+hl-number = "#b48ead"
+hl-title = "#88c0d0"
+hl-comment = "#616e88"
+
+[dark.ansi]
+black = "#3b4252"
+red = "#bf616a"
+green = "#a3be8c"
+yellow = "#ebcb8b"
+blue = "#81a1c1"
+magenta = "#b48ead"
+cyan = "#88c0d0"
+white = "#e5e9f0"
+bright-black = "#4c566a"
+bright-red = "#bf616a"
+bright-green = "#a3be8c"
+bright-yellow = "#ebcb8b"
+bright-blue = "#81a1c1"
+bright-magenta = "#b48ead"
+bright-cyan = "#8fbcbb"
+bright-white = "#eceff4"

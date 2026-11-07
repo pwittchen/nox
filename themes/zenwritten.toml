@@ -1,0 +1,77 @@
+# Zenwritten for nox: a near-monochrome palette that tells text apart by lightness.
+# Source of truth for the colors: https://github.com/zenbones-theme/zenbones.nvim (zenwritten)
+# Upstream separates syntax with bold / italic rather than hue; themes can only set
+# colors, so keywords, numbers and titles stay the text color and only strings and
+# comments are dimmed. Links use water.
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: zenbones.nvim extras/ (zenwritten_dark and zenwritten_light terminal colors).
+# Bundled with nox: set `theme = "zenwritten"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/zenwritten.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]
+bg = "#191919"
+bg-sidebar = "#202020"
+text = "#bbbbbb"
+text-muted = "#6d6d6d"
+border = "#2c2c2c"
+accent = "#6099c0"
+selection = "#40404099"
+caret = "#c9c9c9"
+hl-keyword = "#bbbbbb"
+hl-string = "#9b9b9b"
+hl-number = "#bbbbbb"
+hl-title = "#c9c9c9"
+hl-comment = "#6d6d6d"
+
+[dark.ansi]
+black = "#191919"
+red = "#de6e7c"
+green = "#819b69"
+yellow = "#b77e64"
+blue = "#6099c0"
+magenta = "#b279a7"
+cyan = "#66a5ad"
+white = "#bbbbbb"
+bright-black = "#3d3839"
+bright-red = "#e8838f"
+bright-green = "#8bae68"
+bright-yellow = "#d68c67"
+bright-blue = "#61abda"
+bright-magenta = "#cf86c1"
+bright-cyan = "#65b8c1"
+bright-white = "#8e8e8e"
+
+[light]
+bg = "#eeeeee"
+bg-sidebar = "#e5e5e5"
+text = "#353535"
+text-muted = "#8e8e8e"
+border = "#d8d8d8"
+accent = "#286486"
+selection = "#d7d7d799"
+caret = "#2c2c2c"
+hl-keyword = "#353535"
+hl-string = "#5f5f5f"
+hl-number = "#353535"
+hl-title = "#2c2c2c"
+hl-comment = "#8e8e8e"
+
+[light.ansi]
+black = "#eeeeee"
+red = "#a8334c"
+green = "#4f6c31"
+yellow = "#944927"
+blue = "#286486"
+magenta = "#88507d"
+cyan = "#3b8992"
+white = "#353535"
+bright-black = "#c6c3c3"
+bright-red = "#94253e"
+bright-green = "#3f5a22"
+bright-yellow = "#803d1c"
+bright-blue = "#1d5573"
+bright-magenta = "#7b3b70"
+bright-cyan = "#2b747c"
+bright-white = "#5c5c5c"

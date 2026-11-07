@@ -1,0 +1,129 @@
+# nox configuration — ~/.nox/config.toml
+#
+# Every key is optional: a missing key uses the default shown here. Changes apply live on
+# save (shell settings to new panes only). The Settings window (⌘,) edits this same file and
+# keeps your comments. See SPEC.md §11 for the full reference.
+
+[ui]
+theme = "nox"                # palette: "nox" or a theme from ~/.nox/themes/ or bundled (SPEC.md §9)
+mode = "system"              # "system" | "light" | "dark"
+font_family = "system"       # interface font: "system" (SF Pro) | "Geist" | "Inter" | "IBM Plex Sans" | any installed family
+pane_header = true           # title + split/maximize/close controls above each pane
+dim_inactive_panes = 0.15    # 0.0 disables
+focus_follows_mouse = false
+focus_click_through = false
+window_padding = 6           # px between the window edge and the pane card
+show_git_branch = true       # branch of the pane's cwd in pane headers and sidebar rows (SPEC.md §7.12)
+
+[tabs]
+position = "top"             # "top" | "bottom" | "left"; top/bottom: no sidebar
+sidebar_visible = true       # left mode only
+sidebar_width = 220          # left mode only
+show_index = true            # "1 ~" vs "~"
+title = "auto"               # "auto" (SPEC.md §4.4) | "cwd" | "process"
+icons = true                 # process icons in tabs and pane headers (SPEC.md §4.6)
+sidebar_workspaces = "active" # left mode only: "active" | "all" (every workspace as a group, SPEC.md §5.4)
+
+[workspaces]
+new_tab_cwd = "inherit"      # "inherit" (focused pane's cwd) | "root" (workspace root, SPEC.md §4.7)
+close_when_empty = true      # closing a workspace's last tab closes the workspace
+worktree_dir = ""            # empty: next to the workspace root; else a path for new worktrees (SPEC.md §7.12)
+worktree_opens = "tab"       # "tab" | "workspace"
+lazy_restore = true          # start background workspaces' shells when first shown (agents resume right away)
+rerun_startup_commands = false # re-run project file tab commands on session restore (SPEC.md §6.6)
+
+[agents]
+keep_awake = true            # prevent system sleep while an agent is working
+restore = "resume"           # resume agent sessions on relaunch: "resume" | "ask" | "off" (SPEC.md §7.12)
+cooperation = true           # control socket, `nox` CLI and MCP server (SPEC.md §7.13)
+scope = "workspace"          # which panes an agent can see and reach: "workspace" | "all"
+deliver = "inbox"            # messages: "inbox" | "type" (also typed into idle agents)
+allow_send_to_shell = false  # allow `nox send` into panes that aren't agents
+claim_ttl = 1800             # s; unrenewed claims expire
+
+# Agents for New Agent Tab / worktrees / resume; the key is also the executable matched for
+# detection (4.8), extra executables in `match`.
+[agents.claude]
+command = "claude"
+resume = "claude --resume {session}" # when the session id is known
+resume_last = "claude --continue"    # otherwise: latest session in that directory
+
+[agents.codex]
+command = "codex"
+resume = "codex resume {session}"
+resume_last = "codex resume --last"
+
+# [agents.my-agent]
+# command = "my-agent --fast"
+# match = ["my-agent", "my-agent-dev"]
+# icon = "~/.nox/icons/my-agent.svg"
+
+[icons]
+# executable = built-in icon name, or a path to an SVG in ~/.nox/icons/
+# "my-agent" = "claude"
+# "jbang" = "java"
+# "work-cli" = "~/.nox/icons/work.svg"
+
+[font]
+family = "JetBrains Mono"    # terminal font: a bundled one (SPEC.md §5.10), "SF Mono", "Menlo" or font names, e.g. "Iosevka, Sarasa Mono J"
+size = 14
+line_height = 1.0            # × the font's natural line height (1.0 = 100% in iTerm)
+letter_spacing = 0
+weight = "normal"
+weight_bold = "bold"
+size_applies_to = "all"      # "all" | "pane"
+
+[terminal]
+scrollback = 10000
+scroll_multiplier = 3
+smooth_scroll_duration = 100 # ms, mouse wheels only; 0 disables
+scroll_on_input = true
+cursor_style = "block"       # "block" | "bar" | "underline"
+cursor_blink = true
+padding = [8, 6]             # [horizontal, vertical] px
+copy_on_select = false
+confirm_multiline_paste = true
+word_separators = " ()[]{}',\"`│"
+option_as_meta = "left"      # "left" | "right" | "both" | "none"
+bold_is_bright = false
+bell = "visual"              # "visual" | "sound" | "none"
+attention_sound = true       # soft chime when a job finishes or waits for input unseen (SPEC.md §7.11)
+attention_sound_volume = 0.4 # 0.0–1.0
+notifications = true         # macOS notification when a job finishes or waits for input unseen (SPEC.md §7.11)
+attention_min_duration = 10  # s; shorter commands finish without a chime or notification
+close_on_exit = "clean"      # "always" | "clean" | "never"
+osc52 = "write"              # "write" | "read-write" | "off"
+kitty_keyboard = false
+minimum_contrast = 1.0
+
+[shell]
+program = ""                 # empty: login shell from $SHELL
+args = ["-l"]
+working_directory = "~"
+inherit_cwd = true
+integration = true           # inject OSC 7 / OSC 133 snippets for zsh, bash, fish
+
+[shell.env]
+# EXAMPLE = "value"
+
+[app]
+restore_session = true
+confirm_close = true
+quit_when_last_tab_closed = true
+dock_bounce_on_bell = true
+check_for_updates = true      # daily check against GitHub Releases (SPEC.md §15)
+auto_install_updates = false  # true: download in the background, install on quit
+
+[keys]
+# action = "shortcut"; "" unbinds and passes the key to the program
+# split_vertical = "cmd-d"
+# split_horizontal = "cmd-shift-d"
+# command_palette = "cmd-k"
+# send text: map a key to bytes written to the PTY
+# "alt-left" = { send = "\u001bb" }
+
+[window]
+width = 1000
+height = 680
+x = 0
+y = 0

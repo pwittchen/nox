@@ -1,0 +1,77 @@
+# Modus for nox: Vivendi (dark) and Operandi (light), the high-contrast bundled theme.
+# Source of truth for the colors: https://protesilaos.com/emacs/modus-themes
+# Upstream targets WCAG AAA (7:1) for text; roles follow it (magenta-cooler keywords,
+# blue-warmer strings, blue-cooler constants, fg-dim comments, magenta function names
+# as titles) with blue links. Borders use bg-inactive, quieter than upstream's border.
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: modus-themes' terminal colors (term-color-* faces of Vivendi and Operandi).
+# Bundled with nox: set `theme = "modus"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/modus.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]
+bg = "#000000"
+bg-sidebar = "#1e1e1e"
+text = "#ffffff"
+text-muted = "#989898"
+border = "#303030"
+accent = "#2fafff"
+selection = "#5a5a5a"
+caret = "#ffffff"
+hl-keyword = "#b6a0ff"
+hl-string = "#79a8ff"
+hl-number = "#00bcff"
+hl-title = "#feacd0"
+hl-comment = "#989898"
+
+[dark.ansi]
+black = "#000000"
+red = "#ff5f59"
+green = "#44bc44"
+yellow = "#d0bc00"
+blue = "#2fafff"
+magenta = "#feacd0"
+cyan = "#00d3d0"
+white = "#ffffff"
+bright-black = "#595959"
+bright-red = "#ff6b55"
+bright-green = "#00c06f"
+bright-yellow = "#fec43f"
+bright-blue = "#79a8ff"
+bright-magenta = "#b6a0ff"
+bright-cyan = "#6ae4b9"
+bright-white = "#989898"
+
+[light]
+bg = "#ffffff"
+bg-sidebar = "#f2f2f2"
+text = "#000000"
+text-muted = "#595959"
+border = "#e0e0e0"
+accent = "#0031a9"
+selection = "#bdbdbd"
+caret = "#000000"
+hl-keyword = "#531ab6"
+hl-string = "#3548cf"
+hl-number = "#0000b0"
+hl-title = "#721045"
+hl-comment = "#595959"
+
+[light.ansi]
+black = "#000000"
+red = "#a60000"
+green = "#006800"
+yellow = "#6f5500"
+blue = "#0031a9"
+magenta = "#721045"
+cyan = "#005e8b"
+white = "#a6a6a6"
+bright-black = "#595959"
+bright-red = "#972500"
+bright-green = "#00663f"
+bright-yellow = "#884900"
+bright-blue = "#3548cf"
+bright-magenta = "#531ab6"
+bright-cyan = "#005f5f"
+bright-white = "#ffffff"

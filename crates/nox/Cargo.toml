@@ -1,0 +1,28 @@
+[package]
+name = "nox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "stay in command — a minimalistic, fast, native terminal for macOS"
+
+[[bin]]
+name = "nox-app"
+path = "src/main.rs"
+
+[features]
+# Sparkle auto-update (SPEC §15.4): off until the repository is public.
+updater = []
+# Key-event → frame timing logs (SPEC §12).
+latency-trace = []
+
+[dependencies]
+gpui.workspace = true
+nox_ui.workspace = true
+nox_config.workspace = true
+nox_theme.workspace = true
+nox_terminal.workspace = true
+nox_mac.workspace = true
+nox_layout.workspace = true
+log.workspace = true
+env_logger.workspace = true
+async-channel = "2"

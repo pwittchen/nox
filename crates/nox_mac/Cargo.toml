@@ -1,0 +1,10 @@
+[package]
+name = "nox_mac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", features = ["NSString", "NSArray", "NSDictionary", "NSGeometry"] }
+block2 = "0.6.2"

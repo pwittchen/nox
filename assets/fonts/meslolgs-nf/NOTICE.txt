@@ -1,0 +1,7 @@
+MesloLGS NF — from https://github.com/romkatv/powerlevel10k-media
+
+Meslo LG is a customized version of Apple's Menlo by André Berg
+(https://github.com/andreberg/Meslo-Font), licensed under the Apache License 2.0
+(LICENSE-Apache-2.0.txt). The "NF" build adds Nerd Fonts glyphs
+(https://github.com/ryanoasis/nerd-fonts, MIT License) as patched by Roman Perepelitsa for
+powerlevel10k.

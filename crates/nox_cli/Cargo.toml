@@ -1,0 +1,19 @@
+[package]
+name = "nox_cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nox_ipc = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "nox"
+path = "src/main.rs"

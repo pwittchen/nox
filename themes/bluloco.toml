@@ -1,0 +1,80 @@
+# Bluloco for nox: Bluloco Dark (dark) and Bluloco Light (light).
+# Source of truth for the colors:
+#   https://github.com/uloco/theme-bluloco-dark  (themes/bluloco-dark-color-theme.json)
+#   https://github.com/uloco/theme-bluloco-light (themes/bluloco-light-color-theme.json)
+# (LGPL-3.0, © uloco). Roles follow the VS Code themes: blue keywords, yellow strings
+# and headings, pink numbers, grey comments, yellow (dark) / pink-red (light) cursor,
+# blue accent.
+# UI colors ported to kayet by Terre6 (https://github.com/pwittchen/kayet/issues/15).
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: the Bluloco VS Code themes' terminal.ansi* colors.
+# Bundled with nox: set `theme = "bluloco"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/bluloco.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]  # Bluloco Dark
+bg = "#282c34"           # editor.background
+bg-sidebar = "#22252a"   # sideBar.background
+text = "#abb2bf"         # editor.foreground
+text-muted = "#636d83"   # tab.inactiveForeground, editorLineNumber.foreground
+border = "#3d434f"       # editor.border, panel.border
+accent = "#3691ff"       # focusBorder, badge.background
+selection = "#0084ff4b"  # editor.selectionBackground
+caret = "#ffcc00"        # editorCursor.foreground
+hl-keyword = "#10b1fe"   # keyword
+hl-string = "#f9c859"    # string
+hl-number = "#ff78f8"    # constant.numeric
+hl-title = "#f9c859"     # markup.heading
+hl-comment = "#636d83"   # comment
+
+[dark.ansi]
+black = "#41444d"
+red = "#fc2f52"
+green = "#25a45c"
+yellow = "#ff936a"
+blue = "#3476ff"
+magenta = "#7a82da"
+cyan = "#4483aa"
+white = "#cdd4e0"
+bright-black = "#8f9aae"
+bright-red = "#ff6480"
+bright-green = "#3fc56b"
+bright-yellow = "#f9c859"
+bright-blue = "#10b1fe"
+bright-magenta = "#ff78f8"
+bright-cyan = "#5fb9bc"
+bright-white = "#ffffff"
+
+[light]  # Bluloco Light
+bg = "#f9f9f9"           # editor.background
+bg-sidebar = "#e8e8e8"   # sideBar.background
+text = "#383a42"         # editor.foreground
+text-muted = "#a0a1a7"   # tab.inactiveForeground, editorLineNumber.foreground
+border = "#d5d7d8"       # editor.border, panel.border
+accent = "#0099e1"       # focusBorder, badge.background
+selection = "#d2ecff"    # editor.selectionBackground
+caret = "#f31459"        # editorCursor.foreground
+hl-keyword = "#0098dd"   # keyword
+hl-string = "#c5a332"    # string
+hl-number = "#ce33c0"    # constant.numeric
+hl-title = "#c5a332"     # markup.heading
+hl-comment = "#a0a1a7"   # comment
+
+[light.ansi]
+black = "#373a41"
+red = "#d52753"
+green = "#23974a"
+yellow = "#df631c"
+blue = "#275fe4"
+magenta = "#823ff1"
+cyan = "#27618d"
+white = "#babbc2"
+bright-black = "#676a77"
+bright-red = "#ff6480"
+bright-green = "#3cbc66"
+bright-yellow = "#c5a332"
+bright-blue = "#0099e1"
+bright-magenta = "#ce33c0"
+bright-cyan = "#6d93bb"
+bright-white = "#d3d3d3"

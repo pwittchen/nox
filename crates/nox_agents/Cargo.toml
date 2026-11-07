@@ -1,0 +1,21 @@
+[package]
+name = "nox_agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+# `preserve_order` keeps the key order of the agent settings files we patch (hooks).
+serde_json = { workspace = true, features = ["preserve_order"] }
+toml.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+sha2.workspace = true
+hex.workspace = true
+dirs.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true

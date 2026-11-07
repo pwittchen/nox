@@ -298,7 +298,7 @@ Title bar (left to right):
   workspace status dot when another workspace needs attention (so the user sees it without
   opening anything). Hovering shows the root and the focused pane's cwd. Click → menu: the list
   of workspaces with their status dots (click to switch), New Workspace…, Open Folder as
-  Workspace…, New Agent in Worktree…, Rename Workspace…, Set Color ▸, Copy Path, Reveal in
+  Workspace…, New Agent…, New Agent in Worktree…, Rename Workspace…, Set Color ▸, Copy Path, Reveal in
   Finder, Close Workspace. Dropping a folder on it opens that folder as a workspace. In `left`
   mode this slot holds the sidebar toggle instead and the chip moves to the sidebar (see 5.4).
 - **Tab strip**: one pill per tab, with a process icon (see 4.6; the default `>_` is tinted with
@@ -433,8 +433,9 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 Two independent settings: the terminal font (`font.family`) and the interface font
 (`ui.font_family`, used for tabs, sidebar, pane headers, palette, dialogs and Settings).
 
-- **Terminal font** — default **JetBrains Mono**. Bundled alternatives (all monospace, all
-  under SIL OFL 1.1): Geist Mono, IBM Plex Mono, Fira Code, Cascadia Code, Iosevka, Hack,
+- **Terminal font** — default **JetBrains Mono**, 14 pt, 100% line height. Bundled alternatives
+  (all monospace): MesloLGS NF (Meslo LG, Apache License 2.0, with Nerd Fonts glyphs, MIT) and,
+  under SIL OFL 1.1, Geist Mono, IBM Plex Mono, Fira Code, Cascadia Code, Iosevka, Hack,
   Source Code Pro, Commit Mono. The system fonts SF Mono and Menlo are also offered (not
   bundled, always present on macOS). Ligatures stay off regardless of the font (see 2).
 - **Interface font** — default **system** (`.SystemUIFont`, SF Pro), the same as in zora and
@@ -1190,8 +1191,8 @@ resume_last = "codex resume --last"
 
 [font]
 family = "JetBrains Mono"    # terminal font: a bundled one (see 5.10), "SF Mono", "Menlo" or font names, e.g. "Iosevka, Sarasa Mono J"
-size = 13
-line_height = 1.2
+size = 14
+line_height = 1.0            # × the font's natural line height (1.0 = 100% in iTerm)
 letter_spacing = 0
 weight = "normal"
 weight_bold = "bold"

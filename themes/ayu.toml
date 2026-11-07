@@ -1,0 +1,78 @@
+# Ayu for nox: Ayu Dark (dark) and Ayu Light (light).
+# Source of truth for the colors: https://github.com/ayu-theme/vscode-ayu
+# (ayu-dark.json and ayu-light.json; MIT, © teabyii). Ayu Mirage is not included.
+# Roles follow the VS Code themes: orange keywords, green strings and headings,
+# purple numbers, grey comments, yellow-orange cursor and accent.
+# UI colors ported to kayet by Terre6 (https://github.com/pwittchen/kayet/issues/15).
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: vscode-ayu terminal.ansi* colors (ayu-dark.json, ayu-light.json).
+# Bundled with nox: set `theme = "ayu"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/ayu.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]  # Ayu Dark
+bg = "#10141c"           # editor.background
+bg-sidebar = "#0d1017"   # sideBar.background
+text = "#bfbdb6"         # editor.foreground
+text-muted = "#5a6378"   # foreground, tab.inactiveForeground
+border = "#1b1f29"       # sideBar.border, panel.border
+accent = "#e6b450"       # focusBorder, activityBar.activeBorder
+selection = "#3388ff40"  # editor.selectionBackground
+caret = "#e6b450"        # editorCursor.foreground
+hl-keyword = "#ff8f40"   # keyword
+hl-string = "#aad94c"    # string
+hl-number = "#d2a6ff"    # constant.numeric
+hl-title = "#aad94c"     # markup.heading
+hl-comment = "#5a6673"   # comment
+
+[dark.ansi]
+black = "#11151c"
+red = "#ea6c73"
+green = "#7fd962"
+yellow = "#f9af4f"
+blue = "#53bdfa"
+magenta = "#cda1fa"
+cyan = "#90e1c6"
+white = "#c7c7c7"
+bright-black = "#686868"
+bright-red = "#f07178"
+bright-green = "#aad94c"
+bright-yellow = "#ffb454"
+bright-blue = "#59c2ff"
+bright-magenta = "#d2a6ff"
+bright-cyan = "#95e6cb"
+bright-white = "#ffffff"
+
+[light]  # Ayu Light
+bg = "#fcfcfc"           # editor.background
+bg-sidebar = "#f8f9fa"   # sideBar.background
+text = "#5c6166"         # editor.foreground
+text-muted = "#828e9f"   # foreground, tab.inactiveForeground
+border = "#6b7d8f1f"     # sideBar.border, panel.border
+accent = "#f29718"       # focusBorder, activityBar.activeBorder
+selection = "#035bd626"  # editor.selectionBackground
+caret = "#f29718"        # editorCursor.foreground
+hl-keyword = "#fa8532"   # keyword
+hl-string = "#86b300"    # string
+hl-number = "#a37acc"    # constant.numeric
+hl-title = "#86b300"     # markup.heading
+hl-comment = "#adaeb1"   # comment
+
+[light.ansi]
+black = "#000000"
+red = "#ea6c6d"
+green = "#6cbf43"
+yellow = "#eca944"
+blue = "#3199e1"
+magenta = "#9e75c7"
+cyan = "#46ba94"
+white = "#bababa"
+bright-black = "#686868"
+bright-red = "#f07171"
+bright-green = "#86b300"
+bright-yellow = "#f2ae49"
+bright-blue = "#399ee6"
+bright-magenta = "#a37acc"
+bright-cyan = "#4cbf99"
+bright-white = "#d1d1d1"

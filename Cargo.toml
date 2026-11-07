@@ -1,0 +1,65 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/nox",
+    "crates/nox_terminal",
+    "crates/nox_layout",
+    "crates/nox_agents",
+    "crates/nox_ipc",
+    "crates/nox_cli",
+    "crates/nox_config",
+    "crates/nox_theme",
+    "crates/nox_mac",
+    "crates/nox_ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Piotr Wittchen"]
+repository = "https://github.com/pwittchen/nox"
+
+[workspace.dependencies]
+# GPUI is pinned to an exact version and upgraded deliberately (SPEC §3).
+gpui = { version = "=0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
+alacritty_terminal = "=0.26.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+toml_edit = "0.22"
+notify = "6"
+notify-debouncer-mini = "0.4"
+regex = "1"
+dirs = "6"
+log = "0.4"
+env_logger = "0.11"
+libc = "0.2"
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+proptest = "1"
+tempfile = "3"
+sha2 = "0.10"
+hex = "0.4"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+
+nox_terminal = { path = "crates/nox_terminal" }
+nox_layout = { path = "crates/nox_layout" }
+nox_agents = { path = "crates/nox_agents" }
+nox_ipc = { path = "crates/nox_ipc" }
+nox_config = { path = "crates/nox_config" }
+nox_theme = { path = "crates/nox_theme" }
+nox_mac = { path = "crates/nox_mac" }
+nox_ui = { path = "crates/nox_ui" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,81 @@
+# Vitesse for nox: Vitesse Dark (dark) and Vitesse Light (light).
+# Source of truth for the colors: https://github.com/antfu/vscode-theme-vitesse
+# (themes/vitesse-dark.json and themes/vitesse-light.json; MIT, © Anthony Fu).
+# Roles follow the VS Code themes: green keywords, accent and headings, terracotta
+# strings, teal numbers, grey-green comments. Like upstream, the sidebar shares the
+# editor background and is separated only by a hairline border.
+# Vitesse sets no cursor color, so the caret uses the editor text color (marked
+# "derived").
+# UI colors ported to kayet by Terre6 (https://github.com/pwittchen/kayet/issues/15).
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: vscode-theme-vitesse terminal.ansi* colors (vitesse-dark.json, vitesse-light.json).
+# Bundled with nox: set `theme = "vitesse"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/vitesse.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]  # Vitesse Dark
+bg = "#121212"           # editor.background
+bg-sidebar = "#121212"   # sideBar.background
+text = "#dbd7caee"       # editor.foreground
+text-muted = "#959da5"   # tab.inactiveForeground, breadcrumb.foreground
+border = "#191919"       # sideBar.border, panel.border
+accent = "#4d9375"       # activityBar.activeBorder, button.background
+selection = "#eeeeee18"  # editor.selectionBackground
+caret = "#dbd7ca"        # derived: editor.foreground, opaque
+hl-keyword = "#4d9375"   # keyword
+hl-string = "#c98a7d"    # string
+hl-number = "#4c9a91"    # constant.numeric
+hl-title = "#4d9375"     # markup.heading
+hl-comment = "#758575dd" # comment
+
+[dark.ansi]
+black = "#393a34"
+red = "#cb7676"
+green = "#4d9375"
+yellow = "#e6cc77"
+blue = "#6394bf"
+magenta = "#d9739f"
+cyan = "#5eaab5"
+white = "#dbd7ca"
+bright-black = "#777777"
+bright-red = "#cb7676"
+bright-green = "#4d9375"
+bright-yellow = "#e6cc77"
+bright-blue = "#6394bf"
+bright-magenta = "#d9739f"
+bright-cyan = "#5eaab5"
+bright-white = "#ffffff"
+
+[light]  # Vitesse Light
+bg = "#ffffff"           # editor.background
+bg-sidebar = "#ffffff"   # sideBar.background
+text = "#393a34"         # editor.foreground
+text-muted = "#6a737d"   # tab.inactiveForeground, breadcrumb.foreground
+border = "#f0f0f0"       # sideBar.border, panel.border
+accent = "#1c6b48"       # activityBar.activeBorder, button.background
+selection = "#22222218"  # editor.selectionBackground
+caret = "#393a34"        # derived: editor.foreground
+hl-keyword = "#1e754f"   # keyword
+hl-string = "#b56959"    # string
+hl-number = "#2f798a"    # constant.numeric
+hl-title = "#1c6b48"     # markup.heading
+hl-comment = "#a0ada0"   # comment
+
+[light.ansi]
+black = "#121212"
+red = "#ab5959"
+green = "#1e754f"
+yellow = "#bda437"
+blue = "#296aa3"
+magenta = "#a13865"
+cyan = "#2993a3"
+white = "#dbd7ca"
+bright-black = "#aaaaaa"
+bright-red = "#ab5959"
+bright-green = "#1e754f"
+bright-yellow = "#bda437"
+bright-blue = "#296aa3"
+bright-magenta = "#a13865"
+bright-cyan = "#2993a3"
+bright-white = "#dddddd"

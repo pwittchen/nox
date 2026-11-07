@@ -1,0 +1,76 @@
+# Flexoki for nox: an inky color scheme for prose and code.
+# Source of truth for the colors: https://stephango.com/flexoki
+# Roles follow upstream (green keywords, cyan strings, purple numbers, orange headings);
+# comments use tx-2 rather than tx-3 so they stay legible.
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: Flexoki's terminal themes (kepano/flexoki, alacritty / kitty).
+# Bundled with nox: set `theme = "flexoki"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/flexoki.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]
+bg = "#100f0f"
+bg-sidebar = "#1c1b1a"
+text = "#cecdc3"
+text-muted = "#878580"
+border = "#282726"
+accent = "#4385be"
+selection = "#4385be33"
+caret = "#cecdc3"
+hl-keyword = "#879a39"
+hl-string = "#3aa99f"
+hl-number = "#8b7ec8"
+hl-title = "#da702c"
+hl-comment = "#878580"
+
+[dark.ansi]
+black = "#100f0f"
+red = "#d14d41"
+green = "#879a39"
+yellow = "#d0a215"
+blue = "#4385be"
+magenta = "#ce5d97"
+cyan = "#3aa99f"
+white = "#878580"
+bright-black = "#575653"
+bright-red = "#af3029"
+bright-green = "#66800b"
+bright-yellow = "#ad8301"
+bright-blue = "#205ea6"
+bright-magenta = "#a02f6f"
+bright-cyan = "#24837b"
+bright-white = "#cecdc3"
+
+[light]
+bg = "#fffcf0"
+bg-sidebar = "#f2f0e5"
+text = "#100f0f"
+text-muted = "#6f6e69"
+border = "#e6e4d9"
+accent = "#205ea6"
+selection = "#205ea633"
+caret = "#100f0f"
+hl-keyword = "#66800b"
+hl-string = "#24837b"
+hl-number = "#5e409d"
+hl-title = "#bc5215"
+hl-comment = "#6f6e69"
+
+[light.ansi]
+black = "#100f0f"
+red = "#af3029"
+green = "#66800b"
+yellow = "#ad8301"
+blue = "#205ea6"
+magenta = "#a02f6f"
+cyan = "#24837b"
+white = "#6f6e69"
+bright-black = "#b7b5ac"
+bright-red = "#d14d41"
+bright-green = "#879a39"
+bright-yellow = "#d0a215"
+bright-blue = "#4385be"
+bright-magenta = "#ce5d97"
+bright-cyan = "#3aa99f"
+bright-white = "#cecdc3"

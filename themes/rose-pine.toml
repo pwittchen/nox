@@ -1,0 +1,76 @@
+# Rosé Pine for nox: main (dark) and dawn (light).
+# Source of truth for the colors: https://rosepinetheme.com/palette/ingredients/
+# Roles follow rose-pine/neovim (pine keywords, gold strings and numbers, muted comments),
+# with iris links and foam titles.
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: Rosé Pine's terminal ports (rose-pine/alacritty, rose-pine/kitty).
+# Bundled with nox: set `theme = "rose-pine"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/rose-pine.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]
+bg = "#191724"
+bg-sidebar = "#1f1d2e"
+text = "#e0def4"
+text-muted = "#908caa"
+border = "#26233a"
+accent = "#c4a7e7"
+selection = "#403d52"
+caret = "#e0def4"
+hl-keyword = "#31748f"
+hl-string = "#f6c177"
+hl-number = "#ebbcba"
+hl-title = "#9ccfd8"
+hl-comment = "#6e6a86"
+
+[dark.ansi]
+black = "#26233a"
+red = "#eb6f92"
+green = "#31748f"
+yellow = "#f6c177"
+blue = "#9ccfd8"
+magenta = "#c4a7e7"
+cyan = "#ebbcba"
+white = "#e0def4"
+bright-black = "#6e6a86"
+bright-red = "#eb6f92"
+bright-green = "#31748f"
+bright-yellow = "#f6c177"
+bright-blue = "#9ccfd8"
+bright-magenta = "#c4a7e7"
+bright-cyan = "#ebbcba"
+bright-white = "#e0def4"
+
+[light]
+bg = "#faf4ed"
+bg-sidebar = "#fffaf3"
+text = "#575279"
+text-muted = "#797593"
+border = "#f2e9e1"
+accent = "#907aa9"
+selection = "#dfdad9"
+caret = "#575279"
+hl-keyword = "#286983"
+hl-string = "#ea9d34"
+hl-number = "#d7827e"
+hl-title = "#56949f"
+hl-comment = "#9893a5"
+
+[light.ansi]
+black = "#f2e9e1"
+red = "#b4637a"
+green = "#286983"
+yellow = "#ea9d34"
+blue = "#56949f"
+magenta = "#907aa9"
+cyan = "#d7827e"
+white = "#575279"
+bright-black = "#9893a5"
+bright-red = "#b4637a"
+bright-green = "#286983"
+bright-yellow = "#ea9d34"
+bright-blue = "#56949f"
+bright-magenta = "#907aa9"
+bright-cyan = "#d7827e"
+bright-white = "#575279"

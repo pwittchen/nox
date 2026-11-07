@@ -1,0 +1,76 @@
+# Kanagawa for nox: wave (dark) and lotus (light).
+# Source of truth for the colors: https://github.com/rebelot/kanagawa.nvim/blob/master/lua/kanagawa/colors.lua
+# Roles follow upstream (violet keywords, green strings, pink numbers, blue titles,
+# fujiGray / lotusGray3 comments, waveBlue1 / lotusViolet3 selection).
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: kanagawa.nvim extras/ (wave and lotus terminal colors).
+# Bundled with nox: set `theme = "kanagawa"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/kanagawa.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]
+bg = "#1f1f28"
+bg-sidebar = "#181820"
+text = "#dcd7ba"
+text-muted = "#727169"
+border = "#2a2a37"
+accent = "#7fb4ca"
+selection = "#223249"
+caret = "#c8c093"
+hl-keyword = "#957fb8"
+hl-string = "#98bb6c"
+hl-number = "#d27e99"
+hl-title = "#7e9cd8"
+hl-comment = "#727169"
+
+[dark.ansi]
+black = "#16161d"
+red = "#c34043"
+green = "#76946a"
+yellow = "#c0a36e"
+blue = "#7e9cd8"
+magenta = "#957fb8"
+cyan = "#6a9589"
+white = "#c8c093"
+bright-black = "#727169"
+bright-red = "#e82424"
+bright-green = "#98bb6c"
+bright-yellow = "#e6c384"
+bright-blue = "#7fb4ca"
+bright-magenta = "#938aa9"
+bright-cyan = "#7aa89f"
+bright-white = "#dcd7ba"
+
+[light]
+bg = "#f2ecbc"
+bg-sidebar = "#e5ddb0"
+text = "#545464"
+text-muted = "#8a8980"
+border = "#dcd5ac"
+accent = "#6693bf"
+selection = "#c9cbd1"
+caret = "#43436c"
+hl-keyword = "#624c83"
+hl-string = "#6f894e"
+hl-number = "#b35b79"
+hl-title = "#4d699b"
+hl-comment = "#8a8980"
+
+[light.ansi]
+black = "#1f1f28"
+red = "#c84053"
+green = "#6f894e"
+yellow = "#77713f"
+blue = "#4d699b"
+magenta = "#b35b79"
+cyan = "#597b75"
+white = "#545464"
+bright-black = "#8a8980"
+bright-red = "#d7474b"
+bright-green = "#6e915f"
+bright-yellow = "#836f4a"
+bright-blue = "#6693bf"
+bright-magenta = "#624c83"
+bright-cyan = "#5e857a"
+bright-white = "#43436c"

@@ -1,0 +1,76 @@
+# Catppuccin for nox: Mocha (dark) and Latte (light).
+# Source of truth for the colors: https://catppuccin.com/palette
+# Roles follow the Catppuccin style guide (mauve keywords, green strings, peach numbers,
+# overlay2 comments, rosewater cursor), with blue titles and mauve links.
+# UI tokens are copied from kayet's bundled theme of the same name; the hl-* keys are
+# kayet's syntax colors, accepted and ignored by nox.
+# Terminal (ANSI) colors: Catppuccin's terminal palette (catppuccin/alacritty, catppuccin/kitty).
+# Bundled with nox: set `theme = "catppuccin"` in [ui] of ~/.nox/config.toml or pick it from
+# `Switch Theme…`. A copy in ~/.nox/themes/catppuccin.toml takes precedence.
+# See SPEC.md §9 for the format.
+
+[dark]
+bg = "#1e1e2e"
+bg-sidebar = "#181825"
+text = "#cdd6f4"
+text-muted = "#9399b2"
+border = "#313244"
+accent = "#cba6f7"
+selection = "#9399b240"
+caret = "#f5e0dc"
+hl-keyword = "#cba6f7"
+hl-string = "#a6e3a1"
+hl-number = "#fab387"
+hl-title = "#89b4fa"
+hl-comment = "#9399b2"
+
+[dark.ansi]
+black = "#45475a"
+red = "#f38ba8"
+green = "#a6e3a1"
+yellow = "#f9e2af"
+blue = "#89b4fa"
+magenta = "#f5c2e7"
+cyan = "#94e2d5"
+white = "#bac2de"
+bright-black = "#585b70"
+bright-red = "#f38ba8"
+bright-green = "#a6e3a1"
+bright-yellow = "#f9e2af"
+bright-blue = "#89b4fa"
+bright-magenta = "#f5c2e7"
+bright-cyan = "#94e2d5"
+bright-white = "#a6adc8"
+
+[light]
+bg = "#eff1f5"
+bg-sidebar = "#e6e9ef"
+text = "#4c4f69"
+text-muted = "#6c6f85"
+border = "#ccd0da"
+accent = "#8839ef"
+selection = "#7c7f9340"
+caret = "#dc8a78"
+hl-keyword = "#8839ef"
+hl-string = "#40a02b"
+hl-number = "#fe640b"
+hl-title = "#1e66f5"
+hl-comment = "#7c7f93"
+
+[light.ansi]
+black = "#5c5f77"
+red = "#d20f39"
+green = "#40a02b"
+yellow = "#df8e1d"
+blue = "#1e66f5"
+magenta = "#ea76cb"
+cyan = "#179299"
+white = "#acb0be"
+bright-black = "#6c6f85"
+bright-red = "#d20f39"
+bright-green = "#40a02b"
+bright-yellow = "#df8e1d"
+bright-blue = "#1e66f5"
+bright-magenta = "#ea76cb"
+bright-cyan = "#179299"
+bright-white = "#bcc0cc"
