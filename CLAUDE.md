@@ -12,15 +12,17 @@ cargo build                                       # whole workspace (debug)
 cargo run -p nox --bin nox-app                    # run the app
 cargo test --workspace                            # all tests (incl. real-shell PTY tests)
 cargo test -p nox_layout                          # one crate
-cargo clippy --workspace --all-targets -- -D warnings   # must be clean (CI enforces)
+cargo lint                                        # clippy::pedantic, -D warnings (alias; CI enforces)
+cargo audit                                       # advisories; accepted ones in .cargo/audit.toml (CI)
 cargo fmt --all                                   # rustfmt.toml: max_width 110
 cargo bench -p nox_terminal                       # parser / encoder benches
 scripts/bundle.sh                                 # dist/nox.app (ad-hoc signed)
 scripts/release/make_dmg.sh                       # dist/nox-macos-aarch64.dmg
 ```
 
-Before finishing a change: `cargo fmt --all`, clippy with `-D warnings`, and the tests of the
-touched crates.
+Before finishing a change: `cargo fmt --all`, `cargo lint`, and the tests of the touched crates.
+New pedantic lints get fixed; allow one only in the crate-root `#![allow]` list (with its reason)
+or locally with a comment.
 
 ## Layout
 

@@ -1358,7 +1358,7 @@ nox/
 │       ├── dialog.rs, toast.rs
 │       └── theme.rs            #   Theme global (Hsla), applying nox_theme output
 ├── .github/workflows/
-│   ├── ci.yml                  # PRs + master: fmt, clippy, test, bench, unsigned bundle
+│   ├── ci.yml                  # PRs + master: fmt, lint, test, bench, unsigned bundle, audit
 │   └── release.yml             # tag v*: build, sign, notarize, staple, appcast, release, cask
 ├── assets/
 │   ├── icons/                  # SVG line icons (1.5px stroke)
@@ -1502,8 +1502,10 @@ be revoked independently, not tied to a personal login.
 The same steps live in `scripts/release/*.sh`, so a release can be built and notarized locally
 from a Mac with the certificate in the login keychain, if CI is unavailable.
 
-`ci.yml` (PRs and `master`) builds and tests and produces an **unsigned** (ad-hoc signed)
-`nox.app` artifact; it has no access to signing secrets.
+`ci.yml` (PRs and `master`) checks formatting, runs `cargo lint` (clippy::pedantic, warnings
+denied), builds and tests, produces an **unsigned** (ad-hoc signed) `nox.app` artifact, and
+runs `cargo audit --deny warnings` (accepted advisories in `.cargo/audit.toml`); it has no
+access to signing secrets.
 
 ### 15.3 Automatic updates
 Updates are delivered with **Sparkle 2**, the de-facto standard for non-App-Store Mac apps:

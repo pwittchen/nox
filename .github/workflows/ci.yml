@@ -1,4 +1,5 @@
-# PRs and master: fmt, clippy, tests, benches (regression gate), unsigned app bundle.
+# PRs and master: fmt, lint (clippy::pedantic), tests, benches (regression gate), unsigned app
+# bundle, and cargo audit (ignored advisories in .cargo/audit.toml).
 # No access to signing secrets (SPEC §15.2).
 #
 # Skipped when:
@@ -27,8 +28,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: fmt
         run: cargo fmt --all -- --check
-      - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: lint (clippy::pedantic, alias in .cargo/config.toml)
+        run: cargo lint
       - name: test
         run: cargo test --workspace
       - name: Info.plist has Sparkle keys only with the updater feature
@@ -43,3 +44,17 @@ jobs:
         with:
           name: nox.app
           path: dist/nox.app
+
+  audit:
+    if: >-
+      ${{ !contains(github.event.head_commit.message || '', '#no-deploy')
+      && !contains(github.event.pull_request.title || '', '#no-deploy') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit (fails on vulnerabilities and on advisories not ignored in .cargo/audit.toml)
+        # Called directly so rust-toolchain.toml does not make rustup install the toolchain.
+        run: cargo-audit audit --deny warnings
