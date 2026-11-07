@@ -8,7 +8,7 @@
   <a href="https://github.com/pwittchen/nox/actions/workflows/ci.yml"><img src="https://github.com/pwittchen/nox/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI"></a>
 </p>
 
-<p align="center">stay in command — a minimalistic, fast, native terminal for macOS, built in Rust with GPUI.</p>
+<p align="center">a minimalistic, fast, native terminal for macOS, built in Rust with GPUI.</p>
 
 - Splits and tabs like iTerm; tabs on top, bottom or in a sidebar
 - Workspaces: named groups of tabs per project, switched instantly, restored on relaunch
