@@ -29,14 +29,22 @@ accessibility settings, notifications) goes through AppKit.
 - Every kayet theme bundled, plus the built-in `nox` palette; light/dark following the system.
 - JetBrains Mono as the default terminal font, with a curated set of other terminal fonts and
   interface fonts bundled to choose from (see 5.10).
+- **Workspaces**: named groups of tabs, usually tied to a project directory, each with its own
+  tabs and agents, switched instantly within the one window (see 4.7, 6.7).
+- A great host for **AI coding agents** (Claude Code, Codex, Gemini CLI, …): nox knows which
+  panes run an agent and what state it is in, tells the user when one needs them, and lets
+  agents in different tabs, panes and workspaces see each other, exchange messages, wait for
+  each other and avoid editing the same files (see 4.8, 7.12, 7.13).
 
 ### Non-Goals (v1)
-- Plugins / extensions / scripting API.
+- Plugins / extensions; a general scripting API beyond the `nox` CLI / control socket for agents
+  (see 7.13).
 - tmux control mode integration, SSH/profile manager, broadcast input.
 - Inline images (Sixel, Kitty graphics, iTerm `imgcat` protocol).
 - Font ligatures (the grid is drawn cell by cell).
-- AI features.
-- Multiple terminal windows (one window; work is organized in tabs and panes; the Settings
+- Built-in AI: nox runs no model, has no chat, holds no API keys and sends nothing to any AI
+  service. It hosts agents; it isn't one.
+- Multiple terminal windows (one window; work is organized in workspaces, tabs and panes; the Settings
   window, see 5.9, is the only other window). See ROADMAP.
 - Session restoration of running processes (layout + working directories only, see 6.6).
 - Intel Macs, Linux, Windows builds. GPUI and `alacritty_terminal` don't preclude them, but they
@@ -92,6 +100,7 @@ so they carry over unchanged.
   (`TitlebarOptions { appears_transparent: true, traffic_light_position }`); nox draws its own
   content (tabs, chip, buttons) in the title bar area, edge to edge.
 - Window size and position persisted and restored. Full screen (`⌃⌘F`) supported.
+- The window shows one **workspace** (see 4.7) at a time; every tab belongs to a workspace.
 
 ### 4.2 Tab
 - A tab holds a **layout**: a tree of panes (see 4.3). It always has at least one pane.
@@ -105,13 +114,18 @@ so they carry over unchanged.
   - **blue** (`ansi.blue`) — **done**: a command finished while the tab was not active. It stays
     until the tab is visited; a command that finishes in the active tab leaves no dot. It may
     also play the attention sound and post a notification (see 7.11).
+  - **magenta** (`ansi.magenta`) — **needs input**: a coding agent in one of the tab's panes is
+    blocked on the user (a permission prompt or a question, see 7.12). Shown on every tab, the
+    active one included, until the agent continues.
   - **accent** — **bell**: a bell rang in a background tab (see 7.10); until the tab is visited.
-  - Priority when several apply: bell > running > done. No dot when the tab is idle and seen.
+  - Priority when several apply: bell > needs input > running > done. No dot when the tab is
+    idle and seen.
 - "Running" means, with shell integration (see 4.5), the span between OSC 133 `C` (command
   start) and `D` (command end); without it, the PTY's foreground process (`tcgetpgrp`) is not
   the shell. "Done" is the transition back to the prompt (OSC 133 `D`, or the foreground process
-  returning to the shell). Long-lived interactive programs (`vim`, `claude`, `ssh`) count as
-  running while they are in the foreground.
+  returning to the shell). Long-lived interactive programs (`vim`, `ssh`) count as running while
+  they are in the foreground. Coding agents are the exception: their dot follows the agent state
+  (see 7.12) — working = running, turn finished = done, blocked on the user = needs input.
 
 ### 4.3 Pane
 - A pane is one terminal session: one PTY, one shell process, one `alacritty_terminal::Term`.
@@ -188,6 +202,51 @@ so they carry over unchanged.
   of taking extra space (as in the screenshot on `#469 - cleanup after migration`).
 - `tabs.icons = false` hides process icons and shows the plain `>_` everywhere.
 
+### 4.7 Workspace
+- A workspace is a named group of tabs with its own agents, session state and, optionally, a
+  root directory. It is the unit of "one project" or "one task": e.g. `nox`
+  (`~/Development/prv/nox`), `kayet`, `scratch`.
+- The window shows exactly one workspace at a time, the **active** one. The others keep running
+  in the background: their panes keep reading output, their agents keep working, and their
+  status (dots, attention sound, notifications) stays live. Switching is instant, like switching
+  tabs (see 6.5).
+- A workspace has: a name, an optional root directory, an optional color (a small swatch on the
+  workspace chip and in the sidebar, one of the theme's ANSI color names, so it follows the
+  theme), its own tab list with layouts, active tab and focused pane, its own message bus and
+  claims (see 7.13) and its own extra environment variables.
+- **Root directory** — usually set: a workspace is typically created from a directory and named
+  after it. But it is not required: a workspace without a root starts its first tab in
+  `shell.working_directory`. Tabs are never confined to the root (`cd` goes anywhere), and
+  several workspaces may share a root (two tasks in one repository; separate worktrees are
+  usually better, see 7.12).
+- The first tab of a workspace starts in its root. Later tabs and panes follow
+  `workspaces.new_tab_cwd`: `"inherit"` (default, the focused pane's cwd, as `shell.inherit_cwd`)
+  or `"root"`.
+- There is always at least one workspace. On first launch nox creates `default`, without a root.
+- **Workspace status**: the aggregate of its tabs' dots with the same priority as 4.2, shown next
+  to its name in the switcher and the sidebar, so a background workspace with an agent that
+  needs input is visible from anywhere.
+- **Project file** (optional): `<root>/.nox/workspace.toml` gives the workspace defaults when it
+  is created from that directory — name, color, `[env]`, and startup tabs (titles, split
+  layouts and a command per pane, e.g. a tab `agent` running `claude` and a tab `dev` with
+  `npm run dev` split next to `git log --oneline`). Commands from a project file run only after
+  the user trusts it once: a sheet lists the commands; trust is stored by path + content hash in
+  `~/.nox/trusted.toml`, and any change to the file asks again (as `direnv` does). Untrusted,
+  the tabs open with plain shells.
+- Every pane gets `NOX_WORKSPACE` (name), `NOX_WORKSPACE_ID`, `NOX_WORKSPACE_ROOT` (if set),
+  `NOX_TAB_ID` and `NOX_PANE_ID` in its environment, plus the cooperation variables of 7.13.
+
+### 4.8 Agent
+- An **agent pane** is a pane whose foreground program is a coding agent: one of the AI coding
+  agents of 4.6, or an executable configured in `[agents.<name>]` (see 11). Detection reuses the
+  process lookup of 4.6, at no extra cost.
+- An agent belongs to the workspace of its pane. It has a **state** (working, needs input, idle,
+  exited — see 7.12), a **name** (the pane's name, set by renaming the pane or by `nox name`,
+  otherwise the agent kind, e.g. `claude`, suffixed when it repeats in a workspace: `claude-2`)
+  and a position (workspace / tab / pane) by which the user and other agents find it.
+- Agents cooperate through nox (see 7.13), never through hidden processes: every agent nox knows
+  about runs in a visible pane the user can look at, type into or close.
+
 ## 5. UI
 
 ### 5.1 Look
@@ -218,7 +277,7 @@ precedence where details differ):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ● ● ●  [▢ ~]  [>_ 1 ~        ]  [>_ 2 ~            ]              ⌘   +  │  title bar (38px)
+│ ● ● ●  [▢ nox]  [>_ 1 ~      ]  [>_ 2 ~            ]              ⌘   +  │  title bar (38px)
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
 │ │ >_ pw@mbp:~                                          ◫  ⊟  ⤢  ×      │ │  pane header (28px)
 │ │                                                                      │ │
@@ -231,8 +290,13 @@ precedence where details differ):
 
 Title bar (left to right):
 - Traffic lights (native).
-- **Directory chip** `[▢ ~]`: the working directory of the focused pane, shortened. Click → menu:
-  Copy Path, Reveal in Finder. In `left` mode this slot holds the sidebar toggle instead.
+- **Workspace chip** `[▢ nox]`: the active workspace (see 4.7) — color swatch, name, and the
+  workspace status dot when another workspace needs attention (so the user sees it without
+  opening anything). Hovering shows the root and the focused pane's cwd. Click → menu: the list
+  of workspaces with their status dots (click to switch), New Workspace…, Open Folder as
+  Workspace…, New Agent in Worktree…, Rename Workspace…, Set Color ▸, Copy Path, Reveal in
+  Finder, Close Workspace. Dropping a folder on it opens that folder as a workspace. In `left`
+  mode this slot holds the sidebar toggle instead and the chip moves to the sidebar (see 5.4).
 - **Tab strip**: one pill per tab, with a process icon (see 4.6; the default `>_` is tinted with
   `ansi.green` at low alpha when the tab is active, muted otherwise), the index and the title. Active tab:
   `bg-elevated` fill with a hairline border; inactive: no fill, `text-muted` label. Pills share
@@ -253,12 +317,15 @@ Pane card:
   opacity): **split vertically** (◫), **split horizontally** (⊟), **maximize / restore** (⤢),
   **close** (×). With a single pane in the tab the header still shows (it carries the title);
   `ui.pane_header = false` hides all headers, leaving only the hairline dividers.
+  After the title, muted: the git branch of the pane's cwd (`⎇ feat/workspaces`,
+  `ui.show_git_branch = true`, see 7.12) and, in agent panes, the agent state, unread messages
+  (`✉ 2`) and held claims (a small lock) from 7.13.
 - Terminal grid padding: `terminal.padding` (default 8 px horizontal, 6 px vertical). Leftover
   space after fitting whole cells goes to the right and bottom edge, filled with `bg`.
 
 ### 5.3 Tabs on the bottom
 
-Same as 5.2, with the tab strip, the directory chip, `⌘` and `+` moved to a 34 px bar under the
+Same as 5.2, with the tab strip, the workspace chip, `⌘` and `+` moved to a 34 px bar under the
 pane card. The title bar keeps only the traffic lights and stays draggable; its height shrinks to
 28 px. No sidebar.
 
@@ -268,11 +335,11 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ ● ● ●  [◧]                                                        ⌘   +  │
 │ ┌────────────────┐┌──────────────────────────────────────────────────────┐│
-│ │ >_ 1  ~        ││ >_ pw@mbp:~                            ◫  ⊟  ⤢  ×    ││
-│ │ >_ 2  ~/nox    ││                                                      ││
-│ │    vim         ││ ❯ █                                                  ││
+│ │ ▢ nox        ⌄ ││ >_ pw@mbp:~                            ◫  ⊟  ⤢  ×    ││
+│ │ >_ 1  ~        ││                                                      ││
+│ │ >_ 2  ~/nox    ││ ❯ █                                                  ││
+│ │    vim         ││                                                      ││
 │ │ >_ 3  htop  •  ││                                                      ││
-│ │                ││                                                      ││
 │ └────────────────┘└──────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -280,6 +347,11 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 - `tabs.position = "left"`: tabs are rows in a sidebar on the left (`bg-sidebar`), one row per
   tab: process icon (see 4.6), index, title; a second muted line shows the working directory when it differs from
   the title. The active row has a subtle background pill. Status dot (see 4.2) on the right.
+- The top row of the sidebar is the workspace header: color swatch, workspace name, the status
+  dot of the other workspaces and `⌄`, which opens the same menu as the workspace chip (see 5.2).
+- `tabs.sidebar_workspaces = "all"` lists every workspace as a collapsible group (header row +
+  its tabs) instead of only the active one: one column showing all projects and all their
+  agents. Clicking a tab of another workspace switches to it. Default `"active"`.
 - Drag to reorder, double-click to rename, context menu as for pills (see 5.5).
 - Sidebar width: drag its 1px divider, min 160 px, max 360 px, default 220 px; persisted.
 - `⌘\` or the sidebar toggle `[◧]` in the title bar hides and shows it; the state is persisted.
@@ -292,18 +364,22 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 - Shown as real `NSMenu`s (`popUpMenuPositioningItem:atLocation:inView:` via `objc2`); the
   chosen item is dispatched back as a GPUI action. (GPUI's own drawn menus are not used, so they
   look and behave like every other Mac app.)
-- Tab: New Tab, Rename Tab…, Set Icon…, Duplicate Tab (same cwd), Move Left / Right, Close Tab, Close Other
-  Tabs.
-- Pane (right-click in the terminal): Copy, Paste, Select All, Clear Buffer, Split Vertically,
-  Split Horizontally, Maximize Pane, Rename Pane…, Close Pane. With a URL or path under the
-  pointer: Open, Copy Link, Reveal in Finder.
+- Tab: New Tab, Rename Tab…, Set Icon…, Duplicate Tab (same cwd), Move Left / Right, Move to
+  Workspace ▸ (the other workspaces, New Workspace…), Close Tab, Close Other Tabs.
+- Pane (right-click in the terminal): Copy, Copy Last Output, Send Selection to… (see 7.12),
+  Paste, Select All, Clear Buffer, Split Vertically, Split Horizontally, Maximize Pane, Rename
+  Pane…, Close Pane. With a URL or path under the pointer: Open, Copy Link, Reveal in Finder.
+  In an agent pane also: Show in Agents Panel, Release Claims (when it holds any, see 7.13).
 
 ### 5.6 Command palette
 - `⌘K` or the `⌘` title-bar icon opens a floating panel just below the title bar, like kayet's:
   a search field, a filtered list of commands (fuzzy match) with their shortcuts right-aligned,
   `↑` / `↓` navigate, `↵` runs, `Esc` closes, the footer hints the keys.
 - Lists every command in 10 (keyboard shortcuts), plus `Switch Theme…`, `Switch Appearance…`,
-  `Switch Tab…` (all tabs, filter by title/cwd) and `Tabs Position: Top / Bottom / Left`.
+  `Switch Tab…` (all tabs of all workspaces, filter by title/cwd/workspace), `Switch
+  Workspace…`, `Rename Workspace…`, `Set Workspace Color…`, `New Agent in Worktree…`, `Install
+  Agent Hooks…`, `Copy MCP Setup Command`, `Install Command Line Tool…` and `Tabs Position: Top /
+  Bottom / Left`.
 - Theme and appearance pickers live-preview the highlighted choice; `Esc` restores, `↵` applies
   and saves to config.
 - Every command is a GPUI action (`actions!` / `Action` derive), so the palette, the menu bar,
@@ -312,7 +388,9 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 ### 5.7 Dialogs and notices
 - In-app sheets as in kayet (bold title, muted message, right-aligned buttons, the default button
   monochrome-filled and focused, `Esc` cancels, `Tab` cycles). Used for: closing a tab / pane /
-  the app while a process other than the shell is running (`Cancel` / `Close`).
+  the app while a process other than the shell is running (`Cancel` / `Close`); closing a
+  workspace (with the number of running processes and working agents); trusting a project file
+  (see 4.7); resuming agents on launch (see 7.12).
 - Non-blocking notices (toast, bottom-right of the window, 4 s): config parse errors, invalid
   values, unknown theme, shell failed to start (with the error), font not found.
 
@@ -327,7 +405,8 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
   the single source of truth.
 - Layout: a sidebar of sections mirroring the config tables — General (`[app]`), Appearance
   (`[ui]`, theme, mode), Tabs (`[tabs]`), Font (`[font]`), Terminal (`[terminal]`), Shell
-  (`[shell]`, `[shell.env]`), Icons (`[icons]`), Keys (`[keys]`) — and a scrollable form on the
+  (`[shell]`, `[shell.env]`), Workspaces (`[workspaces]`), Agents (`[agents]`, the configured
+  agents and their commands), Icons (`[icons]`), Keys (`[keys]`) — and a scrollable form on the
   right. Each setting shows a label, a one-line description and the matching config key in muted
   monospace (`tabs.position`), so the UI teaches the file.
 - Controls by type: switches for booleans, segmented controls / popups for enums, steppers or
@@ -368,7 +447,7 @@ Two independent settings: the terminal font (`font.family`) and the interface fo
 - A family that isn't found falls back to the default (JetBrains Mono / SF Pro) with a notice
   (see 5.7).
 
-## 6. Panes and Tabs Behavior
+## 6. Panes, Tabs and Workspaces Behavior
 
 ### 6.1 Splitting
 - **Split vertically** (`⌘D`): the focused pane is split into two side by side; the new pane
@@ -408,6 +487,8 @@ Two independent settings: the terminal font (`font.family`) and the interface fo
   (see 5.7); `app.confirm_close = false` disables it.
 
 ### 6.5 Tabs
+- Tabs, their order and their indices are per workspace: `⌘1` is the first tab of the active
+  workspace.
 - `⌘T` new tab (after the current one), `⌘⇧W` close tab, `⌘1…⌘8` go to tab N, `⌘9` last tab,
   `⌘⇧[` / `⌘⇧]` (and `⌃⇧⇥` / `⌃⇥`) previous / next, wrapping. `⌘⇧←` / `⌘⇧→` move the tab.
 - **Renaming**: the user can edit a tab's name at any time — double-click the pill / sidebar row,
@@ -421,10 +502,44 @@ Two independent settings: the terminal font (`font.family`) and the interface fo
   rendered; the shown tab draws from its current grid in the next frame.
 
 ### 6.6 Session restore
-- On quit, the tab order, each tab's layout tree (directions, ratios), each pane's working
-  directory and custom name, each tab's custom name, and the active tab are saved to `~/.nox/session.toml`.
+- On quit, the workspaces (order, name, root, color, active tab) and, per workspace, the tab
+  order, each tab's layout tree (directions, ratios), each pane's working directory and custom
+  name, each tab's custom name, and which agent ran in each pane are saved to
+  `~/.nox/session.toml`, together with the active workspace.
 - On launch with `app.restore_session = true` (default), that layout is re-created with fresh
-  shells in the saved directories. Scrollback and running programs are not restored.
+  shells in the saved directories. Scrollback and running programs are not restored; agents can
+  be relaunched with their resume command (see 7.12). Messages survive (see 7.13); claims don't.
+
+### 6.7 Workspaces
+- **Create**:
+  - **New Workspace** (`⌘⇧N`): a sheet with a name and a root directory (path input with
+    completion, or **Choose…** for a folder picker), both optional; an empty name takes the
+    folder's name, or `workspace N` without a root.
+  - **Open Folder as Workspace…** (`⌘O`): a native folder picker (`NSOpenPanel`); the workspace
+    is rooted there and named after the folder (`nox`, then `nox 2` if the name is taken). If a
+    workspace with that root already exists, nox switches to it instead; holding `⌥` forces a
+    new one.
+  - From a terminal: `nox open [path]` / `nox .` (see 7.13) does the same as Open Folder.
+    Dropping a folder on the Dock icon or on the workspace chip too.
+  - From a project file, when the folder has `.nox/workspace.toml` (see 4.7).
+- **Switch**: the workspace chip menu or sidebar header, **Switch Workspace…** (`⌘P`: a palette
+  listing workspaces with color, root, status dot and the number of agents per state, fuzzy
+  filtered by name and root), `⌃⌘1…⌃⌘9` (workspace N), `⌃⌘[` / `⌃⌘]` (previous / next,
+  wrapping), clicking a notification or an entry in the agents panel (7.11, 7.12). The previous
+  workspace is one `⌃⌘\` away (toggles between the last two).
+- Each workspace remembers its active tab, focused pane, maximize state and scroll positions;
+  switching back restores them exactly. Switching never touches processes.
+- **Edit**: rename, set color, set or change the root (affects new tabs only; running shells
+  stay where they are) — from the chip menu, the palette or the sidebar header's context menu.
+- **Move a tab** to another workspace (tab context menu, Move to Workspace ▸, or drag a tab onto
+  a workspace in the sidebar / switcher): its panes keep running; agents in it join the target
+  workspace's bus (their claims are released).
+- **Reorder** workspaces by dragging in the switcher or the sidebar (`"all"` mode).
+- **Close** a workspace (chip menu, palette, `⌃⌘W`): closes all its tabs, asking first when
+  processes or agents are running (see 5.7). Closing the last tab of a workspace closes the
+  workspace (`workspaces.close_when_empty = true`; otherwise a new tab opens in its root) and
+  switches to the most recently used one. Closing the last workspace follows
+  `app.quit_when_last_tab_closed`.
 
 ## 7. Terminal Behavior
 
@@ -557,14 +672,16 @@ corner or a divider.
 - When a job in a pane has finished, or stopped and waits for the user to act, nox lets the user
   know in two independent ways, each of which can be turned off: a soft chime and a macOS system
   notification. So the user can look away while a job runs and come back when needed.
-- Triggers, in a pane the user isn't looking at (a background tab, or any pane while the nox
-  window is unfocused):
+- Triggers, in a pane the user isn't looking at (a background tab, a pane in another
+  workspace, or any pane while the nox window is unfocused):
   - **done**: a command finishes (the "done" transition, see 4.2), if it ran for at least
     `terminal.attention_min_duration` seconds (default 10), so quick commands stay quiet;
   - **attention**: a program asks for it with an OSC 9 / OSC 777 notification (see 7.1), e.g. a
-    coding agent like `claude` finishing its turn or waiting for a permission prompt.
-- Nothing fires for the pane the user is looking at (focused window, active tab), so typing at a
-  prompt never chimes or notifies.
+    coding agent like `claude` finishing its turn or waiting for a permission prompt;
+  - **agent**: an agent's state changes to *needs input* (always), or to *idle* after a turn that
+    lasted at least `terminal.attention_min_duration` (see 7.12), however nox learned about it.
+- Nothing fires for the pane the user is looking at (focused window, active workspace, active
+  tab), so typing at a prompt never chimes or notifies.
 
 **Sound**
 - A bundled, soft and light tone (`assets/sounds/attention.caf`, ~0.3 s, gentle attack, no sharp
@@ -584,7 +701,10 @@ corner or a divider.
     name and no exit status is shown.
   - attention: the title and body the program sent (OSC 777 `notify;title;body`, OSC 9 body
     only, titled with the process name, e.g. `claude`).
-- Clicking the notification brings nox to the front, switches to the tab and focuses the pane.
+  - agent: title `<agent name> needs input` / `<agent name> finished`, body: the agent's last
+    message (from `nox status -m`, the notification text or the title) and `workspace · tab`.
+- Clicking the notification brings nox to the front, switches to the workspace and the tab and
+  focuses the pane.
 - One notification per pane at a time (`threadIdentifier` per pane, a new one replaces the old);
   a pane's notifications are removed from Notification Center when it is visited or closed.
 - Notifications are silent at the system level; the sound is nox's own chime above, so the two
@@ -598,6 +718,177 @@ corner or a divider.
   `terminal.notifications = false`, in Settings → Terminal (two switches, a volume slider with a
   preview button, a "notify for commands longer than" stepper) or in `config.toml` by hand. Like
   every setting, the change applies immediately from either place (see 5.9 and 11).
+
+### 7.12 Coding agents
+Features for panes that run coding agents (see 4.8). All of them work without any setup;
+explicit status reporting (below) makes them precise.
+
+**Agent state**
+- States: **working** (the agent is busy on a turn), **needs input** (blocked on the user: a
+  permission prompt, a question), **idle** (its turn is over, waiting for the next prompt),
+  **exited**. Each carries the time it was entered and an optional short message.
+- Sources, the first available wins:
+  1. **Explicit report**: `nox status working | needs-input | idle [-m "message"]` from the CLI
+     or the MCP server (see 7.13), typically called from the agent's hooks — for Claude Code:
+     `UserPromptSubmit` → working, `Notification` → needs input, `Stop` → idle. **Install Agent
+     Hooks…** (palette, Settings → Agents) offers ready-made hooks for Claude Code, Codex and
+     Gemini CLI: it shows the exact change to the agent's settings file (user or project level)
+     as a diff and writes it only after the user confirms; nothing is ever installed silently.
+  2. **OSC 9 / 777 notification** from the agent → needs input, with the text as the message.
+  3. **Title**: known title patterns per agent (e.g. Claude Code's spinner prefix while working,
+     `✳` when idle), kept in the same built-in table as the icons (see 4.6).
+  4. **Activity heuristic** (fallback only): output in the last 1.5 s → working; quiet after
+     that → idle.
+- The state drives the tab and workspace dots (4.2, 4.7), the attention sound and notifications
+  (7.11) and the agents panel. A working dot gently pulses (off under Reduce Motion).
+
+**Agents panel** (`⌘⇧A`)
+- A floating panel (like the palette, 5.6) listing every agent of every workspace, grouped by
+  workspace: icon, name, tab, state with its duration (`working · 4m 12s`, `needs input · 30s`),
+  last message, cwd and git branch, unread messages and claims (7.13).
+- Type to filter, `↑` / `↓` to move, `↵` jumps to the agent (switches workspace and tab, focuses
+  the pane). Agents that need input are listed first, then idle-unseen, then working.
+- A second tab of the panel, **Activity**, shows the cooperation log of the active workspace:
+  messages, sends, spawns and claims (see 7.13), newest first.
+
+**Next agent** (`⌘J`)
+- Jumps to the agent that has waited longest for the user — needs input first, then idle and
+  not yet seen — across all workspaces. Pressing again cycles through the rest; with none
+  waiting, a short notice says so. This is the "what needs me now" key when several agents run.
+
+**Git context**
+- The git branch of each pane's cwd is shown in the pane header and on the second line of
+  sidebar rows (`ui.show_git_branch = true`). It is read from `.git/HEAD` (worktree-aware: a
+  `.git` file pointing to `gitdir:` is followed), refreshed together with the cwd (4.4); no `git`
+  process is spawned.
+
+**Worktrees for parallel agents**
+- **New Agent in Worktree…** (palette, workspace chip menu): asks for a branch name and an agent
+  (from `[agents.*]`), runs `git worktree add <worktree_dir>/<repo>-<branch> -b <branch>` from
+  the workspace root (`workspaces.worktree_dir`, default the root's parent directory), then opens
+  the agent there — in a new tab of the current workspace or in a new workspace rooted at the
+  worktree (`workspaces.worktree_opens = "tab" | "workspace"`). If git fails, its output is
+  shown in a sheet.
+- When that tab or workspace closes and the worktree is clean, nox offers to remove it
+  (`git worktree remove`); it never removes a dirty worktree or deletes a branch.
+
+**Launching and resuming agents**
+- **New Agent Tab** (`⌥⌘T`): a picker of the configured agents (`[agents.<name>]`, see 11);
+  the chosen one starts in a new tab in the workspace root, through the user's shell so their
+  `PATH` and aliases apply.
+- On session restore (6.6), panes that ran an agent can be relaunched with its `resume` command
+  (e.g. `claude --continue`): `agents.restore = "ask"` (default) shows one sheet listing them
+  with checkboxes, `"resume"` relaunches all, `"off"` restores plain shells. This starts a fresh
+  process; the conversation continues through the agent's own resume feature.
+
+**Feeding context to agents**
+- **Copy Last Output** (`⌥⌘C`): copies the output of the last finished command in the focused
+  pane (between OSC 133 `C` and `D`, without the prompt); needs shell integration (4.5).
+- **Send Selection to…** (`⌘⇧S`): a picker of the panes of the workspace, agents first; sends
+  the selection (or the last command output when nothing is selected) to the chosen pane as a
+  bracketed paste, **without** pressing `↵`, and focuses it, so the user can add a prompt
+  around it before submitting.
+- Dropping files from Finder onto a pane pastes their shell-escaped paths, separated by spaces.
+- `⇧↵` sends `ESC ↵` (`\x1b\r`), which Claude Code, Codex and other agents read as a newline
+  inside the prompt rather than submit; overridable in `[keys]` (`"shift-enter"`).
+
+**Keep awake**
+- While any agent is working, nox holds an `IOPMAssertion` (`PreventUserIdleSystemSleep`; the
+  display may still sleep), so a long run isn't cut short by system sleep; it is released as
+  soon as no agent is working. `agents.keep_awake = true`.
+
+### 7.13 Agent cooperation
+Agents running in different tabs, panes and workspaces can see each other, exchange messages,
+wait for each other, start helpers and avoid editing the same files — without the user copying
+text between them. Everything goes through nox and stays visible to the user.
+
+**Control socket**
+- nox listens on a Unix domain socket, `~/.nox/run/nox.sock` (directory `0700`, socket `0600`,
+  current user only). Protocol: newline-delimited JSON requests / responses plus subscription
+  events, versioned (`"v": 1`). Served on a background thread (`nox_ipc`); requests that touch
+  UI state are dispatched to the main thread. It never listens on a network port.
+- `agents.cooperation = false` turns the socket off and leaves the variables below unset.
+
+**Identity and scope**
+- Every pane's environment carries `NOX_SOCKET`, `NOX_PANE_ID`, `NOX_TAB_ID`,
+  `NOX_WORKSPACE_ID` and a random per-pane `NOX_TOKEN`. Requests authenticate with the token,
+  so nox knows which pane is calling; child processes inherit it, so an agent's tools act as
+  the agent's pane. Without a valid token only `open` and `ls` (workspaces only) are allowed.
+- **A workspace is a team**: by default a pane sees and talks only to panes of its own
+  workspace (`agents.scope = "workspace"`); `"all"` lets agents reach other workspaces too.
+- Panes are addressed by id or by name (4.8); names are unique within a workspace.
+
+**`nox` command-line tool**
+- Shipped in the app bundle (`nox.app/Contents/Resources/bin/nox`) and put first on `PATH` in
+  every pane; **Install Command Line Tool…** symlinks it into `/usr/local/bin` for use outside
+  nox. Every command accepts `--json`; exit codes are documented (`0` ok, `1` error, `2` usage,
+  `3` conflict, `4` timeout).
+
+| Command                                              | What it does                                                    |
+|------------------------------------------------------|-----------------------------------------------------------------|
+| `nox ls [--all]`                                     | workspaces, tabs and panes: id, name, program, agent state, cwd, branch |
+| `nox name <name>`                                    | name the calling pane (e.g. `backend`, `reviewer`)              |
+| `nox status <state> [-m msg]`                        | report the calling agent's state (see 7.12)                     |
+| `nox read <pane> [--lines N \| --scrollback \| --last-output]` | text of another pane: the visible screen by default, plain text without escape sequences |
+| `nox send <pane> <text> [--submit]`                  | type text into another pane as a bracketed paste; `--submit` also presses `↵` |
+| `nox msg <to> <text>`                                | post a message to a pane (by name / id) or to `all` in the workspace |
+| `nox inbox [--wait] [--from <pane>] [--peek]`        | read (and mark read) the calling pane's messages; `--wait` blocks until one arrives |
+| `nox wait <pane> [--state idle\|needs-input\|exited] [--timeout s]` | block until the pane reaches that state (default `idle`) |
+| `nox claim <path…> [-m reason] [--wait]`             | take advisory claims on files or directories                    |
+| `nox release [<path…>]` / `nox claims`               | release own claims (all by default) / list claims in the workspace |
+| `nox spawn [--tab \| --split right\|below] [--name n] [--cwd dir] -- <cmd>` | open a new pane running a command in the caller's workspace; prints its id |
+| `nox notify <title> [body]`                          | attention sound + notification, as OSC 777 (see 7.11)           |
+| `nox open [path]`, `nox .`                           | open or switch to the workspace for a folder (see 6.7)          |
+| `nox mcp`                                            | run an MCP server over stdio (below)                            |
+
+**Messages**
+- Each workspace has a message bus. `nox msg reviewer "feat/x is ready, please review"` queues
+  a message from the calling pane to `reviewer`. The recipient reads it with `nox inbox` (or the
+  MCP tool) — the default delivery, which never interferes with the agent's TUI. The pane
+  header shows unread messages (`✉ 2`).
+- `agents.deliver = "type"` (opt-in) additionally types a message into an **idle** agent's
+  prompt as `[from backend] …` and submits it, so an agent that doesn't poll its inbox still
+  gets it; messages to a working agent wait until it is idle.
+- Messages are kept per workspace (last 1000, `~/.nox/workspaces/<id>/messages.jsonl`), so a
+  resumed agent can still read what was sent to it. Shown in the Activity log (7.12).
+
+**Claims**
+- A claim is an advisory lock on a path (file or directory, relative to the workspace root or
+  absolute) held by a pane, with an optional reason. Claims on overlapping paths conflict:
+  `nox claim src/parser/` fails with exit code `3` and the holder's name and reason when
+  another pane holds `src/parser/lexer.rs` — the agent can pick other work, or `--wait` for it.
+- Claims are released explicitly, when the pane closes or its program exits, when the tab moves
+  to another workspace, or after `agents.claim_ttl` seconds (default 1800) without renewal
+  (claiming again renews). They are not enforced on the filesystem: they are a convention that
+  agent instructions (`CLAUDE.md`, `AGENTS.md`) can rely on ("claim files before editing them").
+- Held claims show as a lock in the pane header (hover lists them) and in the agents panel; the
+  user can release any claim from there.
+
+**Waiting, handoff, helpers**
+- `nox wait backend` lets a reviewer agent sleep until the implementer finishes its turn, then
+  `nox read backend --last-output` or its inbox. An orchestrating agent can `nox spawn` helpers
+  in splits or tabs of its workspace; they are ordinary visible panes the user can watch, type
+  into and close.
+
+**MCP server**
+- `nox mcp` exposes the same operations as MCP tools over stdio — `list_panes`, `read_pane`,
+  `send_to_pane`, `send_message`, `read_inbox`, `wait_for_pane`, `claim_paths`,
+  `release_paths`, `list_claims`, `spawn_pane`, `set_status` — with the same identity and scope
+  (the server inherits the agent pane's environment). Setup is one command, e.g.
+  `claude mcp add nox -- nox mcp`; **Copy MCP Setup Command** (palette, Settings → Agents) puts
+  the right one on the clipboard for each configured agent.
+
+**Safety**
+- `send` and `deliver = "type"` only target **agent panes**; typing into a plain shell would run
+  commands, so it is refused unless `agents.allow_send_to_shell = true`.
+- Typed-in text is never hidden: the target pane header shows `⇠ from backend` for 3 s, and every
+  send, spawn, message and claim is logged in the Activity log with its source and time.
+- If the user typed in the target pane within the last 2 s, a send waits (up to 10 s, then
+  fails) so it never interleaves with the user's typing.
+- Loop guard: a pane may send at most 20 messages / sends per 10 s; excess requests fail and the
+  user gets a notice naming the pane.
+- `read` is limited to the caller's scope; `spawn` runs as the user, like any new tab, in the
+  caller's workspace only.
 
 ## 8. Performance Design
 
@@ -734,6 +1025,18 @@ for WCAG AA against `bg` in both variants.
 | Equalize panes                  | `⌘⌃=`               |
 | Maximize / restore pane         | `⌘⇧↵`               |
 | Toggle sidebar (left mode only) | `⌘\`                |
+| New workspace                   | `⌘⇧N`               |
+| Open folder as workspace        | `⌘O`                |
+| Switch workspace…               | `⌘P`                |
+| Go to workspace 1–9             | `⌃⌘1`…`⌃⌘9`         |
+| Previous / next workspace       | `⌃⌘[` / `⌃⌘]`       |
+| Last used workspace             | `⌃⌘\`               |
+| Close workspace                 | `⌃⌘W`               |
+| New agent tab                   | `⌥⌘T`               |
+| Agents panel                    | `⌘⇧A`               |
+| Next agent needing attention    | `⌘J`                |
+| Copy last command output        | `⌥⌘C`               |
+| Send selection to pane…         | `⌘⇧S`               |
 | Command palette                 | `⌘K`                |
 | Find                            | `⌘F`                |
 | Clear buffer                    | `⌘⇧K`               |
@@ -777,6 +1080,7 @@ dim_inactive_panes = 0.15    # 0.0 disables
 focus_follows_mouse = false
 focus_click_through = false
 window_padding = 6           # px between the window edge and the pane card
+show_git_branch = true       # branch of the pane's cwd in pane headers and sidebar rows (see 7.12)
 
 [tabs]
 position = "top"             # "top" | "bottom" | "left"; top/bottom: no sidebar
@@ -785,6 +1089,37 @@ sidebar_width = 220          # left mode only
 show_index = true            # "1 ~" vs "~"
 title = "auto"               # "auto" (see 4.4) | "cwd" | "process"
 icons = true                 # process icons in tabs and pane headers (see 4.6)
+sidebar_workspaces = "active" # left mode only: "active" | "all" (every workspace as a group, see 5.4)
+
+[workspaces]
+new_tab_cwd = "inherit"      # "inherit" (focused pane's cwd) | "root" (workspace root, see 4.7)
+close_when_empty = true      # closing a workspace's last tab closes the workspace
+worktree_dir = ""            # empty: next to the workspace root; else a path for new worktrees (see 7.12)
+worktree_opens = "tab"       # "tab" | "workspace"
+
+[agents]
+keep_awake = true            # prevent system sleep while an agent is working
+restore = "ask"              # relaunch agents on session restore: "ask" | "resume" | "off"
+cooperation = true           # control socket, `nox` CLI and MCP server (see 7.13)
+scope = "workspace"          # which panes an agent can see and reach: "workspace" | "all"
+deliver = "inbox"            # messages: "inbox" | "type" (also typed into idle agents)
+allow_send_to_shell = false  # allow `nox send` into panes that aren't agents
+claim_ttl = 1800             # s; unrenewed claims expire
+
+# Agents for New Agent Tab / worktrees / resume; the key is also the executable matched for
+# detection (4.8), extra executables in `match`.
+[agents.claude]
+command = "claude"
+resume = "claude --continue"
+
+[agents.codex]
+command = "codex"
+resume = "codex resume --last"
+
+# [agents.my-agent]
+# command = "my-agent --fast"
+# match = ["my-agent", "my-agent-dev"]
+# icon = "~/.nox/icons/my-agent.svg"
 
 [icons]
 # executable = built-in icon name, or a path to an SVG in ~/.nox/icons/
@@ -862,6 +1197,26 @@ y = 0
 - `ui.font_family`: `"system"` is SF Pro (`.SystemUIFont`); any other value is a family, falling
   back to SF Pro (with a notice) if it isn't found. Bundled fonts: see 5.10.
 - Key syntax follows GPUI keystrokes (`cmd-shift-d`, `ctrl-tab`, `alt-left`).
+- Per-workspace settings (name, root, color, env, startup tabs) are not in `config.toml`: they
+  live in the session (6.6) and, optionally, in the project file `<root>/.nox/workspace.toml`
+  (4.7), which uses the same TOML conventions:
+
+```toml
+name = "nox"
+color = "cyan"               # one of the theme's ANSI color names
+
+[env]
+RUST_LOG = "debug"
+
+[[tabs]]
+title = "agent"
+command = "claude"
+
+[[tabs]]
+title = "dev"
+layout = "vertical"          # two panes side by side
+panes = [{ command = "cargo watch -x check" }, { command = "git log --oneline -20" }]
+```
 - `⌘,` / nox → Settings… opens the Settings window (see 5.9). `⌥⌘,` / nox → Open Config File
   (also in the palette and the Settings window footer) opens `config.toml` in a new tab with
   `$VISUAL` / `$EDITOR` (fallback: `open -t`, i.e. the default text editor — kayet if
@@ -889,6 +1244,9 @@ Measured on an M1 MacBook Air (the slowest supported machine), release build:
 | Memory, 1 tab, 1 pane, idle                         | < 60 MB total     |
 | Each additional pane (10k scrollback, idle)         | < 10 MB           |
 | CPU, idle with 10 panes                             | ~0%               |
+| Switching workspace (10 tabs each)                  | next frame (< 16 ms) |
+| Control socket request (`nox ls`, `nox msg`)        | < 5 ms p99        |
+| CPU, 5 idle agents across 3 workspaces              | ~0% (no polling while quiet) |
 | `.dmg` size                                         | < 20 MB           |
 
 - `cargo bench` (criterion) covers the hot paths: parsing throughput (`Processor::advance` on
@@ -911,14 +1269,22 @@ nox/
 │   ├── nox_terminal/           # no GPUI: PTY spawn/resize/kill, reader thread, OSC sniffer,
 │   │                           #   Term wrapper, key encoder, selection/search helpers,
 │   │                           #   process info (libproc), shell integration snippets
-│   ├── nox_layout/             # no GPUI: tabs + split trees (pure data, heavily unit tested)
+│   ├── nox_layout/             # no GPUI: workspaces → tabs → split trees (pure data, heavily unit tested)
+│   ├── nox_agents/             # no GPUI: agent detection + state machine, message bus, claims,
+│   │                           #   git HEAD reader, worktree helper, project file + trust store
+│   ├── nox_ipc/                # no GPUI: control socket server, protocol types, token auth, scope
+│   ├── nox_cli/                # binary `nox`: CLI commands + MCP stdio server (depends on nox_ipc only)
 │   ├── nox_config/             # no GPUI: config model, load/validate, toml_edit writes, watcher
 │   ├── nox_theme/              # no GPUI: theme parsing, bundled themes, color resolution
 │   ├── nox_mac/                # objc2: NSMenu context menus, accessibility flags,
 │   │                           #   Dock bounce, notifications, NSWindow background color,
+│   │                           #   NSOpenPanel, IOPMAssertion (keep awake),
 │   │                           #   Sparkle updater controller (feature `updater`)
 │   └── nox_ui/                 # GPUI views and elements:
-│       ├── workspace.rs        #   window root: title bar, tab bar/sidebar, active tab
+│       ├── root.rs             #   window root: title bar, workspace chip, tab bar/sidebar, active workspace
+│       ├── workspace.rs        #   one workspace: its tabs, active tab, switching state
+│       ├── workspace_switcher.rs # chip menu, Switch Workspace… palette, New Workspace sheet
+│       ├── agents_panel.rs     #   agents list + Activity log (see 7.12)
 │       ├── tab_bar.rs          #   pills (top/bottom) and sidebar rows (left)
 │       ├── pane_group.rs       #   renders a split tree, dividers, drag-resize
 │       ├── pane.rs             #   pane header + terminal view, focus, find bar
@@ -961,9 +1327,15 @@ shell ◀───────────────────────�
                                           (copy visible cells, quads + shaped runs → Metal)
 ```
 
-- Entities: `Workspace` (window root) owns `Vec<Tab>`; a `Tab` owns a `nox_layout` tree whose
-  leaves are `Entity<Pane>`; a `Pane` owns its `TerminalSession` (`nox_terminal`) and its view
-  state (scroll accumulator, find state, hovered link).
+- Entities: `Root` (window root) owns `Vec<Entity<Workspace>>` and the active index; a
+  `Workspace` owns `Vec<Tab>`, its root/color/env and its `nox_agents` bus and claims; a `Tab`
+  owns a `nox_layout` tree whose leaves are `Entity<Pane>`; a `Pane` owns its
+  `TerminalSession` (`nox_terminal`), its agent state and its view state (scroll accumulator,
+  find state, hovered link).
+- The `nox_ipc` server thread receives socket requests, authenticates them by pane token and
+  answers read-only ones from a snapshot; mutations (send, spawn, msg, claim, status) go to the
+  main thread over a channel and are applied to the owning `Workspace` / `Pane`. `nox wait` and
+  `nox inbox --wait` are held as subscriptions, never as polling.
 - Config and theme are GPUI `Global`s; `nox_config`'s watcher sends changes to the main thread,
   which updates the globals and refreshes the window.
 - All user commands are GPUI actions dispatched through the focused element's key context
@@ -976,7 +1348,16 @@ shell ◀───────────────────────�
   (modes, option-as-meta, natural text editing), resize coalescing; an integration test that
   spawns a real shell, writes `echo`, and reads it back from the grid.
 - `nox_layout`: split, close, navigate in every direction, min sizes, equalize, maximize,
-  serialization — property tests (`proptest`) on random split/close sequences.
+  serialization — property tests (`proptest`) on random split/close sequences; workspaces:
+  create, close when empty, move tab between workspaces, session round-trip.
+- `nox_agents`: the state machine against recorded sessions of Claude Code, Codex and Gemini
+  CLI (title changes, OSC 9/777, output bursts, hook reports), claim overlap / expiry / release
+  on exit, message ordering and persistence, `.git/HEAD` parsing incl. worktrees, project file
+  trust (hash change re-asks).
+- `nox_ipc` / `nox_cli`: protocol round-trips, token auth and scope (a pane cannot reach another
+  workspace with `scope = "workspace"`, no token → only `open`), send refused into shells, loop
+  guard; an integration test that starts two panes, runs `nox msg` / `nox inbox --wait` /
+  `nox wait` between them, and an MCP conformance check of `nox mcp`.
 - `nox_config` / `nox_theme`: defaults, partial files, invalid values, comment-preserving
   writes, every bundled theme parses and meets WCAG AA for `text` on `bg` in both variants.
 - `nox_ui`: GPUI tests (`#[gpui::test]`, `TestAppContext`) for tab and pane actions, tabs
@@ -1119,7 +1500,14 @@ work until the repo is public. Until then:
   window resize. It must meet the scroll, latency and resize rows of 12; known risk areas are
   live-resize rendering and precise-scroll delivery during momentum.
 - GPUI upgrades: pinned version, upgrade in a dedicated PR, UI code isolated in `nox_ui`.
-- The directory chip (`[▢ ~]`) left of the tabs in the reference screenshot: specified here as
-  the focused pane's cwd with Copy Path / Reveal in Finder. Confirm or replace (e.g. workspace
-  switcher, new-window button).
-- Multiple windows and "move tab to new window" — v2?
+- The chip left of the tabs in the reference screenshot is specified as the workspace chip
+  (5.2), with Copy Path / Reveal in Finder kept in its menu.
+- Multiple windows and "move tab to new window" — v2? With workspaces, a natural model is one
+  workspace per window, optionally.
+- Agent state heuristics (titles, output activity) differ between agents and change between
+  their versions; explicit reporting through hooks (7.12) is the reliable path, and the title
+  table needs maintenance like the icon table.
+- `nox send` / `deliver = "type"` depend on each agent's TUI handling bracketed paste and
+  `ESC ↵` the same way; verify per agent, prefer the inbox.
+- MCP is evolving; `nox mcp` pins a protocol version and is tested against the current Claude
+  Code and Codex clients.
