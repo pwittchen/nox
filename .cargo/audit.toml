@@ -1,10 +1,22 @@
 # cargo audit configuration
 #
-# The advisories below affect only Linux-only transitive dependencies of Tauri
-# (GTK / WebKitGTK bindings and the D-Bus stack). They are not compiled into the
-# macOS app, and no patched versions exist until Tauri moves to gtk-rs >= 0.19
-# and zbus >= 6. Revisit when upgrading Tauri.
+# No known vulnerabilities. The advisories below are "unmaintained" notices for transitive
+# dependencies of GPUI, which is pinned (`gpui = "=0.2.2"`, the latest release); nothing in
+# the nox crates depends on them directly and no compatible update removes them. `instant` and
+# the zbus / zvariant crates are Linux-only and not compiled into the macOS app. Revisit (and
+# drop entries `cargo audit` no longer reports) whenever GPUI is upgraded.
 
 [advisories]
 ignore = [
+    "RUSTSEC-2025-0052", # async-std: discontinued (gpui_http_client)
+    "RUSTSEC-2024-0384", # instant: unmaintained (Linux-only)
+    "RUSTSEC-2024-0436", # paste: unmaintained (gpui, gpui_media)
+    "RUSTSEC-2026-0441", # pin-utils: unmaintained (gpui_http_client)
+    "RUSTSEC-2026-0173", # proc-macro-error2: unmaintained (gpui)
+    "RUSTSEC-2025-0134", # rustls-pemfile: unmaintained (gpui_http_client)
+    "RUSTSEC-2026-0206", # rustybuzz: unmaintained (gpui text shaping)
+    "RUSTSEC-2026-0192", # ttf-parser: unmaintained (gpui fonts)
+    "RUSTSEC-2026-0371", # zbus_names: unmaintained (Linux-only, via oo7 / ashpd)
+    "RUSTSEC-2026-0370", # zvariant: unmaintained (Linux-only, via oo7 / ashpd)
+    "RUSTSEC-2026-0372", # zvariant_derive: unmaintained (Linux-only, via oo7 / ashpd)
 ]
