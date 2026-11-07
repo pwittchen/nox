@@ -28,7 +28,7 @@ pub fn remove_value(cx: &mut App, key: &str) {
 
 pub fn reload_from_disk(cx: &mut App) {
     match nox_config::load_from_path(&nox_config::config_path()) {
-        Ok((config, notices)) => apply(cx, config, notices),
+        Ok((config, notices)) => apply(cx, config, &notices),
         Err(e) => {
             cx.default_global::<ConfigError>().0 = Some(e.to_string());
             crate::toast::show(cx, format!("config.toml: {e}"));
@@ -43,9 +43,9 @@ impl gpui::Global for ConfigError {}
 
 /// Install a new configuration: settings, theme, icons, key bindings. Panes observe the
 /// `Settings` global for their own options.
-pub fn apply(cx: &mut App, config: Config, notices: Vec<nox_config::Notice>) {
+pub fn apply(cx: &mut App, config: Config, notices: &[nox_config::Notice]) {
     cx.default_global::<ConfigError>().0 = None;
-    for n in &notices {
+    for n in notices {
         crate::toast::show(cx, format!("config.toml: {} — {}", n.key, n.message));
     }
     let old = cx.try_global::<Settings>().map(|s| s.config.clone());

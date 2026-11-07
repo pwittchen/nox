@@ -65,12 +65,14 @@ fn gemini_state(title: &str) -> Option<(AgentState, &str)> {
 }
 
 /// The agent kind a title identifies (`✳ Claude Code` → `claude`).
+#[must_use]
 pub fn title_agent_kind(title: &str) -> Option<&'static str> {
     let title = title.trim();
     RULES.iter().find(|r| (r.identifies)(title)).map(|r| r.kind)
 }
 
 /// The state an agent of `kind` signals with `title`, with the rest of the title as message.
+#[must_use]
 pub fn title_state<'t>(kind: &str, title: &'t str) -> Option<(AgentState, &'t str)> {
     let rule = RULES.iter().find(|r| r.kind == kind)?;
     (rule.state)(title.trim())

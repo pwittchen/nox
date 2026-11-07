@@ -1,13 +1,28 @@
 //! Action handlers of the root view (SPEC §10): tabs, panes, workspaces, agents, palette and
 //! pickers, view settings.
 
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 use gpui::{AppContext as _, Context, Div, Interactivity, Stateful, Window, prelude::*};
 use nox_agents::AgentState;
 use nox_layout::{Direction, SplitDirection};
 
-use crate::actions::*;
+use crate::actions::{
+    ActivateLastTab, ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5, ActivateTab6,
+    ActivateTab7, ActivateTab8, ActivateWorkspace1, ActivateWorkspace2, ActivateWorkspace3,
+    ActivateWorkspace4, ActivateWorkspace5, ActivateWorkspace6, ActivateWorkspace7, ActivateWorkspace8,
+    ActivateWorkspace9, AgentsPanel, CloseOtherTabs, ClosePane, CloseTab, CloseWorkspace, CommandPalette,
+    CopyMcpSetupCommand, DuplicateTab, EqualizePanes, FocusPaneDown, FocusPaneLeft, FocusPaneRight,
+    FocusPaneUp, FontBigger, FontReset, FontSmaller, InstallAgentHooks, InstallCommandLineTool,
+    LastWorkspace, Minimize, MoveTabLeft, MoveTabRight, NewAgentInWorktree, NewAgentTab, NewTab,
+    NewWorkspace, NextAgent, NextPane, NextTab, NextWorkspace, OpenConfigFile, OpenFolderAsWorkspace,
+    OpenSettings, PreviousPane, PreviousTab, PreviousWorkspace, Quit, RenamePane, RenameTab, RenameWorkspace,
+    ResizePaneDown, ResizePaneLeft, ResizePaneRight, ResizePaneUp, ResumeAllAgents, SendSelectionTo,
+    SendText, SetWorkspaceColor, SplitHorizontal, SplitVertical, SwitchAppearance, SwitchTab, SwitchTheme,
+    SwitchWorkspace, TabsPositionBottom, TabsPositionLeft, TabsPositionTop, ToggleFullScreen,
+    ToggleMaximizePane, ToggleSidebar, Zoom,
+};
 use crate::palette::{Palette, PaletteItem, PaletteOptions, Source};
 use crate::pane::{PaneSpawn, Startup};
 use crate::root::{RenameTarget, Root};
@@ -218,7 +233,7 @@ pub fn register(el: Stateful<Div>, cx: &mut Context<Root>) -> Stateful<Div> {
     });
     let el = on!(el, cx, SendSelectionTo, |r: &mut Root, w: &mut Window, cx| open_send_to(r, w, cx));
     let el = on!(el, cx, InstallAgentHooks, |_r: &mut Root, w: &mut Window, cx: &mut Context<Root>| {
-        crate::features::install_agent_hooks(w, cx)
+        crate::features::install_agent_hooks(w, cx);
     });
     let el =
         on!(el, cx, CopyMcpSetupCommand, |r: &mut Root, w: &mut Window, cx| crate::features::copy_mcp_setup(
@@ -226,7 +241,7 @@ pub fn register(el: Stateful<Div>, cx: &mut Context<Root>) -> Stateful<Div> {
         ));
     let el = on!(el, cx, ResumeAllAgents, |r: &mut Root, w: &mut Window, cx| r.resume_all_agents(w, cx));
     let el = on!(el, cx, InstallCommandLineTool, |_r: &mut Root, w: &mut Window, cx: &mut Context<Root>| {
-        crate::features::install_cli(w, cx)
+        crate::features::install_cli(w, cx);
     });
 
     // View.
@@ -247,16 +262,16 @@ pub fn register(el: Stateful<Div>, cx: &mut Context<Root>) -> Stateful<Div> {
     let el =
         on!(el, cx, SwitchAppearance, |r: &mut Root, w: &mut Window, cx| open_appearance_picker(r, w, cx));
     let el = on!(el, cx, TabsPositionTop, |_r: &mut Root, _w: &mut Window, cx: &mut Context<Root>| {
-        crate::config_io::set_value(cx, "tabs.position", "top")
+        crate::config_io::set_value(cx, "tabs.position", "top");
     });
     let el = on!(el, cx, TabsPositionBottom, |_r: &mut Root, _w: &mut Window, cx: &mut Context<Root>| {
-        crate::config_io::set_value(cx, "tabs.position", "bottom")
+        crate::config_io::set_value(cx, "tabs.position", "bottom");
     });
     let el = on!(el, cx, TabsPositionLeft, |_r: &mut Root, _w: &mut Window, cx: &mut Context<Root>| {
-        crate::config_io::set_value(cx, "tabs.position", "left")
+        crate::config_io::set_value(cx, "tabs.position", "left");
     });
     let el = on!(el, cx, OpenSettings, |_r: &mut Root, _w: &mut Window, cx: &mut Context<Root>| {
-        crate::settings::open_settings_window(cx)
+        crate::settings::open_settings_window(cx);
     });
     let el =
         on!(el, cx, OpenConfigFile, |r: &mut Root, w: &mut Window, cx| crate::features::open_config_file(
@@ -333,10 +348,10 @@ pub fn request_quit(r: &mut Root, w: &mut Window, cx: &mut Context<Root>) {
     if (!busy.is_empty() || agents > 0) && Settings::global(cx).config.app.confirm_close {
         let mut msg = String::new();
         if !busy.is_empty() {
-            msg.push_str(&format!("Still running: {}. ", busy.join(", ")));
+            let _ = write!(msg, "Still running: {}. ", busy.join(", "));
         }
         if agents > 0 {
-            msg.push_str(&format!("{agents} agent(s) are working; they'll be resumed next time."));
+            let _ = write!(msg, "{agents} agent(s) are working; they'll be resumed next time.");
         }
         let this = cx.entity().downgrade();
         crate::dialog::confirm(w, cx, "Quit nox?", msg, "Quit", move |_, cx| {
@@ -401,11 +416,8 @@ fn open_tab_switcher(r: &mut Root, w: &mut Window, cx: &mut Context<Root>) {
         for (ti, t) in ws.tabs.iter().enumerate() {
             let title = r.tab_title(t, ti, cx);
             let cwd = r.panes.get(&t.focused).map(|p| p.read(cx).cwd_display()).unwrap_or_default();
-            let icon = r
-                .panes
-                .get(&t.focused)
-                .map(|p| p.read(cx).icon.clone())
-                .unwrap_or(nox_agents::Icon::TERMINAL);
+            let icon =
+                r.panes.get(&t.focused).map_or(nox_agents::Icon::TERMINAL, |p| p.read(cx).icon.clone());
             let pane = t.focused;
             let this = this.clone();
             items.push(
@@ -463,11 +475,10 @@ fn open_workspace_switcher(r: &mut Root, w: &mut Window, cx: &mut Context<Root>)
         if counts[2] > 0 {
             hint.push(format!("{} idle", counts[2]));
         }
-        let root_dir = ws
-            .root
-            .as_ref()
-            .map(|p| nox_terminal::process::tildify(p))
-            .unwrap_or_else(|| if ws.root_missing { "root missing".into() } else { "no root".into() });
+        let root_dir = ws.root.as_ref().map_or_else(
+            || if ws.root_missing { "root missing".into() } else { "no root".into() },
+            |p| nox_terminal::process::tildify(p),
+        );
         let swatch = ws.color.as_deref().and_then(|c| theme.named(c)).or(Some(theme.text_muted.opacity(0.4)));
         let status = crate::chrome::status_dot(&theme, r.workspace_status(ws, cx));
         let this = this.clone();
@@ -583,7 +594,7 @@ fn open_send_to(r: &mut Root, w: &mut Window, cx: &mut Context<Root>) {
         p.session
             .as_ref()
             .and_then(|s| s.term().lock().selection_to_string().filter(|t| !t.trim().is_empty()))
-            .or_else(|| p.session.as_ref().and_then(|s| s.last_output()))
+            .or_else(|| p.session.as_ref().and_then(nox_terminal::TerminalSession::last_output))
     };
     let Some(text) = text else {
         crate::toast::show(cx, "Nothing to send: no selection and no last command output.");

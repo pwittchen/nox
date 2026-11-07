@@ -30,12 +30,14 @@ pub struct MouseMods {
 }
 
 /// Whether the program wants mouse reports at all.
+#[must_use]
 pub fn reporting(mode: TermMode) -> bool {
     mode.intersects(TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
 }
 
 /// Encode a mouse event at 0-based `col`/`row`, or `None` if the current mode doesn't report
 /// it.
+#[must_use]
 pub fn encode(
     mode: TermMode,
     button: MouseButton,

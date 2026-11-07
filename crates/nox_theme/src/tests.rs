@@ -35,7 +35,7 @@ fn contrast_basics() {
 #[test]
 fn blend_and_alpha() {
     let half = Rgba::WHITE.with_alpha(0.5).blend(Rgba::BLACK);
-    assert!((half.r - 0.5).abs() < 1e-6 && half.a == 1.0);
+    assert!((half.r - 0.5).abs() < 1e-6 && (half.a - 1.0).abs() < 1e-6);
     assert_eq!(Rgba::BLACK.mix(Rgba::WHITE, 1.0), Rgba::WHITE);
 }
 
@@ -99,7 +99,7 @@ fn nox_variant_tokens() {
 #[test]
 fn single_variant_always_returned() {
     let (t, n) = parse_theme("x", "[light]\nbg = \"#ffffff\"\n").unwrap();
-    assert!(n.is_empty());
+    assert_eq!(n, [] as [std::string::String; 0]);
     assert!(t.is_single_variant());
     assert_eq!(t.variant(true).bg, Rgba::WHITE);
     assert_eq!(t.variant(false).bg, Rgba::WHITE);
@@ -126,7 +126,7 @@ fn palette256_values() {
 fn missing_keys_fall_back_and_derive() {
     let src = "[dark]\nbg = \"#000000\"\ntext = \"#ffffff\"\n";
     let (t, n) = parse_theme("partial", src).unwrap();
-    assert!(n.is_empty());
+    assert_eq!(n, [] as [std::string::String; 0]);
     let d = t.variant(true);
     let nox = nox_dark();
     assert_eq!(d.bg, Rgba::BLACK);
@@ -182,16 +182,16 @@ fn load_theme_precedence_and_fallbacks() {
 
     let (t, n) = load_theme("nox", p);
     assert_eq!(t, builtin_nox());
-    assert!(n.is_empty());
+    assert_eq!(n, [] as [std::string::String; 0]);
 
     let (t, n) = load_theme("gruvbox", p);
-    assert!(n.is_empty());
+    assert_eq!(n, [] as [std::string::String; 0]);
     assert_eq!(t.variant(true).bg.to_hex(), "#282828");
 
     // User file overrides the bundled one.
     std::fs::write(p.join("gruvbox.toml"), "[dark]\nbg = \"#123456\"\n").unwrap();
     let (t, n) = load_theme("gruvbox", p);
-    assert!(n.is_empty());
+    assert_eq!(n, [] as [std::string::String; 0]);
     assert_eq!(t.variant(true).bg.to_hex(), "#123456");
     assert!(t.is_single_variant());
 

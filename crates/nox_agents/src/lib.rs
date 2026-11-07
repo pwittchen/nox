@@ -1,4 +1,4 @@
-//! nox_agents — everything nox knows about coding agents and the programs running in panes,
+//! `nox_agents` — everything nox knows about coding agents and the programs running in panes,
 //! independent of the UI: process icons and agent detection (SPEC 4.6, 4.8), the agent state
 //! machine (7.12), session resume planning, the per-workspace message bus, activity log and
 //! claims (7.13), the loop guard, git context and worktrees, project files and their trust
@@ -6,6 +6,27 @@
 //!
 //! Nothing here depends on GPUI or other nox crates; time-dependent logic takes `now` as a
 //! parameter so it is deterministic under test.
+
+// `cargo lint` runs clippy::pedantic. These lints are allowed on purpose: numeric casts are
+// bounded grid / pixel / color math, `# Errors` / `# Panics` sections would only restate the
+// signature, hex color literals read better without separators, and long UI builders and
+// flag-heavy config structs are clearer kept whole; `assert!(x.is_empty())` reads fine in tests
+// and `(n..).find(..)` searches are meant to be unbounded.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::unreadable_literal,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::similar_names,
+    clippy::many_single_char_names,
+    clippy::assert_is_empty,
+    clippy::maybe_infinite_iter
+)]
 
 pub mod bus;
 pub mod claims;
@@ -60,6 +81,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The name for a new agent of `kind` in a workspace where `taken` names are in use (SPEC 4.8):
 /// `claude`, then `claude-2`, `claude-3`, … (the first free one).
+#[must_use]
 pub fn unique_agent_name(kind: &str, taken: &[String]) -> String {
     let is_taken = |name: &str| taken.iter().any(|t| t == name);
     if !is_taken(kind) {

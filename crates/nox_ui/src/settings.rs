@@ -52,7 +52,7 @@ pub struct SettingsView {
     inputs: BTreeMap<String, Entity<TextInput>>,
     recording: Option<String>,
     expanded: Option<String>,
-    _subs: Vec<Subscription>,
+    subs: Vec<Subscription>,
 }
 
 impl Focusable for SettingsView {
@@ -87,7 +87,7 @@ impl SettingsView {
             inputs: BTreeMap::new(),
             recording: None,
             expanded: None,
-            _subs: subs,
+            subs,
         }
     }
 
@@ -142,7 +142,7 @@ impl SettingsView {
                     }
                 }
             });
-        self._subs.push(sub);
+        self.subs.push(sub);
         self.inputs.insert(key.to_string(), input.clone());
         input
     }
@@ -233,11 +233,11 @@ impl SettingsView {
                     )
                     .child(div().flex_none().when(disabled, |d| d.opacity(0.4)).child(control)),
             )
-            .children(self.extra_for(key, cx))
+            .children(Self::extra_for(key, cx))
             .into_any_element()
     }
 
-    fn extra_for(&self, key: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn extra_for(key: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = Theme::global(cx).clone();
         match key {
             "terminal.notifications" if nox_mac::notifications_denied() => Some(
@@ -289,14 +289,18 @@ impl SettingsView {
                     .cursor_pointer()
                     .bg(if on { theme.accent } else { theme.text_muted.opacity(0.35) })
                     .flex()
-                    .when(on, |d| d.justify_end())
+                    .when(on, gpui::Styled::justify_end)
                     .child(div().size(px(16.)).rounded_full().bg(gpui::white()))
                     .when(!disabled, |d| d.on_click(move |_, _, cx| set_value(cx, key, !on)))
                     .into_any_element()
             }
-            SettingKind::Enum(opts) if key == "ui.theme" || opts.len() > 5 => {
-                self.choice_list(key, opts.iter().map(|s| s.to_string()).collect(), value, disabled, cx)
-            }
+            SettingKind::Enum(opts) if key == "ui.theme" || opts.len() > 5 => self.choice_list(
+                key,
+                opts.iter().map(std::string::ToString::to_string).collect(),
+                value,
+                disabled,
+                cx,
+            ),
             SettingKind::Enum(opts) => {
                 let cur = value.and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
                 div()
@@ -333,7 +337,7 @@ impl SettingsView {
                 let (min, max, step) = (*min, *max, *step);
                 stepper(
                     key,
-                    format!("{:.2}", v).trim_end_matches('0').trim_end_matches('.').to_string(),
+                    format!("{v:.2}").trim_end_matches('0').trim_end_matches('.').to_string(),
                     &theme,
                     disabled,
                     move |cx, dir| {
@@ -345,8 +349,7 @@ impl SettingsView {
             SettingKind::IntPair { min, max, .. } => {
                 let arr: Vec<i64> = value
                     .and_then(|v| v.as_array().cloned())
-                    .map(|a| a.iter().filter_map(|x| x.as_integer()).collect())
-                    .unwrap_or_else(|| vec![0, 0]);
+                    .map_or_else(|| vec![0, 0], |a| a.iter().filter_map(toml::Value::as_integer).collect());
                 let (a, b) = (arr.first().copied().unwrap_or(0), arr.get(1).copied().unwrap_or(0));
                 let (min, max) = (*min, *max);
                 let write = move |cx: &mut App, a: i64, b: i64| {
@@ -359,10 +362,10 @@ impl SettingsView {
                     .flex()
                     .gap_2()
                     .child(stepper("pad-h", a.to_string(), &theme, disabled, move |cx, d| {
-                        write(cx, a + d, b)
+                        write(cx, a + d, b);
                     }))
                     .child(stepper("pad-v", b.to_string(), &theme, disabled, move |cx, d| {
-                        write(cx, a, b + d)
+                        write(cx, a, b + d);
                     }))
                     .into_any_element()
             }
@@ -394,7 +397,7 @@ impl SettingsView {
                     .into_any_element()
             }
             SettingKind::Map => self.map_editor(key, value, cx),
-            SettingKind::Agents => self.agents_editor(cx),
+            SettingKind::Agents => Self::agents_editor(cx),
         }
     }
 
@@ -584,7 +587,7 @@ impl SettingsView {
             .into_any_element()
     }
 
-    fn agents_editor(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn agents_editor(cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::global(cx).clone();
         let defs = Settings::global(cx).config.agents.defs.clone();
         div()

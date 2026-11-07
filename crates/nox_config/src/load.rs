@@ -5,7 +5,7 @@ use std::path::Path;
 
 use toml::{Table, Value};
 
-use crate::model::*;
+use crate::model::{Config, ConfigEnum, KeyBinding};
 use crate::schema::{SettingKind, find_setting};
 
 /// A non-fatal problem in the config file: the key fell back to its default (or was ignored).
@@ -53,7 +53,7 @@ pub fn load_from_path(path: &Path) -> Result<(Config, Vec<Notice>), ParseError> 
 
 fn line_of(s: &str, byte: usize) -> usize {
     let byte = byte.min(s.len());
-    s.as_bytes()[..byte].iter().filter(|&&b| b == b'\n').count() + 1
+    s.as_bytes()[..byte].split(|&b| b == b'\n').count()
 }
 
 fn type_name(v: &Value) -> &'static str {
@@ -125,7 +125,7 @@ impl<'a> Sec<'a> {
     fn string(&mut self, key: &str, out: &mut String) {
         match self.get(key) {
             None => {}
-            Some(Value::String(s)) => *out = s.clone(),
+            Some(Value::String(s)) => out.clone_from(s),
             Some(v) => self.wrong_type(key, "a string", v),
         }
     }
@@ -140,9 +140,7 @@ impl<'a> Sec<'a> {
 
     fn int_range(&self, key: &str) -> (i64, i64) {
         match find_setting(&self.full(key)).map(|m| &m.kind) {
-            Some(SettingKind::Int { min, max, .. }) | Some(SettingKind::IntPair { min, max, .. }) => {
-                (*min, *max)
-            }
+            Some(SettingKind::Int { min, max, .. } | SettingKind::IntPair { min, max, .. }) => (*min, *max),
             _ => (i64::MIN, i64::MAX),
         }
     }
@@ -215,16 +213,17 @@ impl<'a> Sec<'a> {
     fn enumeration<E: ConfigEnum>(&mut self, key: &str, out: &mut E) {
         match self.get(key) {
             None => {}
-            Some(Value::String(s)) => match E::parse(s) {
-                Some(e) => *out = e,
-                None => {
+            Some(Value::String(s)) => {
+                if let Some(e) = E::parse(s) {
+                    *out = e;
+                } else {
                     let names = E::NAMES.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
                     self.notice(
                         key,
                         format!("unknown value \"{s}\" (expected one of {names}); using the default"),
-                    )
+                    );
                 }
-            },
+            }
             Some(v) => self.wrong_type(key, "a string", v),
         }
     }
@@ -372,7 +371,7 @@ fn from_table(root: &Table, notices: &mut Vec<Notice>) -> Config {
                         continue;
                     }
                     if def.command.trim().is_empty() {
-                        def.command = a.defs[name].command.clone();
+                        def.command.clone_from(&a.defs[name].command);
                     }
                     a.defs.insert(name.clone(), def);
                 }

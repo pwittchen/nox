@@ -20,6 +20,7 @@ const EPS: f32 = 0.5;
 ///
 /// `padding_px` is the total extra size of a pane per axis: padding on both sides, plus the
 /// pane header height in `h` if the UI draws one inside the pane rect.
+#[must_use]
 pub fn min_pane_size(cell: Size, padding_px: Size) -> Size {
     Size::new(MIN_COLS as f32 * cell.w + padding_px.w, MIN_ROWS as f32 * cell.h + padding_px.h)
 }
@@ -28,6 +29,7 @@ pub fn min_pane_size(cell: Size, padding_px: Size) -> Size {
 /// is at least `min_first_px` and the second at least `min_second_px`.
 ///
 /// When both minimums cannot fit, the space is shared in proportion to the minimums.
+#[must_use]
 pub fn clamp_ratio(ratio: f32, total_px: f32, divider_px: f32, min_first_px: f32, min_second_px: f32) -> f32 {
     let ratio = if ratio.is_finite() { ratio } else { 0.5 };
     let avail = (total_px - divider_px).max(0.0);
@@ -58,10 +60,12 @@ pub enum Branch {
 pub struct SplitPath(pub Vec<Branch>);
 
 impl SplitPath {
+    #[must_use]
     pub fn root() -> Self {
         Self(Vec::new())
     }
 
+    #[must_use]
     pub fn child(&self, b: Branch) -> Self {
         let mut v = self.0.clone();
         v.push(b);
@@ -69,20 +73,24 @@ impl SplitPath {
     }
 
     /// The parent path and the branch taken from it; `None` for the root.
+    #[must_use]
     pub fn parent(&self) -> Option<(SplitPath, Branch)> {
         let (last, rest) = self.0.split_last()?;
         Some((SplitPath(rest.to_vec()), *last))
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    #[must_use]
     pub fn is_root(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Same as [`SplitPath::is_root`].
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -103,6 +111,7 @@ pub struct Divider {
 impl Divider {
     /// The line widened to `hit_px` across its thickness (SPEC §6.3: a 6px hit area),
     /// centered on the line.
+    #[must_use]
     pub fn hit_rect(&self, hit_px: f32) -> Rect {
         let r = self.rect;
         match self.dir {
@@ -135,6 +144,7 @@ pub enum Layout {
 
 /// Writes an `f32` ratio as the `f64` with the same shortest decimal form (`0.3`, not
 /// `0.30000001192092896`); reading it back as `f32` gives the identical value.
+#[allow(clippy::trivially_copy_pass_by_ref)] // the signature `serialize_with` requires
 fn ser_ratio<S: serde::Serializer>(ratio: &f32, s: S) -> Result<S::Ok, S::Error> {
     let v: f64 = ratio.to_string().parse().unwrap_or(f64::from(*ratio));
     s.serialize_f64(v)
@@ -196,11 +206,13 @@ fn size_along(s: Size, dir: SplitDirection) -> f32 {
 }
 
 impl Layout {
+    #[must_use]
     pub fn new(pane: PaneId) -> Self {
         Self::Leaf(pane)
     }
 
     /// All panes in tree order (left/top first).
+    #[must_use]
     pub fn panes(&self) -> Vec<PaneId> {
         let mut out = Vec::new();
         self.collect_panes(&mut out);
@@ -217,6 +229,7 @@ impl Layout {
         }
     }
 
+    #[must_use]
     pub fn first_pane(&self) -> PaneId {
         match self {
             Self::Leaf(p) => *p,
@@ -224,6 +237,7 @@ impl Layout {
         }
     }
 
+    #[must_use]
     pub fn contains(&self, pane: PaneId) -> bool {
         match self {
             Self::Leaf(p) => *p == pane,
@@ -232,6 +246,7 @@ impl Layout {
     }
 
     /// Number of panes.
+    #[must_use]
     pub fn len(&self) -> usize {
         match self {
             Self::Leaf(_) => 1,
@@ -240,11 +255,13 @@ impl Layout {
     }
 
     /// Always false: a layout has at least one pane. Present for API symmetry with `len`.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         false
     }
 
     /// True when no pane appears twice.
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         let mut panes = self.panes();
         let n = panes.len();
@@ -254,6 +271,7 @@ impl Layout {
     }
 
     /// A copy with every pane id replaced by `f(id)`.
+    #[must_use]
     pub fn map_panes(&self, f: &mut impl FnMut(PaneId) -> PaneId) -> Layout {
         match self {
             Self::Leaf(p) => Self::Leaf(f(*p)),
@@ -269,6 +287,7 @@ impl Layout {
     // ---------------------------------------------------------------- paths
 
     /// Path to the leaf holding `pane`.
+    #[must_use]
     pub fn path_to(&self, pane: PaneId) -> Option<SplitPath> {
         fn walk(node: &Layout, pane: PaneId, acc: &mut Vec<Branch>) -> bool {
             match node {
@@ -292,6 +311,7 @@ impl Layout {
         walk(self, pane, &mut acc).then_some(SplitPath(acc))
     }
 
+    #[must_use]
     pub fn node_at(&self, path: &SplitPath) -> Option<&Layout> {
         let mut node = self;
         for b in &path.0 {
@@ -325,6 +345,7 @@ impl Layout {
     }
 
     /// The area occupied by the node at `path` when the whole layout fills `area`.
+    #[must_use]
     pub fn area_at(&self, path: &SplitPath, area: Rect, divider_px: f32) -> Option<Rect> {
         let mut node = self;
         let mut area = area;
@@ -367,6 +388,7 @@ impl Layout {
     /// Whether splitting `target` in `dir` keeps both resulting panes at least
     /// `MIN_COLS × MIN_ROWS` (checked along the split axis; the other axis does not change).
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn can_split(
         &self,
         target: PaneId,
@@ -432,6 +454,7 @@ impl Layout {
 
     /// Rect of every pane (tree order) when the layout fills `area`; dividers are
     /// `divider_px` thick. Pane extents are rounded to whole pixels.
+    #[must_use]
     pub fn layout_rects(&self, area: Rect, divider_px: f32) -> Vec<(PaneId, Rect)> {
         let mut out = Vec::with_capacity(self.len());
         self.rects_inner(area, divider_px, true, &mut out);
@@ -449,33 +472,37 @@ impl Layout {
         }
     }
 
+    #[must_use]
     pub fn rect_of(&self, pane: PaneId, area: Rect, divider_px: f32) -> Option<Rect> {
         self.area_at(&self.path_to(pane)?, area, divider_px)
     }
 
     /// Every divider (pre-order: outer splits first).
+    #[must_use]
     pub fn dividers(&self, area: Rect, divider_px: f32) -> Vec<Divider> {
         let mut out = Vec::new();
-        self.dividers_inner(SplitPath::root(), area, divider_px, &mut out);
+        self.dividers_inner(&SplitPath::root(), area, divider_px, &mut out);
         out
     }
 
-    fn dividers_inner(&self, path: SplitPath, area: Rect, divider_px: f32, out: &mut Vec<Divider>) {
+    fn dividers_inner(&self, path: &SplitPath, area: Rect, divider_px: f32, out: &mut Vec<Divider>) {
         if let Self::Split { dir, ratio, first, second } = self {
             let (a, d, c) = split_area(area, *dir, *ratio, divider_px, true);
             out.push(Divider { path: path.clone(), dir: *dir, rect: d, parent_area: area });
-            first.dividers_inner(path.child(Branch::First), a, divider_px, out);
-            second.dividers_inner(path.child(Branch::Second), c, divider_px, out);
+            first.dividers_inner(&path.child(Branch::First), a, divider_px, out);
+            second.dividers_inner(&path.child(Branch::Second), c, divider_px, out);
         }
     }
 
     /// The divider whose hit rect (`hit_px` wide) contains `point`; inner (deeper) dividers
     /// win over outer ones.
+    #[must_use]
     pub fn divider_at(&self, point: Point, area: Rect, divider_px: f32, hit_px: f32) -> Option<Divider> {
         self.dividers(area, divider_px).into_iter().rev().find(|d| d.hit_rect(hit_px).contains(point))
     }
 
     /// Minimum size of this subtree given the minimum size of one pane.
+    #[must_use]
     pub fn min_size(&self, divider_px: f32, min_pane: Size) -> Size {
         match self {
             Self::Leaf(_) => min_pane,
@@ -540,6 +567,7 @@ impl Layout {
         }
     }
 
+    #[must_use]
     pub fn ratio_at(&self, path: &SplitPath) -> Option<f32> {
         match self.node_at(path)? {
             Self::Split { ratio, .. } => Some(*ratio),
@@ -549,6 +577,7 @@ impl Layout {
 
     /// The (unclamped, within 0–1) ratio that puts the divider of the split at `path` under
     /// the pointer. Feed it to [`Layout::set_ratio`] to apply the min-size clamp.
+    #[must_use]
     pub fn ratio_for_drag(
         &self,
         path: &SplitPath,
@@ -666,6 +695,7 @@ impl Layout {
     /// The nearest pane in `dir` (SPEC §6.2, iTerm-like): among panes whose edge touches the
     /// edge of `from` in that direction, the one with the greatest overlap on the
     /// perpendicular axis; ties go to the one closest to `from`'s center.
+    #[must_use]
     pub fn neighbor(&self, from: PaneId, dir: Direction, area: Rect) -> Option<PaneId> {
         self.neighbor_where(from, dir, area, |_| true)
     }
@@ -726,6 +756,7 @@ impl Layout {
 
     /// The pane after `from` in tree order, wrapping. Returns the first pane if `from` is
     /// missing.
+    #[must_use]
     pub fn next(&self, from: PaneId) -> PaneId {
         let panes = self.panes();
         match panes.iter().position(|p| *p == from) {
@@ -736,6 +767,7 @@ impl Layout {
 
     /// The pane before `from` in tree order, wrapping. Returns the first pane if `from` is
     /// missing.
+    #[must_use]
     pub fn prev(&self, from: PaneId) -> PaneId {
         let panes = self.panes();
         match panes.iter().position(|p| *p == from) {
@@ -866,8 +898,8 @@ mod tests {
 
     #[test]
     fn navigate_l_shape_every_direction() {
-        let l = l_shape();
         use Direction::*;
+        let l = l_shape();
         assert_eq!(l.neighbor(p(1), Right, AREA), Some(p(2)));
         assert_eq!(l.neighbor(p(1), Left, AREA), None);
         assert_eq!(l.neighbor(p(1), Up, AREA), None);
@@ -904,8 +936,8 @@ mod tests {
 
     #[test]
     fn navigate_grid_every_direction() {
-        let l = grid();
         use Direction::*;
+        let l = grid();
         assert_eq!(l.neighbor(p(1), Right, AREA), Some(p(2)));
         assert_eq!(l.neighbor(p(2), Left, AREA), Some(p(1)));
         assert_eq!(l.neighbor(p(3), Right, AREA), Some(p(4)));

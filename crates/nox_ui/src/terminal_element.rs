@@ -42,6 +42,7 @@ pub struct TermFont {
 }
 
 impl TermFont {
+    #[must_use]
     pub fn font(&self, bold: bool, italic: bool) -> Font {
         Font {
             family: self.family.clone(),
@@ -61,12 +62,13 @@ impl TermFont {
 /// Cell metrics for a font at a size: width from the advance of `0`, height from the font's
 /// natural line height (ascent + descent) × `line_height` — like iTerm's line spacing
 /// percentage — rounded to whole pixels so rows never blur.
+#[must_use]
 pub fn cell_metrics(window: &Window, font: &TermFont, size: f32) -> (Pixels, Pixels) {
     let ts = window.text_system();
     let f = font.font(false, false);
     let id = ts.resolve_font(&f);
     let sz = px(size);
-    let w = ts.advance(id, sz, '0').map(|s| s.width).unwrap_or(px(size * 0.6));
+    let w = ts.advance(id, sz, '0').map_or(px(size * 0.6), |s| s.width);
     let w = w + px(font.letter_spacing);
     let natural = f32::from(ts.ascent(id, sz)) + f32::from(ts.descent(id, sz)).abs();
     let natural = if natural > 0.0 { natural } else { size * 1.2 };
@@ -81,6 +83,7 @@ pub struct TerminalElement {
 }
 
 impl TerminalElement {
+    #[must_use]
     pub fn new(pane: Entity<Pane>, focused: bool, window_active: bool) -> Self {
         Self { pane, focused, window_active }
     }
@@ -136,9 +139,9 @@ impl IntoElement for TerminalElement {
 fn resolve_color(c: Color, colors: &Colors, theme: &Theme, bold_bright: bool) -> Hsla {
     match c {
         Color::Spec(rgb) => Hsla::from(gpui::Rgba {
-            r: rgb.r as f32 / 255.,
-            g: rgb.g as f32 / 255.,
-            b: rgb.b as f32 / 255.,
+            r: f32::from(rgb.r) / 255.,
+            g: f32::from(rgb.g) / 255.,
+            b: f32::from(rgb.b) / 255.,
             a: 1.,
         }),
         Color::Indexed(i) => {
@@ -155,9 +158,9 @@ fn resolve_color(c: Color, colors: &Colors, theme: &Theme, bold_bright: bool) ->
 fn indexed(idx: usize, colors: &Colors, theme: &Theme) -> Hsla {
     if let Some(rgb) = colors[idx] {
         return Hsla::from(gpui::Rgba {
-            r: rgb.r as f32 / 255.,
-            g: rgb.g as f32 / 255.,
-            b: rgb.b as f32 / 255.,
+            r: f32::from(rgb.r) / 255.,
+            g: f32::from(rgb.g) / 255.,
+            b: f32::from(rgb.b) / 255.,
             a: 1.,
         });
     }
@@ -168,9 +171,9 @@ fn named(n: NamedColor, colors: &Colors, theme: &Theme, bold_bright: bool) -> Hs
     let over = |i: usize| {
         colors[i].map(|rgb| {
             Hsla::from(gpui::Rgba {
-                r: rgb.r as f32 / 255.,
-                g: rgb.g as f32 / 255.,
-                b: rgb.b as f32 / 255.,
+                r: f32::from(rgb.r) / 255.,
+                g: f32::from(rgb.g) / 255.,
+                b: f32::from(rgb.b) / 255.,
                 a: 1.,
             })
         })
@@ -235,7 +238,7 @@ impl Element for TerminalElement {
         _: Option<&GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut (),
+        (): &mut (),
         window: &mut Window,
         cx: &mut App,
     ) -> Prepaint {
@@ -314,7 +317,7 @@ impl Element for TerminalElement {
             let selection = term.selection.as_ref().and_then(|s| s.to_range(&term));
 
             // Viewport rows to draw: an extra row above when there is a sub-line offset.
-            let extra = if frac > px(0.) && offset < history { 1 } else { 0 };
+            let extra = i32::from(frac > px(0.) && offset < history);
             let first_vrow: i32 = -extra;
             for vrow in first_vrow..screen.min(rows as i32) {
                 let line = Line(vrow - offset);
@@ -424,10 +427,8 @@ impl Element for TerminalElement {
 
                     // Text.
                     let underline = if flags.intersects(Flags::ALL_UNDERLINES) {
-                        let uc = cell
-                            .underline_color()
-                            .map(|c| resolve_color(c, colors, &theme, false))
-                            .unwrap_or(fg);
+                        let uc =
+                            cell.underline_color().map_or(fg, |c| resolve_color(c, colors, &theme, false));
                         Some((uc, flags.contains(Flags::UNDERCURL)))
                     } else {
                         None
@@ -522,10 +523,10 @@ impl Element for TerminalElement {
 
             // Cursor.
             let cpoint = grid.cursor.point;
-            let shape = if !mode.contains(TermMode::SHOW_CURSOR) {
-                CursorShape::Hidden
-            } else {
+            let shape = if mode.contains(TermMode::SHOW_CURSOR) {
                 term.cursor_style().shape
+            } else {
+                CursorShape::Hidden
             };
             let vrow = cpoint.line.0 + offset;
             if shape != CursorShape::Hidden && vrow >= 0 && vrow < rows as i32 && cpoint.column.0 < cols {
@@ -537,16 +538,14 @@ impl Element for TerminalElement {
                     size(cw, cell_h),
                 );
                 let hollow = !self.focused || !self.window_active;
-                let color = colors[NamedColor::Cursor as usize]
-                    .map(|rgb| {
-                        Hsla::from(gpui::Rgba {
-                            r: rgb.r as f32 / 255.,
-                            g: rgb.g as f32 / 255.,
-                            b: rgb.b as f32 / 255.,
-                            a: 1.,
-                        })
+                let color = colors[NamedColor::Cursor as usize].map_or(theme.caret, |rgb| {
+                    Hsla::from(gpui::Rgba {
+                        r: f32::from(rgb.r) / 255.,
+                        g: f32::from(rgb.g) / 255.,
+                        b: f32::from(rgb.b) / 255.,
+                        a: 1.,
                     })
-                    .unwrap_or(theme.caret);
+                });
                 let text = if shape == CursorShape::Block && !hollow && cell.c != ' ' && cell.c != '\0' {
                     let s: String = std::iter::once(cell.c)
                         .chain(cell.zerowidth().unwrap_or(&[]).iter().copied())
@@ -618,7 +617,7 @@ impl Element for TerminalElement {
         _: Option<&GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut (),
+        (): &mut (),
         pre: &mut Prepaint,
         window: &mut Window,
         cx: &mut App,
@@ -656,7 +655,7 @@ impl Element for TerminalElement {
                         transparent_black(),
                         px(1.),
                         c.color,
-                        Default::default(),
+                        gpui::BorderStyle::default(),
                     ));
                 } else {
                     match c.shape {
@@ -672,7 +671,7 @@ impl Element for TerminalElement {
                             transparent_black(),
                             px(1.),
                             c.color,
-                            Default::default(),
+                            gpui::BorderStyle::default(),
                         )),
                         _ => {
                             window.paint_quad(fill(b, c.color));
@@ -694,7 +693,7 @@ impl Element for TerminalElement {
                     q.color,
                     px(0.),
                     transparent_black(),
-                    Default::default(),
+                    gpui::BorderStyle::default(),
                 ));
             }
         });
@@ -704,6 +703,7 @@ impl Element for TerminalElement {
 
 /// Convert a window position to a grid point (viewport-relative line adjusted by the display
 /// offset) and the side of the cell it falls on.
+#[must_use]
 pub fn position_to_point(
     geom: &GridGeom,
     pos: Point<Pixels>,
@@ -722,6 +722,7 @@ pub fn position_to_point(
     (GridPoint::new(Line(row - display_offset as i32), Column(col)), side)
 }
 
+#[must_use]
 pub fn grid_size_in(bounds: Size<Pixels>, cell: (Pixels, Pixels), pad: (f32, f32)) -> (usize, usize) {
     let w = (bounds.width - px(pad.0 * 2.)).max(px(0.));
     let h = (bounds.height - px(pad.1 * 2.)).max(px(0.));

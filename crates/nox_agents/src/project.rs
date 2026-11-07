@@ -47,6 +47,7 @@ pub struct ProjectTab {
 impl ProjectTab {
     /// The commands of the tab's panes, in order (`None`: a plain shell). A tab without `panes`
     /// is one pane running `command`.
+    #[must_use]
     pub fn pane_commands(&self) -> Vec<Option<&str>> {
         if self.panes.is_empty() {
             vec![self.command.as_deref()]
@@ -70,6 +71,7 @@ pub struct ProjectFile {
 }
 
 /// SHA-256 hex of file content.
+#[must_use]
 pub fn content_hash(content: &[u8]) -> String {
     hex::encode(Sha256::digest(content))
 }
@@ -80,6 +82,7 @@ impl ProjectFile {
     }
 
     /// `<root>/.nox/workspace.toml` (see [`PROJECT_FILE`]).
+    #[must_use]
     pub fn path(root: &Path) -> PathBuf {
         root.join(PROJECT_FILE)
     }
@@ -102,7 +105,7 @@ impl ProjectFile {
     pub fn commands(&self) -> Vec<String> {
         self.tabs
             .iter()
-            .flat_map(|t| t.pane_commands())
+            .flat_map(ProjectTab::pane_commands)
             .flatten()
             .map(str::trim)
             .filter(|c| !c.is_empty())
@@ -111,6 +114,7 @@ impl ProjectFile {
     }
 
     /// Does the file need trust before it runs anything?
+    #[must_use]
     pub fn has_commands(&self) -> bool {
         !self.commands().is_empty()
     }
@@ -145,6 +149,7 @@ impl TrustStore {
     }
 
     /// Is the project file at `path` trusted with exactly this content `hash`?
+    #[must_use]
     pub fn is_trusted(&self, path: &Path, hash: &str) -> bool {
         self.entries.get(&key(path)).is_some_and(|h| h == hash)
     }

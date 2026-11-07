@@ -113,7 +113,7 @@ fn visible_copy(c: &mut Criterion) {
                 }
             }
             black_box(n)
-        })
+        });
     });
 }
 
@@ -144,7 +144,7 @@ fn keys(c: &mut Criterion) {
             for i in &inputs {
                 black_box(encode(i, KeyModes::default()));
             }
-        })
+        });
     });
 }
 

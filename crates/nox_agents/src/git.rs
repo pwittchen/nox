@@ -13,6 +13,7 @@ pub fn repo_root(cwd: &Path) -> Option<PathBuf> {
 
 /// The git directory for `cwd`: `<root>/.git`, or for a linked worktree / submodule the
 /// directory a `.git` file points to (`gitdir: <path>`, relative to the file's directory).
+#[must_use]
 pub fn git_dir(cwd: &Path) -> Option<PathBuf> {
     let root = repo_root(cwd)?;
     let dot_git = root.join(".git");
@@ -30,6 +31,7 @@ pub fn git_dir(cwd: &Path) -> Option<PathBuf> {
 
 /// The branch from `HEAD` contents: `ref: refs/heads/x` → `x` (other refs: the part after
 /// `refs/`), a detached sha → its first 7 characters.
+#[must_use]
 pub fn branch_from_head(head: &str) -> Option<String> {
     let head = head.trim();
     if let Some(r) = head.strip_prefix("ref:") {
@@ -43,12 +45,14 @@ pub fn branch_from_head(head: &str) -> Option<String> {
 
 /// The current branch of the repository containing `cwd` (worktree-aware), without spawning
 /// git.
+#[must_use]
 pub fn git_branch(cwd: &Path) -> Option<String> {
     let head = std::fs::read_to_string(git_dir(cwd)?.join("HEAD")).ok()?;
     branch_from_head(&head)
 }
 
 /// A branch name usable in a directory name: `/` and other separators → `-`.
+#[must_use]
 pub fn sanitize_branch(branch: &str) -> String {
     let s: String = branch
         .trim()
@@ -59,6 +63,7 @@ pub fn sanitize_branch(branch: &str) -> String {
 }
 
 /// `<worktree_dir or root's parent>/<repo>-<sanitized branch>`.
+#[must_use]
 pub fn worktree_path(root: &Path, worktree_dir: Option<&Path>, branch: &str) -> Option<PathBuf> {
     let repo = root.file_name()?.to_string_lossy();
     let dir = match worktree_dir {
@@ -92,6 +97,7 @@ pub fn worktree_add(root: &Path, worktree_dir: Option<&Path>, branch: &str) -> R
 }
 
 /// Is the worktree at `path` free of changes (incl. untracked files)? `false` on any error.
+#[must_use]
 pub fn worktree_is_clean(path: &Path) -> bool {
     run_git(path, &["status".as_ref(), "--porcelain".as_ref()]).is_ok_and(|out| out.trim().is_empty())
 }
@@ -104,7 +110,7 @@ pub fn worktree_remove(path: &Path) -> Result<(), String> {
         &["rev-parse".as_ref(), "--path-format=absolute".as_ref(), "--git-common-dir".as_ref()],
     )?;
     let common = PathBuf::from(common.trim());
-    let main = common.parent().map(Path::to_path_buf).unwrap_or_else(|| path.to_path_buf());
+    let main = common.parent().map_or_else(|| path.to_path_buf(), Path::to_path_buf);
     run_git(&main, &["worktree".as_ref(), "remove".as_ref(), path.as_os_str()]).map(|_| ())
 }
 

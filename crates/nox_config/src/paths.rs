@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// `~/.nox`, or `$NOX_HOME` when set (tests, side-by-side installs).
+#[must_use]
 pub fn nox_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("NOX_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(home);
@@ -12,21 +13,25 @@ pub fn nox_dir() -> PathBuf {
 }
 
 /// `~/.nox/config.toml`.
+#[must_use]
 pub fn config_path() -> PathBuf {
     nox_dir().join("config.toml")
 }
 
 /// `~/.nox/themes`.
+#[must_use]
 pub fn themes_dir() -> PathBuf {
     nox_dir().join("themes")
 }
 
 /// `~/.nox/icons`.
+#[must_use]
 pub fn icons_dir() -> PathBuf {
     nox_dir().join("icons")
 }
 
 /// `~/.nox/run` (control socket, pid files).
+#[must_use]
 pub fn run_dir() -> PathBuf {
     nox_dir().join("run")
 }

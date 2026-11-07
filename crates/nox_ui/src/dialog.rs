@@ -99,15 +99,18 @@ impl DialogBuilder {
             default_button: 0,
         }
     }
+    #[must_use]
     pub fn message(mut self, m: impl Into<SharedString>) -> Self {
         self.message = Some(m.into());
         self
     }
     /// Monospace detail text (git output, a diff, a list of commands).
+    #[must_use]
     pub fn detail(mut self, d: impl Into<String>) -> Self {
         self.detail = Some(d.into());
         self
     }
+    #[must_use]
     pub fn field(
         mut self,
         label: impl Into<SharedString>,
@@ -117,14 +120,17 @@ impl DialogBuilder {
         self.fields.push((label.into(), value.into(), placeholder.into()));
         self
     }
+    #[must_use]
     pub fn check(mut self, label: impl Into<SharedString>, detail: Option<String>, on: bool) -> Self {
         self.checks.push(Check { label: label.into(), detail: detail.map(Into::into), on });
         self
     }
+    #[must_use]
     pub fn cancel(mut self, label: impl Into<SharedString>) -> Self {
         self.buttons.push(Button { label: label.into(), on_click: None });
         self
     }
+    #[must_use]
     pub fn button(
         mut self,
         label: impl Into<SharedString>,
@@ -134,6 +140,7 @@ impl DialogBuilder {
         self
     }
     /// The last added button is the default.
+    #[must_use]
     pub fn default_last(mut self) -> Self {
         self.default_button = self.buttons.len().saturating_sub(1);
         self

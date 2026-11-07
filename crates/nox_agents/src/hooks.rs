@@ -62,6 +62,7 @@ pub fn claude_hooks_patch(existing_settings_json: Option<&str>) -> Result<String
 }
 
 /// The command that registers `nox mcp` with an agent (Copy MCP Setup Command).
+#[must_use]
 pub fn mcp_setup_command(agent_kind: &str) -> Option<String> {
     Some(
         match agent_kind {

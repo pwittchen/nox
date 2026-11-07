@@ -1,5 +1,6 @@
 //! Human-readable rendering of IPC results and errors.
 
+use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nox_ipc::{
@@ -63,9 +64,9 @@ pub fn render_error(err: &IpcError) -> String {
         && let Ok(c) = serde_json::from_value::<ClaimConflictsData>(data.clone())
     {
         for c in c.conflicts {
-            out.push_str(&format!("  {} held by {} ({})", c.path, c.holder_name, c.holder));
+            let _ = write!(out, "  {} held by {} ({})", c.path, c.holder_name, c.holder);
             if let Some(r) = c.reason.filter(|r| !r.is_empty()) {
-                out.push_str(&format!(": {r}"));
+                let _ = write!(out, ": {r}");
             }
             out.push('\n');
         }
@@ -74,14 +75,14 @@ pub fn render_error(err: &IpcError) -> String {
 }
 
 fn pretty(v: &Value) -> String {
-    if v.is_null() || v.as_object().is_some_and(|o| o.is_empty()) {
+    if v.is_null() || v.as_object().is_some_and(serde_json::Map::is_empty) {
         return String::new();
     }
     serde_json::to_string_pretty(v).unwrap_or_default() + "\n"
 }
 
 pub fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 fn home_short(path: &str) -> String {
@@ -121,16 +122,16 @@ pub fn render_ls(ls: &LsResult) -> String {
     let mut out = String::new();
     let mut row_iter = rows.into_iter();
     for ws in &ls.workspaces {
-        out.push_str(&format!("{} {}", ws.id, ws.name));
+        let _ = write!(out, "{} {}", ws.id, ws.name);
         if let Some(root) = &ws.root {
-            out.push_str(&format!("  {}", home_short(root)));
+            let _ = write!(out, "  {}", home_short(root));
         }
         if ws.active {
             out.push_str("  (active)");
         }
         out.push('\n');
         for tab in &ws.tabs {
-            out.push_str(&format!("  {} {}\n", tab.id, tab.title));
+            let _ = writeln!(out, "  {} {}", tab.id, tab.title);
             for _ in &tab.panes {
                 let r = row_iter.next().expect("one row per pane");
                 let mut line = String::from("   ");
@@ -162,7 +163,7 @@ fn ago(ts_ms: u64, now: u64) -> String {
 pub fn render_inbox(r: &InboxResult, now: u64) -> String {
     let mut out = String::new();
     for m in &r.messages {
-        out.push_str(&format!("[{} · {}] {}\n", m.from_name, ago(m.ts_ms, now), m.text));
+        let _ = writeln!(out, "[{} · {}] {}", m.from_name, ago(m.ts_ms, now), m.text);
     }
     out
 }
@@ -173,7 +174,7 @@ pub fn render_claims(r: &ClaimsResult) -> String {
     for c in &r.claims {
         let mut line = format!("{}{}  {}", c.path, " ".repeat(w - c.path.chars().count()), c.holder_name);
         if let Some(reason) = c.reason.as_deref().filter(|r| !r.is_empty()) {
-            line.push_str(&format!("  {reason}"));
+            let _ = write!(line, "  {reason}");
         }
         out.push_str(&line);
         out.push('\n');
@@ -278,7 +279,7 @@ mod tests {
         assert_eq!(render(&Method::Name { name: "x".into() }, &serde_json::json!({})), "");
         assert_eq!(
             render(
-                &Method::Read { pane: "x".into(), mode: Default::default() },
+                &Method::Read { pane: "x".into(), mode: nox_ipc::ReadMode::default() },
                 &serde_json::json!({"text":"a"})
             ),
             "a\n"

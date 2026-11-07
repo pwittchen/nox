@@ -18,16 +18,19 @@ pub struct ForegroundProcess {
 }
 
 /// The foreground process group leader of the terminal behind `pty_fd`.
+#[must_use]
 pub fn foreground_pid(pty_fd: RawFd) -> Option<i32> {
     let pgrp = unsafe { libc::tcgetpgrp(pty_fd) };
     (pgrp > 0).then_some(pgrp)
 }
 
+#[must_use]
 pub fn foreground_process(pty_fd: RawFd) -> Option<ForegroundProcess> {
     let pid = foreground_pid(pty_fd)?;
     process_info(pid)
 }
 
+#[must_use]
 pub fn process_info(pid: i32) -> Option<ForegroundProcess> {
     let (path_exe, args) = match proc_args(pid) {
         Some((exe, args)) => (Some(exe), args),
@@ -44,6 +47,7 @@ fn basename(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
+#[must_use]
 pub fn proc_path(pid: i32) -> Option<String> {
     let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
@@ -54,43 +58,38 @@ pub fn proc_path(pid: i32) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
+#[must_use]
 pub fn proc_cwd(pid: i32) -> Option<PathBuf> {
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
-    let n = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDVNODEPATHINFO,
-            0,
-            (&mut info as *mut libc::proc_vnodepathinfo).cast(),
-            size,
-        )
-    };
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDVNODEPATHINFO, 0, (&raw mut info).cast(), size) };
     if n != size {
         return None;
     }
     let raw = &info.pvi_cdir.vip_path;
     // `vip_path` is a fixed MAXPATHLEN buffer (declared as nested arrays in libc).
-    let bytes: &[u8] =
-        unsafe { std::slice::from_raw_parts(raw as *const _ as *const u8, std::mem::size_of_val(raw)) };
+    let bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(std::ptr::from_ref(raw).cast::<u8>(), std::mem::size_of_val(raw))
+    };
     let cstr = CStr::from_bytes_until_nul(bytes).ok()?;
     let s = cstr.to_str().ok()?;
     (!s.is_empty()).then(|| PathBuf::from(s))
 }
 
 /// Executable path and arguments (without argv[0]) via `sysctl(KERN_PROCARGS2)`.
+#[must_use]
 pub fn proc_args(pid: i32) -> Option<(String, Vec<String>)> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: libc::size_t = 0;
     let rc = unsafe {
-        libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0)
+        libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &raw mut size, std::ptr::null_mut(), 0)
     };
     if rc != 0 || size == 0 {
         return None;
     }
     let mut buf = vec![0u8; size];
     let rc = unsafe {
-        libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0)
+        libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &raw mut size, std::ptr::null_mut(), 0)
     };
     if rc != 0 {
         return None;
@@ -125,6 +124,7 @@ fn parse_procargs2(buf: &[u8]) -> Option<(String, Vec<String>)> {
 }
 
 /// The user's login shell: `$SHELL`, then the passwd entry, then `/bin/zsh`.
+#[must_use]
 pub fn login_shell() -> String {
     if let Ok(s) = std::env::var("SHELL")
         && !s.is_empty()
@@ -144,6 +144,7 @@ pub fn login_shell() -> String {
 }
 
 /// `user@host` for titles (`pw@mbp`). Host is the short hostname.
+#[must_use]
 pub fn user_at_host() -> String {
     let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
     let mut buf = [0u8; 256];
@@ -159,6 +160,7 @@ pub fn user_at_host() -> String {
 }
 
 /// `$HOME` shortened to `~`.
+#[must_use]
 pub fn tildify(path: &std::path::Path) -> String {
     if let Some(home) = dirs_home()
         && let Ok(rest) = path.strip_prefix(&home)

@@ -24,6 +24,7 @@ pub enum WriteError {
 }
 
 /// Hash of file contents, used to recognize file-watch events caused by our own writes.
+#[must_use]
 pub fn content_hash(bytes: &[u8]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut h);
@@ -40,8 +41,7 @@ fn guard_key(path: &Path) -> PathBuf {
     let file = path.file_name().map(PathBuf::from).unwrap_or_default();
     path.parent()
         .and_then(|p| std::fs::canonicalize(if p.as_os_str().is_empty() { Path::new(".") } else { p }).ok())
-        .map(|p| p.join(&file))
-        .unwrap_or_else(|| path.to_path_buf())
+        .map_or_else(|| path.to_path_buf(), |p| p.join(&file))
 }
 
 /// Records that nox itself wrote `bytes` to `path`.
@@ -53,8 +53,9 @@ pub fn record_self_write(path: &Path, bytes: &[u8]) {
 
 /// Whether `bytes` (the file's current contents) is exactly what nox last wrote to `path`, so
 /// a change event for it is self-caused and can be ignored.
+#[must_use]
 pub fn is_self_write(path: &Path, bytes: &[u8]) -> bool {
-    self_writes().lock().map(|map| map.get(&guard_key(path)) == Some(&content_hash(bytes))).unwrap_or(false)
+    self_writes().lock().is_ok_and(|map| map.get(&guard_key(path)) == Some(&content_hash(bytes)))
 }
 
 /// Writes `config.toml` for one path; a thin wrapper around [`set_value`] / [`remove_value`].
@@ -68,6 +69,7 @@ impl ConfigWriter {
         Self { path: path.into() }
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

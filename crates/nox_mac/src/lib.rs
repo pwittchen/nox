@@ -1,10 +1,30 @@
-//! nox_mac — the thin AppKit layer (SPEC §13): native context menus, accessibility flags, Dock
+//! `nox_mac` — the thin `AppKit` layer (SPEC §13): native context menus, accessibility flags, Dock
 //! bounce, beep, the attention chime, system notifications, the `NSWindow` background color,
 //! keep-awake power assertions and which Option key is down.
 //!
-//! Everything here is main-thread AppKit messaging through `objc2`; functions are no-ops (or
+//! Everything here is main-thread `AppKit` messaging through `objc2`; functions are no-ops (or
 //! return defaults) where the platform refuses (e.g. notifications from an unbundled binary).
 
+// `cargo lint` runs clippy::pedantic. These lints are allowed on purpose: numeric casts are
+// bounded grid / pixel / color math, `# Errors` / `# Panics` sections would only restate the
+// signature, hex color literals read better without separators, and long UI builders and
+// flag-heavy config structs are clearer kept whole; `assert!(x.is_empty())` reads fine in tests
+// and `(n..).find(..)` searches are meant to be unbounded.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::unreadable_literal,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::similar_names,
+    clippy::many_single_char_names,
+    clippy::assert_is_empty,
+    clippy::maybe_infinite_iter
+)]
 #![allow(clippy::missing_safety_doc)]
 
 use std::ffi::c_void;
@@ -237,7 +257,7 @@ pub fn set_keep_awake(on: bool, reason: &str) {
                     Retained::as_ptr(&ty).cast(),
                     255,
                     Retained::as_ptr(&name).cast(),
-                    &mut id,
+                    &raw mut id,
                 )
             };
             if rc == 0 {
@@ -272,13 +292,16 @@ impl MenuItem {
     pub fn new(title: impl Into<String>, tag: i64) -> Self {
         Self { title: title.into(), tag, enabled: true, checked: false, submenu: vec![] }
     }
+    #[must_use]
     pub fn separator() -> Self {
         Self { title: String::new(), tag: -1, enabled: false, checked: false, submenu: vec![] }
     }
+    #[must_use]
     pub fn disabled(mut self) -> Self {
         self.enabled = false;
         self
     }
+    #[must_use]
     pub fn checked(mut self, on: bool) -> Self {
         self.checked = on;
         self

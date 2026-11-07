@@ -33,6 +33,7 @@ pub struct KeyModes {
 
 /// Encode a key press. `None` means the key produces no terminal input (e.g. a ⌘ shortcut,
 /// which is left to the app, or a bare modifier).
+#[must_use]
 pub fn encode(input: &KeyInput<'_>, modes: KeyModes) -> Option<Vec<u8>> {
     let KeyInput { key, key_char, mods, alt_is_meta } = *input;
     let meta = mods.alt && alt_is_meta;
@@ -157,6 +158,7 @@ pub fn encode(input: &KeyInput<'_>, modes: KeyModes) -> Option<Vec<u8>> {
 
 /// Keypad keys in application keypad mode. GPUI doesn't report keypad keys distinctly, so this
 /// is exposed for completeness and used when a platform layer can tell.
+#[must_use]
 pub fn encode_keypad(c: char, modes: KeyModes) -> Vec<u8> {
     if !modes.app_keypad {
         return c.to_string().into_bytes();
@@ -176,7 +178,7 @@ pub fn encode_keypad(c: char, modes: KeyModes) -> Vec<u8> {
 }
 
 fn modifier_param(mods: Mods) -> u8 {
-    1 + mods.shift as u8 + 2 * mods.alt as u8 + 4 * mods.ctrl as u8
+    1 + u8::from(mods.shift) + 2 * u8::from(mods.alt) + 4 * u8::from(mods.ctrl)
 }
 
 fn prefix_meta(meta: bool, mut bytes: Vec<u8>) -> Vec<u8> {

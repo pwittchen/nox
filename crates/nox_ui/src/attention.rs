@@ -14,6 +14,7 @@ pub struct Attention {
     chimed: HashSet<PaneId>,
 }
 
+#[must_use]
 pub fn notification_id(pane: PaneId) -> String {
     format!("pane-{pane}")
 }
@@ -58,6 +59,7 @@ impl Attention {
 }
 
 /// Notification text for a finished command.
+#[must_use]
 pub fn done_text(command: &str, exit: Option<i32>, tab_title: &str, duration: Duration) -> (String, String) {
     let title = match exit {
         Some(code) if code != 0 => format!("{command} failed (exit {code})"),
@@ -67,6 +69,7 @@ pub fn done_text(command: &str, exit: Option<i32>, tab_title: &str, duration: Du
 }
 
 /// Notification text for an agent state change.
+#[must_use]
 pub fn agent_text(
     name: &str,
     to: AgentState,

@@ -34,11 +34,13 @@ impl Default for ResizeCoalescer {
 }
 
 impl ResizeCoalescer {
+    #[must_use]
     pub fn new() -> Self {
         Self { sent: None, pending: None, last_send: None, last_request: None }
     }
 
     /// The size the PTY was created with.
+    #[must_use]
     pub fn with_initial(size: GridSize) -> Self {
         Self { sent: Some(size), ..Self::new() }
     }
@@ -66,6 +68,7 @@ impl ResizeCoalescer {
     }
 
     /// When `poll` should be called next, if something is pending.
+    #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
         self.pending?;
         let by_interval = self.last_send.map(|t| t + INTERVAL);
@@ -76,6 +79,7 @@ impl ResizeCoalescer {
         }
     }
 
+    #[must_use]
     pub fn current(&self) -> Option<GridSize> {
         self.pending.or(self.sent)
     }
@@ -111,7 +115,7 @@ mod tests {
         let mut sent = vec![];
         // A drag producing a new size every 4 ms for 200 ms.
         for i in 0..50u16 {
-            let t = t0 + Duration::from_millis(4 * i as u64);
+            let t = t0 + Duration::from_millis(4 * u64::from(i));
             if let Some(s) = c.poll(t) {
                 sent.push(s);
             }

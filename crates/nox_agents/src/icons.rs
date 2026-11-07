@@ -16,7 +16,7 @@
 //! Every lookup is a hash-map hit; nothing touches the filesystem.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::titles::title_agent_kind;
@@ -143,6 +143,7 @@ builtin_icons!(
 );
 
 /// Every built-in icon name (`terminal`, `shell`, `agent`, `claude`, `python`, …).
+#[must_use]
 pub fn builtin_icon_names() -> &'static [&'static str] {
     BUILTIN_ICONS
 }
@@ -363,7 +364,7 @@ const EXE_ICONS: &[(&str, &str)] = &[
 const SHELLS: &[&str] =
     &["zsh", "bash", "fish", "nu", "sh", "dash", "ksh", "tcsh", "csh", "xonsh", "elvish", "pwsh"];
 
-/// npm / PyPI packages of agents, matched as substrings of interpreter arguments
+/// npm / `PyPI` packages of agents, matched as substrings of interpreter arguments
 /// (`node …/node_modules/@openai/codex/bin/codex.js` → codex).
 const AGENT_PACKAGES: &[(&str, &str)] = &[
     ("@anthropic-ai/claude-code", "claude"),
@@ -555,6 +556,7 @@ impl IconTable {
     /// `file.svg` is taken from `~/.nox/icons/`. Unknown built-in names are ignored (logged).
     ///
     /// `agent_matches`: `[agents.<name>]` as (kind, executables) — the key itself plus `match`.
+    #[must_use]
     pub fn new(user_icons: &BTreeMap<String, String>, agent_matches: &[(String, Vec<String>)]) -> Self {
         let mut user = HashMap::new();
         for (exe, value) in user_icons {
@@ -632,6 +634,7 @@ impl IconTable {
 
     /// The icon of an agent kind: a user icon for it, its built-in icon, else the generic
     /// `agent` icon.
+    #[must_use]
     pub fn icon_for_kind(&self, kind: &str) -> Icon {
         if let Some(icon) = self.user.get(&kind.to_ascii_lowercase()) {
             return icon.clone();
@@ -679,12 +682,12 @@ fn parse_user_icon(value: &str) -> Option<Icon> {
     }
     let home = dirs::home_dir();
     if let Some(rest) = value.strip_prefix("~/") {
-        return Some(Icon::Custom(home.map(|h| h.join(rest)).unwrap_or_else(|| PathBuf::from(value))));
+        return Some(Icon::Custom(home.map_or_else(|| PathBuf::from(value), |h| h.join(rest))));
     }
     if value.contains('/') {
         return Some(Icon::Custom(PathBuf::from(value)));
     }
-    if value.ends_with(".svg") {
+    if Path::new(value).extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
         let dir = home.map(|h| h.join(".nox/icons")).unwrap_or_default();
         return Some(Icon::Custom(dir.join(value)));
     }
@@ -694,11 +697,12 @@ fn parse_user_icon(value: &str) -> Option<Icon> {
 /// Brand color of a built-in icon as `0xRRGGBB`, for the optional tint. The app blends it toward
 /// the text color (low saturation) so it reads in light and dark mode. `None` for monochrome
 /// brands and generic icons.
+#[must_use]
 pub fn brand_tint(name: &str) -> Option<u32> {
     Some(match name {
         "claude" => 0xD97757,
         "codex" => 0x10A37F,
-        "gemini" => 0x4285F4,
+        "gemini" | "gcloud" => 0x4285F4,
         "copilot" => 0x8957E5,
         "aider" => 0x14B014,
         "python" => 0x3776AB,
@@ -727,7 +731,6 @@ pub fn brand_tint(name: &str) -> Option<u32> {
         "kubernetes" => 0x326CE5,
         "terraform" => 0x7B42BC,
         "aws" => 0xFF9900,
-        "gcloud" => 0x4285F4,
         "azure" => 0x0078D4,
         "fly" => 0x8B5CF6,
         "vim" => 0x019733,

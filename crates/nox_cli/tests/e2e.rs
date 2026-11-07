@@ -1,4 +1,4 @@
-//! End-to-end: the built `nox` binary against a nox_ipc server with a mock handler.
+//! End-to-end: the built `nox` binary against a `nox_ipc` server with a mock handler.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

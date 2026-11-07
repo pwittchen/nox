@@ -128,6 +128,7 @@ impl TextInput {
         }
     }
 
+    #[must_use]
     pub fn text(&self) -> &str {
         &self.content
     }
@@ -185,17 +186,17 @@ impl TextInput {
     }
 
     fn prev_boundary(&self, offset: usize) -> usize {
-        self.content[..offset].char_indices().next_back().map(|(i, _)| i).unwrap_or(0)
+        self.content[..offset].char_indices().next_back().map_or(0, |(i, _)| i)
     }
 
     fn next_boundary(&self, offset: usize) -> usize {
-        self.content[offset..].chars().next().map(|c| offset + c.len_utf8()).unwrap_or(offset)
+        self.content[offset..].chars().next().map_or(offset, |c| offset + c.len_utf8())
     }
 
     fn word_left(&self, offset: usize) -> usize {
         let s = &self.content[..offset];
         let trimmed = s.trim_end_matches(|c: char| !c.is_alphanumeric());
-        trimmed.rfind(|c: char| !c.is_alphanumeric()).map(|i| i + 1).unwrap_or(0)
+        trimmed.rfind(|c: char| !c.is_alphanumeric()).map_or(0, |i| i + 1)
     }
 
     fn word_right(&self, offset: usize) -> usize {
@@ -300,12 +301,16 @@ impl TextInput {
             cx.notify();
         }
     }
+    // GPUI action handlers take `&mut self` even when they only use the context.
+    #[allow(clippy::unused_self)]
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputEvent::Submit);
     }
+    #[allow(clippy::unused_self)]
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputEvent::Cancel);
     }
+    #[allow(clippy::unused_self)]
     fn char_palette(&mut self, _: &ShowCharacterPalette, window: &mut Window, _: &mut Context<Self>) {
         window.show_character_palette();
     }
@@ -444,11 +449,10 @@ impl EntityInputHandler for TextInput {
             .unwrap_or(self.selected.clone());
         self.content = format!("{}{}{}", &self.content[..r.start], text, &self.content[r.end..]);
         self.marked = (!text.is_empty()).then(|| r.start..r.start + text.len());
-        self.selected = new_sel
-            .as_ref()
-            .map(|s| self.range_from_utf16(s))
-            .map(|s| s.start + r.start..s.end + r.start)
-            .unwrap_or_else(|| r.start + text.len()..r.start + text.len());
+        self.selected = new_sel.as_ref().map(|s| self.range_from_utf16(s)).map_or_else(
+            || r.start + text.len()..r.start + text.len(),
+            |s| s.start + r.start..s.end + r.start,
+        );
         cx.notify();
     }
 
@@ -526,7 +530,7 @@ impl Element for TextElement {
         _: Option<&GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut (),
+        (): &mut (),
         window: &mut Window,
         cx: &mut App,
     ) -> Prepaint {
@@ -596,7 +600,7 @@ impl Element for TextElement {
         _: Option<&GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut (),
+        (): &mut (),
         pre: &mut Prepaint,
         window: &mut Window,
         cx: &mut App,

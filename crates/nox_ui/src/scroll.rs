@@ -45,7 +45,7 @@ impl ScrollState {
         let mut lines = (total / line_h).floor() as i32;
         let mut frac = total - lines as f32 * line_h;
         // Clamp to history bounds.
-        let target = offset as i64 + lines as i64;
+        let target = offset as i64 + i64::from(lines);
         if target <= 0 && (target < 0 || frac < 0.0) {
             lines = -(offset as i32);
             frac = 0.0;
@@ -54,7 +54,7 @@ impl ScrollState {
             frac = 0.0;
         }
         self.frac = frac.clamp(0.0, line_h - 0.001);
-        if offset as i64 + lines as i64 == 0 && self.frac > 0.0 && dy < 0.0 {
+        if offset as i64 + i64::from(lines) == 0 && self.frac > 0.0 && dy < 0.0 {
             // Snapping to the bottom.
             self.frac = self.frac.max(0.0);
         }
@@ -92,6 +92,7 @@ impl ScrollState {
         Some(step)
     }
 
+    #[must_use]
     pub fn animating(&self) -> bool {
         self.anim.is_some()
     }
@@ -103,6 +104,7 @@ impl ScrollState {
     }
 
     /// Opacity of the overlay scrollbar: visible while scrolling, fades out after 800 ms.
+    #[must_use]
     pub fn scrollbar_alpha(&self, now: Instant) -> f32 {
         let Some(t) = self.last_scroll else { return 0.0 };
         let dt = now.duration_since(t).as_secs_f32();

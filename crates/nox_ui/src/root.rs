@@ -47,6 +47,7 @@ pub struct Coop {
 }
 
 impl Coop {
+    #[must_use]
     pub fn new(ws: WorkspaceId) -> Self {
         let path = nox_config::nox_dir().join("workspaces").join(ws.to_string()).join("messages.jsonl");
         let bus = MessageBus::load(&path).unwrap_or_else(|e| {
@@ -141,7 +142,7 @@ impl Root {
             drag_sidebar: false,
             focus_handle,
             ipc: None,
-            attention: Default::default(),
+            attention: crate::attention::Attention::default(),
             rate: RateLimiter::new(),
             saved_agents: HashMap::new(),
             session_task: None,
@@ -169,23 +170,28 @@ impl Root {
 
     // ---- lookup helpers ---------------------------------------------------------------------
 
+    #[must_use]
     pub fn active_tab(&self) -> Option<&Tab> {
         self.ws.active().active()
     }
 
+    #[must_use]
     pub fn focused_pane_id(&self) -> Option<PaneId> {
         self.active_tab().map(|t| t.focused)
     }
 
+    #[must_use]
     pub fn focused_pane(&self) -> Option<Entity<Pane>> {
         self.focused_pane_id().and_then(|id| self.panes.get(&id).cloned())
     }
 
+    #[must_use]
     pub fn pane_workspace(&self, pane: PaneId) -> Option<WorkspaceId> {
         self.ws.find_pane(pane).map(|(w, _)| self.ws.list[w].id)
     }
 
     /// Is this pane what the user is looking at (focused window, active workspace & tab)?
+    #[must_use]
     pub fn is_looked_at(&self, pane: PaneId) -> bool {
         if !self.window_active {
             return false;
@@ -213,8 +219,7 @@ impl Root {
             None => self
                 .panes
                 .get(&tab.focused)
-                .map(|p| p.read(cx).title(settings.config.tabs.title))
-                .unwrap_or_else(|| "~".into()),
+                .map_or_else(|| "~".into(), |p| p.read(cx).title(settings.config.tabs.title)),
         };
         if settings.config.tabs.show_index { format!("{} {}", index + 1, name) } else { name }
     }
@@ -235,7 +240,7 @@ impl Root {
         let mut same: Vec<PaneId> = self.ws.list[w]
             .tabs
             .iter()
-            .flat_map(|t| t.panes())
+            .flat_map(nox_layout::Tab::panes)
             .filter(|id| {
                 self.panes.get(id).is_some_and(|e| {
                     let e = e.read(cx);
@@ -390,7 +395,7 @@ impl Root {
                 if Settings::global(cx).reduce_motion() {
                     crate::toast::show(cx, "Not enough room to split this pane.");
                 } else {
-                    p.update(cx, |p, cx| p.shake(cx));
+                    p.update(cx, super::pane::Pane::shake);
                 }
             }
             return None;
@@ -510,7 +515,8 @@ impl Root {
     }
 
     pub fn close_tab_now(&mut self, w: usize, tab_id: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(panes) = self.ws.list.get(w).and_then(|ws| ws.tab(tab_id)).map(|t| t.panes()) else {
+        let Some(panes) = self.ws.list.get(w).and_then(|ws| ws.tab(tab_id)).map(nox_layout::Tab::panes)
+        else {
             return;
         };
         let worktree = self.ws.list[w]
@@ -522,7 +528,7 @@ impl Root {
         match self.ws.list[w].close_tab(tab_id) {
             Some(WorkspaceAfterClose::Empty) => {
                 if Settings::global(cx).config.workspaces.close_when_empty
-                    || self.ws.len() == 1 && self.quit_on_last(cx)
+                    || self.ws.len() == 1 && Self::quit_on_last(cx)
                 {
                     self.close_workspace_now(w, window, cx);
                 } else {
@@ -533,7 +539,7 @@ impl Root {
             Some(WorkspaceAfterClose::Remaining) | None => {}
         }
         if let Some(path) = worktree {
-            crate::features::offer_worktree_removal(path, window, cx);
+            crate::features::offer_worktree_removal(&path, window, cx);
         }
         self.mark_visible_seen(cx);
         self.sync_maximized(cx);
@@ -542,12 +548,12 @@ impl Root {
         cx.notify();
     }
 
-    fn quit_on_last(&self, cx: &App) -> bool {
+    fn quit_on_last(cx: &App) -> bool {
         Settings::global(cx).config.app.quit_when_last_tab_closed
     }
 
     pub fn close_workspace_now(&mut self, w: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let panes: Vec<PaneId> = self.ws.list[w].tabs.iter().flat_map(|t| t.panes()).collect();
+        let panes: Vec<PaneId> = self.ws.list[w].tabs.iter().flat_map(nox_layout::Tab::panes).collect();
         for p in panes {
             self.drop_pane(p, cx);
         }
@@ -555,7 +561,7 @@ impl Root {
         match self.ws.close(w) {
             Some(nox_layout::WorkspaceClose::WasLast { .. }) => {
                 self.coop.remove(&id);
-                if self.quit_on_last(cx) {
+                if Self::quit_on_last(cx) {
                     self.save_session_now(cx);
                     cx.quit();
                     return;
@@ -788,7 +794,7 @@ impl Root {
                 if !looked_at && *duration >= min && !is_agent {
                     let tab_title = self.pane_tab_title(pane, cx);
                     let (title, body) = crate::attention::done_text(command, *exit, &tab_title, *duration);
-                    self.trigger_attention(pane, title, body, cx);
+                    self.trigger_attention(pane, &title, &body, cx);
                 }
                 cx.notify();
             }
@@ -800,7 +806,7 @@ impl Root {
                     .unwrap_or_else(|| "nox".into());
                 if !self.is_looked_at(pane) {
                     let t = title.clone().unwrap_or(process);
-                    self.trigger_attention(pane, t, body.clone(), cx);
+                    self.trigger_attention(pane, &t, body, cx);
                 }
             }
             PaneEvent::AgentChanged { transition } => {
@@ -885,7 +891,7 @@ impl Root {
                     .unwrap_or_default();
                 let tab = self.pane_tab_title(pane, cx);
                 let (title, body) = crate::attention::agent_text(&name, t.to, msg.as_deref(), &wsname, &tab);
-                self.trigger_attention(pane, title, body, cx);
+                self.trigger_attention(pane, &title, &body, cx);
             }
             if t.to == AgentState::Exited
                 && let Some(ws) = self.pane_workspace(pane)
@@ -900,9 +906,9 @@ impl Root {
         cx.notify();
     }
 
-    pub fn trigger_attention(&mut self, pane: PaneId, title: String, body: String, cx: &mut Context<Self>) {
+    pub fn trigger_attention(&mut self, pane: PaneId, title: &str, body: &str, cx: &mut Context<Self>) {
         let cfg = Settings::global(cx).config.clone();
-        self.attention.trigger(pane, &title, &body, &cfg);
+        self.attention.trigger(pane, title, body, &cfg);
     }
 
     pub fn on_theme_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1172,10 +1178,11 @@ pub fn default_cwd(cx: &App) -> PathBuf {
 }
 
 pub fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
 /// Directory with the `nox` CLI to put on every pane's PATH.
+#[must_use]
 pub fn cli_bin_dir() -> Option<PathBuf> {
     if let Some(res) = nox_mac::bundle_resources_dir() {
         let bin = res.join("bin");
@@ -1194,16 +1201,17 @@ impl Render for Root {
     }
 }
 
+#[must_use]
 pub fn px_rect(r: Rect) -> gpui::Bounds<Pixels> {
     gpui::Bounds::new(gpui::point(px(r.x), px(r.y)), gpui::size(px(r.w), px(r.h)))
 }
 
+#[must_use]
 pub fn dir_name(p: &Path) -> String {
-    p.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| p.to_string_lossy().into_owned())
+    p.file_name().map_or_else(|| p.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned())
 }
 
+#[must_use]
 pub fn direction_of(a: &str) -> Direction {
     match a {
         "left" => Direction::Left,

@@ -59,6 +59,7 @@ impl Default for OscSniffer {
 }
 
 impl OscSniffer {
+    #[must_use]
     pub fn new() -> Self {
         Self { state: State::Ground, buf: Vec::with_capacity(256), overflow: false }
     }

@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Default `agents.claim_ttl`.
-pub const DEFAULT_CLAIM_TTL: Duration = Duration::from_secs(1800);
+pub const DEFAULT_CLAIM_TTL: Duration = Duration::from_mins(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claim {
@@ -49,6 +49,7 @@ impl fmt::Display for ClaimConflict {
 impl std::error::Error for ClaimConflict {}
 
 /// Lexical normalization of a claim path (see the module docs).
+#[must_use]
 pub fn normalize_claim_path(path: &Path, root: Option<&Path>) -> PathBuf {
     let joined = match root {
         Some(root) if path.is_relative() => root.join(path),
@@ -79,6 +80,7 @@ pub struct Claims {
 }
 
 impl Claims {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -89,7 +91,7 @@ impl Claims {
         holder: u64,
         holder_name: &str,
         paths: &[PathBuf],
-        reason: Option<String>,
+        reason: Option<&str>,
         root: Option<&Path>,
         now: Instant,
     ) -> Result<(), ClaimConflict> {
@@ -110,15 +112,15 @@ impl Claims {
                 Some(c) => {
                     c.renewed = now;
                     c.holder_name = holder_name.to_string();
-                    if reason.is_some() {
-                        c.reason = reason.clone();
+                    if let Some(r) = reason {
+                        c.reason = Some(r.to_string());
                     }
                 }
                 None => self.claims.push(Claim {
                     path,
                     holder,
                     holder_name: holder_name.to_string(),
-                    reason: reason.clone(),
+                    reason: reason.map(str::to_string),
                     renewed: now,
                 }),
             }
@@ -127,6 +129,7 @@ impl Claims {
     }
 
     /// Who would block claiming `path` for `holder`, without claiming.
+    #[must_use]
     pub fn conflict(&self, holder: u64, path: &Path, root: Option<&Path>) -> Option<&Claim> {
         let p = normalize_claim_path(path, root);
         self.claims.iter().find(|c| c.holder != holder && overlaps(&c.path, &p))
@@ -153,6 +156,7 @@ impl Claims {
     }
 
     /// When the next claim expires, to schedule [`Claims::expire`].
+    #[must_use]
     pub fn next_expiry(&self, ttl: Duration) -> Option<Instant> {
         self.claims.iter().map(|c| c.renewed + ttl).min()
     }
@@ -164,14 +168,17 @@ impl Claims {
     }
 
     /// All claims, in claim order.
+    #[must_use]
     pub fn list(&self) -> &[Claim] {
         &self.claims
     }
 
+    #[must_use]
     pub fn held_by(&self, holder: u64) -> Vec<&Claim> {
         self.claims.iter().filter(|c| c.holder == holder).collect()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.claims.is_empty()
     }
@@ -207,7 +214,7 @@ mod tests {
         let t = Instant::now();
         let root = Some(Path::new(ROOT));
         let mut c = Claims::new();
-        c.claim(1, "backend", &pb(&["src/parser/lexer.rs"]), Some("refactor".into()), root, t).unwrap();
+        c.claim(1, "backend", &pb(&["src/parser/lexer.rs"]), Some("refactor"), root, t).unwrap();
         let err = c.claim(2, "docs", &pb(&["src/parser/"]), None, root, t).unwrap_err();
         assert_eq!(err.holder_name, "backend");
         assert_eq!(err.reason.as_deref(), Some("refactor"));
@@ -237,9 +244,9 @@ mod tests {
     #[test]
     fn renew_and_expire() {
         let t0 = Instant::now();
-        let ttl = Duration::from_secs(1800);
+        let ttl = Duration::from_mins(30);
         let mut c = Claims::new();
-        c.claim(1, "a", &pb(&["/r/x"]), Some("one".into()), None, t0).unwrap();
+        c.claim(1, "a", &pb(&["/r/x"]), Some("one"), None, t0).unwrap();
         c.claim(2, "b", &pb(&["/r/y"]), None, None, t0).unwrap();
         let t1 = t0 + Duration::from_secs(1000);
         c.claim(1, "a", &pb(&["/r/x"]), None, None, t1).unwrap();
@@ -248,7 +255,7 @@ mod tests {
         let gone = c.expire(t0 + ttl, ttl);
         assert_eq!(gone.iter().map(|g| g.holder).collect::<Vec<_>>(), [2]);
         assert_eq!(c.list().len(), 1);
-        assert!(c.expire(t1 + ttl - Duration::from_secs(1), ttl).is_empty());
+        assert!(c.expire(t1 + ttl.checked_sub(Duration::from_secs(1)).unwrap(), ttl).is_empty());
         assert_eq!(c.expire(t1 + ttl, ttl).len(), 1);
         assert!(c.is_empty());
     }

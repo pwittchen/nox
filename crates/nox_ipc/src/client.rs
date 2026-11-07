@@ -24,6 +24,7 @@ pub struct Client {
 
 impl Client {
     /// The socket path from `NOX_SOCKET`, else [`default_socket_path`].
+    #[must_use]
     pub fn socket_path_from_env() -> PathBuf {
         match std::env::var_os(ENV_SOCKET) {
             Some(p) if !p.is_empty() => PathBuf::from(p),
@@ -32,6 +33,7 @@ impl Client {
     }
 
     /// The token from `NOX_TOKEN`, if set and not empty.
+    #[must_use]
     pub fn token_from_env() -> Option<String> {
         std::env::var(ENV_TOKEN).ok().filter(|t| !t.is_empty())
     }
@@ -55,10 +57,12 @@ impl Client {
         })
     }
 
+    #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.path
     }
 
+    #[must_use]
     pub fn has_token(&self) -> bool {
         self.token.is_some()
     }
@@ -74,7 +78,7 @@ impl Client {
         line.push('\n');
         self.writer
             .write_all(line.as_bytes())
-            .and_then(|_| self.writer.flush())
+            .and_then(|()| self.writer.flush())
             .map_err(|e| io_error("send request", &e))?;
 
         let deadline = timeout.map(|t| Instant::now() + t);

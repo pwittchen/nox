@@ -2,6 +2,27 @@
 //!
 //! Exit codes: `0` ok, `1` error, `2` usage, `3` conflict, `4` timeout.
 
+// `cargo lint` runs clippy::pedantic. These lints are allowed on purpose: numeric casts are
+// bounded grid / pixel / color math, `# Errors` / `# Panics` sections would only restate the
+// signature, hex color literals read better without separators, and long UI builders and
+// flag-heavy config structs are clearer kept whole; `assert!(x.is_empty())` reads fine in tests
+// and `(n..).find(..)` searches are meant to be unbounded.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::unreadable_literal,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::similar_names,
+    clippy::many_single_char_names,
+    clippy::assert_is_empty,
+    clippy::maybe_infinite_iter
+)]
+
 mod cli;
 mod mcp;
 mod output;
@@ -27,10 +48,10 @@ fn main() -> ExitCode {
             return ExitCode::from(if e.use_stderr() { EXIT_USAGE } else { 0 });
         }
     };
-    ExitCode::from(run(cli))
+    ExitCode::from(run(&cli))
 }
 
-fn run(cli: Cli) -> u8 {
+fn run(cli: &Cli) -> u8 {
     if let Command::Mcp = cli.command {
         let mut backend = mcp::LazyClient::default();
         return match mcp::serve(&mut backend) {
@@ -89,11 +110,13 @@ fn run(cli: Cli) -> u8 {
 }
 
 /// Exit code for an IPC error.
+#[must_use]
 pub fn exit_code(err: &IpcError) -> u8 {
     err.code.exit_code() as u8
 }
 
 /// A clear message for a failed connection.
+#[must_use]
 pub fn connect_error_message(e: &std::io::Error) -> String {
     let path = Client::socket_path_from_env();
     let inside = std::env::var_os(ENV_SOCKET).is_some_and(|s| !s.is_empty());
@@ -112,6 +135,7 @@ pub fn connect_error_message(e: &std::io::Error) -> String {
 }
 
 /// OSC 777 sequence for a notification (SPEC §7.11).
+#[must_use]
 pub fn osc777(title: &str, body: Option<&str>) -> String {
     let clean = |s: &str| s.replace(['\x07', '\x1b', ';'], " ");
     format!("\x1b]777;notify;{};{}\x07", clean(title), clean(body.unwrap_or("")))
@@ -126,7 +150,7 @@ fn notify_fallback(title: &str, body: Option<&str>) -> u8 {
         .and_then(|mut tty| tty.write_all(seq.as_bytes()));
     if written.is_err() {
         let mut out = std::io::stdout().lock();
-        if out.write_all(seq.as_bytes()).and_then(|_| out.flush()).is_err() {
+        if out.write_all(seq.as_bytes()).and_then(|()| out.flush()).is_err() {
             return EXIT_ERROR;
         }
     }

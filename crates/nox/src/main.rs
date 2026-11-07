@@ -1,5 +1,26 @@
 //! nox — stay in command. The app binary: setup, menus, global actions, the window.
 
+// `cargo lint` runs clippy::pedantic. These lints are allowed on purpose: numeric casts are
+// bounded grid / pixel / color math, `# Errors` / `# Panics` sections would only restate the
+// signature, hex color literals read better without separators, and long UI builders and
+// flag-heavy config structs are clearer kept whole; `assert!(x.is_empty())` reads fine in tests
+// and `(n..).find(..)` searches are meant to be unbounded.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::unreadable_literal,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::similar_names,
+    clippy::many_single_char_names,
+    clippy::assert_is_empty,
+    clippy::maybe_infinite_iter
+)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -7,7 +28,7 @@ use gpui::{
     App, AppContext, Application, Bounds, Entity, Focusable, TitlebarOptions, WindowBackgroundAppearance,
     WindowBounds, WindowOptions, point, px, size,
 };
-use nox_ui::actions::*;
+use nox_ui::actions::{About, CheckForUpdates, HideApp, HideOthers, OpenSettings, Quit, ShowAll};
 use nox_ui::root::{Initial, Root};
 use nox_ui::settings_state::Settings;
 
@@ -84,7 +105,7 @@ fn main() {
 
         // Restore or start fresh.
         let initial = if config.app.restore_session && !no_restore {
-            nox_ui::persist::load_plan().map(|p| Initial::Restored(Box::new(p))).unwrap_or(Initial::Fresh)
+            nox_ui::persist::load_plan().map_or(Initial::Fresh, |p| Initial::Restored(Box::new(p)))
         } else {
             Initial::Fresh
         };
@@ -133,7 +154,7 @@ fn main() {
 
         // Live reload of config.toml (SPEC §11).
         let (cfg_tx, cfg_rx) = async_channel::unbounded();
-        match nox_config::watch(config_path.clone(), move |res| {
+        match nox_config::watch(&config_path, move |res| {
             let _ = cfg_tx.try_send(res);
         }) {
             Ok(handle) => std::mem::forget(handle),
@@ -142,7 +163,7 @@ fn main() {
         cx.spawn(async move |cx| {
             while let Ok(res) = cfg_rx.recv().await {
                 let _ = cx.update(|cx| match res {
-                    Ok((config, notices)) => nox_ui::config_io::apply(cx, config, notices),
+                    Ok((config, notices)) => nox_ui::config_io::apply(cx, config, &notices),
                     Err(e) => {
                         cx.set_global(nox_ui::config_io::ConfigError(Some(e.to_string())));
                         nox_ui::toast::show(cx, format!("config.toml: {e}"));
@@ -238,7 +259,7 @@ fn main() {
         {
             let root = root.clone();
             cx.on_app_quit(move |cx| {
-                root.update(cx, |r, cx| r.save_session_now(cx));
+                root.update(cx, nox_ui::root::Root::save_session_now);
                 if let Ok(b) = window.update(cx, |_, window, _| window.bounds()) {
                     let path = nox_config::config_path();
                     let _ =

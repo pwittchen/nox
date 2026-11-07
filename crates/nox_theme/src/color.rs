@@ -14,20 +14,24 @@ impl Rgba {
     pub const WHITE: Rgba = Rgba::rgb(1.0, 1.0, 1.0);
     pub const TRANSPARENT: Rgba = Rgba::new(0.0, 0.0, 0.0, 0.0);
 
+    #[must_use]
     pub const fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
 
+    #[must_use]
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b, a: 1.0 }
     }
 
     /// From 8-bit channels.
+    #[must_use]
     pub fn from_u8(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0)
+        Self::new(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0, f32::from(a) / 255.0)
     }
 
     /// Parses `#rgb`, `#rrggbb` or `#rrggbbaa` (the `#` is required).
+    #[must_use]
     pub fn from_hex(s: &str) -> Option<Self> {
         let hex = s.trim().strip_prefix('#')?;
         if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -36,7 +40,7 @@ impl Rgba {
         let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
         match hex.len() {
             3 => {
-                let n = |i: usize| u8::from_str_radix(&hex[i..i + 1], 16).ok().map(|v| v * 17);
+                let n = |i: usize| u8::from_str_radix(&hex[i..=i], 16).ok().map(|v| v * 17);
                 Some(Self::from_u8(n(0)?, n(1)?, n(2)?, 255))
             }
             6 => Some(Self::from_u8(byte(0)?, byte(2)?, byte(4)?, 255)),
@@ -50,6 +54,7 @@ impl Rgba {
     }
 
     /// `#rrggbb`, or `#rrggbbaa` when not fully opaque.
+    #[must_use]
     pub fn to_hex(self) -> String {
         let (r, g, b, a) =
             (Self::to_u8(self.r), Self::to_u8(self.g), Self::to_u8(self.b), Self::to_u8(self.a));
@@ -57,11 +62,13 @@ impl Rgba {
     }
 
     /// The same color with a different alpha.
+    #[must_use]
     pub fn with_alpha(self, a: f32) -> Self {
         Self { a, ..self }
     }
 
     /// Linear interpolation towards `other` (`t = 0` → self, `t = 1` → other), alpha included.
+    #[must_use]
     pub fn mix(self, other: Rgba, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         let l = |a: f32, b: f32| a + (b - a) * t;
@@ -69,6 +76,7 @@ impl Rgba {
     }
 
     /// Composites `self` (using its alpha) over an opaque `bg`; the result is opaque.
+    #[must_use]
     pub fn blend(self, bg: Rgba) -> Self {
         let a = self.a.clamp(0.0, 1.0);
         let l = |f: f32, b: f32| f * a + b * (1.0 - a);
@@ -76,6 +84,7 @@ impl Rgba {
     }
 
     /// WCAG 2 relative luminance (alpha ignored).
+    #[must_use]
     pub fn relative_luminance(self) -> f32 {
         fn lin(c: f32) -> f32 {
             let c = c.clamp(0.0, 1.0);
@@ -85,6 +94,7 @@ impl Rgba {
     }
 
     /// Whether the color reads as dark (luminance below the midpoint).
+    #[must_use]
     pub fn is_dark(self) -> bool {
         self.relative_luminance() < 0.18
     }
@@ -92,6 +102,7 @@ impl Rgba {
 
 /// WCAG 2 contrast ratio (1.0–21.0), alpha ignored. Composite with [`Rgba::blend`] first for
 /// translucent colors.
+#[must_use]
 pub fn contrast_ratio(a: Rgba, b: Rgba) -> f32 {
     let (la, lb) = (a.relative_luminance(), b.relative_luminance());
     let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
@@ -100,6 +111,7 @@ pub fn contrast_ratio(a: Rgba, b: Rgba) -> f32 {
 
 /// Lightens or darkens `fg` just enough to reach `min_ratio` against `bg`
 /// (`terminal.minimum_contrast`). `min_ratio <= 1` returns `fg` unchanged. Alpha is kept.
+#[must_use]
 pub fn ensure_contrast(fg: Rgba, bg: Rgba, min_ratio: f32) -> Rgba {
     if min_ratio <= 1.0 || contrast_ratio(fg, bg) >= min_ratio {
         return fg;
@@ -112,7 +124,7 @@ pub fn ensure_contrast(fg: Rgba, bg: Rgba, min_ratio: f32) -> Rgba {
         // Binary search for the smallest step that meets the ratio.
         let (mut lo, mut hi) = (0.0f32, 1.0f32);
         for _ in 0..20 {
-            let mid = (lo + hi) / 2.0;
+            let mid = f32::midpoint(lo, hi);
             if contrast_ratio(fg.mix(target, mid), bg) >= min_ratio {
                 hi = mid;
             } else {

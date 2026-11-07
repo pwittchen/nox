@@ -29,6 +29,7 @@ impl AssetSource for Assets {
 
 /// The directory holding bundled resources (`assets/` in a checkout, `Contents/Resources/assets`
 /// in the app bundle).
+#[must_use]
 pub fn resources_dir() -> PathBuf {
     if let Some(res) = nox_mac::bundle_resources_dir() {
         let p = res.join("assets");
@@ -68,6 +69,7 @@ pub const BUNDLED_UI_FONTS: &[(&str, &str)] =
 pub const SYSTEM_TERMINAL_FONTS: &[&str] = &["SF Mono", "Menlo"];
 
 /// Font files of a bundled family (empty if the family isn't bundled).
+#[must_use]
 pub fn font_files(family: &str) -> Vec<PathBuf> {
     let slug = BUNDLED_TERMINAL_FONTS
         .iter()

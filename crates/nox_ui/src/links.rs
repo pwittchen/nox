@@ -14,7 +14,7 @@ static URL: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static PATH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?:~|\.{1,2})?/?[A-Za-z0-9_@+\-.]+(?:/[A-Za-z0-9_@+\-.]+)*/?(?::\d+(?::\d+)?)?"#).unwrap()
+    Regex::new(r"(?:~|\.{1,2})?/?[A-Za-z0-9_@+\-.]+(?:/[A-Za-z0-9_@+\-.]+)*/?(?::\d+(?::\d+)?)?").unwrap()
 });
 
 /// Find a link in `text` covering byte index `idx`. Returns its byte range and target.

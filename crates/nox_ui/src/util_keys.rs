@@ -2,6 +2,7 @@
 
 use gpui::Keystroke;
 
+#[must_use]
 pub fn pretty_keystroke(k: &Keystroke) -> String {
     let mut s = String::new();
     let m = &k.modifiers;
@@ -21,6 +22,7 @@ pub fn pretty_keystroke(k: &Keystroke) -> String {
     s
 }
 
+#[must_use]
 pub fn pretty_key(key: &str) -> String {
     match key {
         "enter" => "↵".into(),
@@ -49,6 +51,7 @@ pub fn pretty_key(key: &str) -> String {
 }
 
 /// Parse a config shortcut (`cmd-shift-d`) and render it.
+#[must_use]
 pub fn pretty_shortcut(s: &str) -> String {
     s.split_whitespace()
         .filter_map(|part| Keystroke::parse(part).ok())
@@ -58,6 +61,7 @@ pub fn pretty_shortcut(s: &str) -> String {
 }
 
 /// A keystroke as config text (`cmd-shift-d`).
+#[must_use]
 pub fn keystroke_to_config(k: &Keystroke) -> String {
     let mut parts = Vec::new();
     if k.modifiers.control {

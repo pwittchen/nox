@@ -131,6 +131,7 @@ fn bind<A: Action + Default>(keys: &str, ctx: Option<&str>) -> KeyBinding {
 
 /// `(config key, binding constructor, default shortcut, context)`. The config key is what
 /// `[keys]` uses.
+#[must_use]
 pub fn default_bindings() -> Vec<(&'static str, BindFn, &'static str, Option<&'static str>)> {
     let r = Some(ROOT);
     let t = Some(TERMINAL);
@@ -254,6 +255,7 @@ pub fn bind_keys(cx: &mut App, keys: &BTreeMap<String, CfgKey>) {
 }
 
 /// The native menu bar (SPEC §10): nox, Shell, Edit, View, Window, Help.
+#[must_use]
 pub fn menus() -> Vec<Menu> {
     vec![
         Menu {
@@ -368,6 +370,7 @@ pub fn menus() -> Vec<Menu> {
 }
 
 /// The palette's command list: (label, action). Shortcuts are looked up from the keymap.
+#[must_use]
 pub fn palette_commands() -> Vec<(&'static str, Box<dyn Action>)> {
     vec![
         ("New Tab", Box::new(NewTab)),

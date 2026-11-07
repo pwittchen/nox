@@ -23,12 +23,14 @@ impl Settings {
         cx.global::<Settings>()
     }
 
+    #[must_use]
     pub fn new(config: Config, a11y: nox_mac::Accessibility) -> Self {
         let term_font = term_font(&config);
         let ui_font = ui_font(&config);
         Self { config: Arc::new(config), term_font, ui_font, a11y }
     }
 
+    #[must_use]
     pub fn reduce_motion(&self) -> bool {
         self.a11y.reduce_motion
     }
@@ -37,6 +39,7 @@ impl Settings {
 pub const DEFAULT_TERMINAL_FONT: &str = "JetBrains Mono";
 pub const SYSTEM_UI_FONT: &str = ".SystemUIFont";
 
+#[must_use]
 pub fn parse_weight(s: &str) -> FontWeight {
     match s.trim().to_ascii_lowercase().as_str() {
         "thin" | "100" => FontWeight::THIN,
@@ -51,7 +54,8 @@ pub fn parse_weight(s: &str) -> FontWeight {
     }
 }
 
-/// `font.family` is a family or a comma-separated list, always followed by JetBrains Mono.
+/// `font.family` is a family or a comma-separated list, always followed by `JetBrains` Mono.
+#[must_use]
 pub fn term_font(config: &Config) -> TermFont {
     let mut families: Vec<String> =
         config.font.family.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
@@ -73,6 +77,7 @@ pub fn term_font(config: &Config) -> TermFont {
     }
 }
 
+#[must_use]
 pub fn ui_font(config: &Config) -> SharedString {
     let f = config.ui.font_family.trim();
     if f.is_empty() || f.eq_ignore_ascii_case("system") {

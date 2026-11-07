@@ -21,10 +21,12 @@ impl RateLimiter {
     pub const WINDOW: Duration = Duration::from_secs(10);
 
     /// 20 events per 10 s per pane.
+    #[must_use]
     pub fn new() -> Self {
         Self::with_limit(Self::MAX_EVENTS, Self::WINDOW)
     }
 
+    #[must_use]
     pub fn with_limit(max: usize, window: Duration) -> Self {
         Self { max, window, events: HashMap::new() }
     }

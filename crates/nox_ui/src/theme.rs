@@ -31,11 +31,13 @@ pub struct Theme {
 
 impl Global for Theme {}
 
+#[must_use]
 pub fn to_hsla(c: TRgba) -> Hsla {
     Rgba { r: c.r, g: c.g, b: c.b, a: c.a }.into()
 }
 
 impl Theme {
+    #[must_use]
     pub fn from_variant(name: &str, v: &ThemeVariant, dark: bool, single_variant: bool) -> Self {
         let rgb = nox_theme::palette256(v);
         let mut pal = [Hsla::default(); 256];
@@ -64,11 +66,13 @@ impl Theme {
 
     /// One of the ANSI color names (`"cyan"`, `"bright-blue"`) → color; used for workspace
     /// swatches so they follow the theme.
+    #[must_use]
     pub fn named(&self, name: &str) -> Option<Hsla> {
         let idx = nox_theme::ANSI_NAMES.iter().position(|n| *n == name)?;
         Some(self.palette[idx])
     }
 
+    #[must_use]
     pub fn ansi(&self, i: usize) -> Hsla {
         self.palette[i.min(255)]
     }
@@ -89,6 +93,7 @@ pub struct ThemeState {
 
 impl Global for ThemeState {}
 
+#[must_use]
 pub fn is_dark(mode: Mode, appearance: WindowAppearance) -> bool {
     match mode {
         Mode::Dark => true,
@@ -97,6 +102,7 @@ pub fn is_dark(mode: Mode, appearance: WindowAppearance) -> bool {
     }
 }
 
+#[must_use]
 pub fn load_theme_file(name: &str) -> (ThemeFile, Vec<String>) {
     nox_theme::load_theme(name, &nox_config::themes_dir())
 }

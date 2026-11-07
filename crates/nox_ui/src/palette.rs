@@ -69,31 +69,38 @@ impl PaletteItem {
     pub fn header(label: impl Into<SharedString>) -> Self {
         Self { label: label.into(), header: true, ..Default::default() }
     }
+    #[must_use]
     pub fn detail(mut self, d: impl Into<SharedString>) -> Self {
         self.detail = Some(d.into());
         self
     }
+    #[must_use]
     pub fn hint(mut self, h: impl Into<SharedString>) -> Self {
         self.hint = Some(h.into());
         self
     }
+    #[must_use]
     pub fn icon(mut self, path: impl Into<SharedString>, color: Option<Hsla>) -> Self {
         self.icon = Some(path.into());
         self.icon_color = color;
         self
     }
+    #[must_use]
     pub fn dot(mut self, c: Option<Hsla>) -> Self {
         self.dot = c;
         self
     }
+    #[must_use]
     pub fn keywords(mut self, k: impl Into<String>) -> Self {
         self.keywords = Some(k.into());
         self
     }
+    #[must_use]
     pub fn on_select(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         self
     }
+    #[must_use]
     pub fn on_highlight(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_highlight = Some(Rc::new(f));
         self
@@ -214,9 +221,16 @@ impl Palette {
                 }
                 let hay = match &it.keywords {
                     Some(k) => {
-                        format!("{} {} {}", it.label, it.detail.as_ref().map(|d| d.as_ref()).unwrap_or(""), k)
+                        format!(
+                            "{} {} {}",
+                            it.label,
+                            it.detail.as_ref().map_or("", std::convert::AsRef::as_ref),
+                            k
+                        )
                     }
-                    None => format!("{} {}", it.label, it.detail.as_ref().map(|d| d.as_ref()).unwrap_or("")),
+                    None => {
+                        format!("{} {}", it.label, it.detail.as_ref().map_or("", std::convert::AsRef::as_ref))
+                    }
                 };
                 fuzzy_score(&q, &hay).map(|s| (s, i))
             })

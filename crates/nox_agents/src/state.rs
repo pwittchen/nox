@@ -44,6 +44,7 @@ pub enum AgentState {
 }
 
 impl AgentState {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             AgentState::Working => "working",
@@ -97,6 +98,7 @@ pub struct Transition {
 
 impl Transition {
     /// Attention rule of 7.11: needs-input always; idle after a turn of at least `min`.
+    #[must_use]
     pub fn wants_attention(&self, min: Duration) -> bool {
         match self.to {
             AgentState::NeedsInput => true,
@@ -140,30 +142,38 @@ impl AgentTracker {
         }
     }
 
+    #[must_use]
     pub fn kind(&self) -> &str {
         &self.kind
     }
+    #[must_use]
     pub fn state(&self) -> AgentState {
         self.state
     }
     /// When the current state was entered.
+    #[must_use]
     pub fn since(&self) -> Instant {
         self.since
     }
+    #[must_use]
     pub fn message(&self) -> Option<&str> {
         self.message.as_deref()
     }
+    #[must_use]
     pub fn session_id(&self) -> Option<&str> {
         self.session.as_deref()
     }
     /// Start of the current turn, while one is in progress.
+    #[must_use]
     pub fn turn_started(&self) -> Option<Instant> {
         self.turn_started
     }
+    #[must_use]
     pub fn source(&self) -> StateSource {
         self.source
     }
     /// Has the agent ever reported explicitly (so heuristics are off)?
+    #[must_use]
     pub fn has_report(&self) -> bool {
         self.has_report
     }
@@ -288,6 +298,7 @@ impl AgentTracker {
     }
 
     /// When [`AgentTracker::tick`] could next change the state, if it can.
+    #[must_use]
     pub fn next_tick(&self) -> Option<Instant> {
         if self.state != AgentState::Working || self.has_report || self.has_title {
             return None;
@@ -300,6 +311,7 @@ impl AgentTracker {
 /// The session id an agent was started with, from its arguments (after the executable or
 /// script): `--resume <id>` / `--resume=<id>`, `-r <id>`, `--session-id <id>`, and for codex
 /// `resume <id>` (not `resume --last`).
+#[must_use]
 pub fn session_id_from_cmdline(kind: &str, args: &[String]) -> Option<String> {
     let valid = |s: &str| !s.is_empty() && !s.starts_with('-');
     let mut i = 0;

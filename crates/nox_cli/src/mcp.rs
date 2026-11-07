@@ -56,7 +56,9 @@ pub fn serve(backend: &mut impl IpcBackend) -> std::io::Result<()> {
 }
 
 fn rpc_result(id: &Value, result: Value) -> String {
-    json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+    let mut response = json!({"jsonrpc": "2.0", "id": id});
+    response["result"] = result;
+    response.to_string()
 }
 
 fn rpc_error(id: &Value, code: i64, message: &str) -> String {
@@ -145,16 +147,17 @@ const TOOL_NAMES: &[&str] = &[
 ];
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
-    json!({
+    let mut tool = json!({
         "name": name,
         "description": description,
         "inputSchema": {
             "type": "object",
-            "properties": properties,
             "required": required,
             "additionalProperties": false
         }
-    })
+    });
+    tool["inputSchema"]["properties"] = properties;
+    tool
 }
 
 /// Tool definitions with JSON Schemas.
@@ -397,24 +400,24 @@ pub fn tool_to_method(name: &str, args: &Value) -> Result<(Method, Option<Durati
     Ok((m, None))
 }
 
-fn text_result(text: String, is_error: bool) -> Value {
+fn text_result(text: &str, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
 fn call_tool(name: &str, args: &Value, backend: &mut impl IpcBackend) -> Value {
     let (method, timeout) = match tool_to_method(name, args) {
         Ok(m) => m,
-        Err(e) => return text_result(format!("invalid arguments: {e}"), true),
+        Err(e) => return text_result(&format!("invalid arguments: {e}"), true),
     };
     let is_read = matches!(method, Method::Read { .. });
     match backend.call(method, timeout) {
         Ok(v) => {
             let text = match (is_read, v.get("text").and_then(Value::as_str)) {
                 (true, Some(t)) => t.to_string(),
-                _ if v.is_null() || v.as_object().is_some_and(|o| o.is_empty()) => "ok".into(),
+                _ if v.is_null() || v.as_object().is_some_and(serde_json::Map::is_empty) => "ok".into(),
                 _ => serde_json::to_string_pretty(&v).unwrap_or_default(),
             };
-            let mut r = text_result(text, false);
+            let mut r = text_result(&text, false);
             if v.is_object() && !is_read {
                 r["structuredContent"] = v;
             }
@@ -426,7 +429,7 @@ fn call_tool(name: &str, args: &Value, backend: &mut impl IpcBackend) -> Value {
                 text.push('\n');
                 text.push_str(&serde_json::to_string_pretty(data).unwrap_or_default());
             }
-            text_result(text, true)
+            text_result(&text, true)
         }
     }
 }
@@ -454,7 +457,7 @@ mod tests {
         }
     }
 
-    fn rpc(line: Value, fake: &mut Fake) -> Value {
+    fn rpc(line: &Value, fake: &mut Fake) -> Value {
         serde_json::from_str(&handle_jsonrpc(&line.to_string(), fake).expect("response")).unwrap()
     }
 
@@ -462,7 +465,7 @@ mod tests {
     fn handshake_list_call() {
         let mut fake = Fake::default();
         let init = rpc(
-            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
                 "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}),
             &mut fake,
         );
@@ -477,7 +480,7 @@ mod tests {
             None
         );
 
-        let list = rpc(json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}), &mut fake);
+        let list = rpc(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}), &mut fake);
         let tools = list["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, TOOL_NAMES);
@@ -490,7 +493,7 @@ mod tests {
         }
 
         let call = rpc(
-            json!({"jsonrpc":"2.0","id":"x","method":"tools/call","params":{"name":"read_pane","arguments":{"pane":"backend","mode":"lines","lines":10}}}),
+            &json!({"jsonrpc":"2.0","id":"x","method":"tools/call","params":{"name":"read_pane","arguments":{"pane":"backend","mode":"lines","lines":10}}}),
             &mut fake,
         );
         assert_eq!(call["id"], "x");
@@ -503,13 +506,13 @@ mod tests {
         );
 
         let ls = rpc(
-            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_panes"}}),
+            &json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_panes"}}),
             &mut fake,
         );
         assert_eq!(ls["result"]["structuredContent"], json!({"workspaces": []}));
 
         let st = rpc(
-            json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_status","arguments":{"state":"needs-input","session":"s"}}}),
+            &json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_status","arguments":{"state":"needs-input","session":"s"}}}),
             &mut fake,
         );
         assert_eq!(st["result"]["content"][0]["text"], "ok");
@@ -523,12 +526,12 @@ mod tests {
     fn older_version_is_accepted_unknown_is_not() {
         let mut fake = Fake::default();
         let r = rpc(
-            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}),
+            &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}),
             &mut fake,
         );
         assert_eq!(r["result"]["protocolVersion"], "2024-11-05");
         let r = rpc(
-            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}),
+            &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}),
             &mut fake,
         );
         assert_eq!(r["result"]["protocolVersion"], PROTOCOL_VERSION);
@@ -537,25 +540,25 @@ mod tests {
     #[test]
     fn errors() {
         let mut fake = Fake::default();
-        let r = rpc(json!({"jsonrpc":"2.0","id":1,"method":"ping"}), &mut fake);
+        let r = rpc(&json!({"jsonrpc":"2.0","id":1,"method":"ping"}), &mut fake);
         assert_eq!(r["result"], json!({}));
-        let r = rpc(json!({"jsonrpc":"2.0","id":2,"method":"resources/list"}), &mut fake);
+        let r = rpc(&json!({"jsonrpc":"2.0","id":2,"method":"resources/list"}), &mut fake);
         assert_eq!(r["error"]["code"], -32601);
         let r: Value = serde_json::from_str(&handle_jsonrpc("{oops", &mut fake).unwrap()).unwrap();
         assert_eq!(r["error"]["code"], -32700);
         assert_eq!(r["id"], Value::Null);
         let r =
-            rpc(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope"}}), &mut fake);
+            rpc(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope"}}), &mut fake);
         assert_eq!(r["error"]["code"], -32602);
         // Bad arguments → tool error result, not a protocol error.
         let r = rpc(
-            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_pane","arguments":{}}}),
+            &json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_pane","arguments":{}}}),
             &mut fake,
         );
         assert_eq!(r["result"]["isError"], true);
         // IPC error → isError with the code and details.
         let r = rpc(
-            json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"claim_paths","arguments":{"paths":["a"]}}}),
+            &json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"claim_paths","arguments":{"paths":["a"]}}}),
             &mut fake,
         );
         assert_eq!(r["result"]["isError"], true);

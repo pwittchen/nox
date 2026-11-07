@@ -37,6 +37,7 @@ impl Render for DraggedTab {
     }
 }
 
+#[must_use]
 pub fn status_dot(theme: &Theme, status: TabStatus) -> Option<Hsla> {
     crate::pane::status_color(theme, status)
 }
@@ -191,7 +192,7 @@ fn render_titlebar(root: &mut Root, window: &mut Window, cx: &mut Context<Root>)
                     icon_button("sidebar-toggle", "icons/ui/sidebar.svg", &theme)
                         .when(visible, |d| d.text_color(theme.text))
                         .on_click(cx.listener(|_, _, window, cx| {
-                            window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx)
+                            window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx);
                         })),
                 )
                 .child(drag_region("titlebar-drag"))
@@ -212,14 +213,14 @@ fn palette_and_plus(cx: &mut Context<Root>) -> AnyElement {
             icon_button("palette-button", "icons/ui/command.svg", &theme)
                 .tooltip(|window, cx| crate::util::tooltip("Command Palette  ⌘K".into(), window, cx))
                 .on_click(cx.listener(|_, _, window, cx| {
-                    window.dispatch_action(Box::new(crate::actions::CommandPalette), cx)
+                    window.dispatch_action(Box::new(crate::actions::CommandPalette), cx);
                 })),
         )
         .child(
             icon_button("new-tab-button", "icons/ui/plus.svg", &theme)
                 .tooltip(|window, cx| crate::util::tooltip("New Tab  ⌘T".into(), window, cx))
                 .on_click(cx.listener(|_, _, window, cx| {
-                    window.dispatch_action(Box::new(crate::actions::NewTab), cx)
+                    window.dispatch_action(Box::new(crate::actions::NewTab), cx);
                 })),
         )
         .into_any_element()
@@ -243,11 +244,8 @@ fn render_workspace_chip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement 
         _ => None,
     };
     let tip = {
-        let root_dir = ws
-            .root
-            .as_ref()
-            .map(|r| nox_terminal::process::tildify(r))
-            .unwrap_or_else(|| "no root folder".into());
+        let root_dir =
+            ws.root.as_ref().map_or_else(|| "no root folder".into(), |r| nox_terminal::process::tildify(r));
         let cwd = root
             .focused_pane()
             .and_then(|p| p.read(cx).cwd.clone())
@@ -305,8 +303,7 @@ fn tab_pill(root: &Root, ws_idx: usize, index: usize, active: bool, cx: &mut Con
         TabStatus::Done | TabStatus::Bell if active && root.window_active => None,
         s => status_dot(&theme, s),
     };
-    let icon =
-        root.panes.get(&tab.focused).map(|p| p.read(cx).icon.clone()).unwrap_or(nox_agents::Icon::TERMINAL);
+    let icon = root.panes.get(&tab.focused).map_or(nox_agents::Icon::TERMINAL, |p| p.read(cx).icon.clone());
     let is_terminal = icon == nox_agents::Icon::TERMINAL;
     let icon_color = if active && is_terminal {
         theme.ansi(2).opacity(0.85)
@@ -320,45 +317,44 @@ fn tab_pill(root: &Root, ws_idx: usize, index: usize, active: bool, cx: &mut Con
     let group = SharedString::from(format!("tab-{tab_id}"));
     let label: SharedString = title.clone().into();
 
-    let icon_slot =
-        div()
-            .relative()
-            .size(px(14.))
-            .flex_none()
-            .child(
-                div()
-                    .group_hover(group.clone(), |s| s.invisible())
-                    .child(icon_element(&icon, 14., icon_color, cx)),
-            )
-            .child(
-                div()
-                    .id(SharedString::from(format!("tab-close-{tab_id}")))
-                    .absolute()
-                    .inset_0()
-                    .invisible()
-                    .group_hover(group.clone(), |s| s.visible())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(3.))
-                    .hover(|s| s.bg(theme.text.opacity(0.1)))
-                    .child(svg().path("icons/ui/close.svg").size(px(11.)).text_color(theme.text_muted))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |root, _, window, cx| {
-                        root.request_close_tab(ws_idx, tab_id, window, cx)
-                    })),
-            )
-            .children(dot.map(|c| {
-                div()
-                    .absolute()
-                    .top(px(-2.))
-                    .right(px(-3.))
-                    .size(px(7.))
-                    .rounded_full()
-                    .bg(c)
-                    .border_1()
-                    .border_color(if active { theme.bg_elevated } else { theme.bg_sidebar })
-            }));
+    let icon_slot = div()
+        .relative()
+        .size(px(14.))
+        .flex_none()
+        .child(
+            div()
+                .group_hover(group.clone(), gpui::Styled::invisible)
+                .child(icon_element(&icon, 14., icon_color, cx)),
+        )
+        .child(
+            div()
+                .id(SharedString::from(format!("tab-close-{tab_id}")))
+                .absolute()
+                .inset_0()
+                .invisible()
+                .group_hover(group.clone(), gpui::Styled::visible)
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .hover(|s| s.bg(theme.text.opacity(0.1)))
+                .child(svg().path("icons/ui/close.svg").size(px(11.)).text_color(theme.text_muted))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |root, _, window, cx| {
+                    root.request_close_tab(ws_idx, tab_id, window, cx);
+                })),
+        )
+        .children(dot.map(|c| {
+            div()
+                .absolute()
+                .top(px(-2.))
+                .right(px(-3.))
+                .size(px(7.))
+                .rounded_full()
+                .bg(c)
+                .border_1()
+                .border_color(if active { theme.bg_elevated } else { theme.bg_sidebar })
+        }));
 
     let content: AnyElement = if renaming {
         let input = root.rename.as_ref().unwrap().input.clone();
@@ -415,7 +411,7 @@ fn tab_pill(root: &Root, ws_idx: usize, index: usize, active: bool, cx: &mut Con
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |root, _, window, cx| {
-                crate::menus::tab_context_menu(root, ws_idx, tab_id, window, cx)
+                crate::menus::tab_context_menu(root, ws_idx, tab_id, window, cx);
             }),
         )
         .on_drag(DraggedTab { ws: ws_idx, tab: tab_id, label }, |d, _, _, cx| cx.new(|_| d.clone()))
@@ -475,8 +471,8 @@ fn sidebar_row(root: &Root, ws_idx: usize, index: usize, cx: &mut Context<Root>)
         s => status_dot(&theme, s),
     };
     let pane = root.panes.get(&tab.focused).map(|p| p.read(cx));
-    let icon = pane.map(|p| p.icon.clone()).unwrap_or(nox_agents::Icon::TERMINAL);
-    let cwd = pane.map(|p| p.cwd_display()).unwrap_or_default();
+    let icon = pane.map_or(nox_agents::Icon::TERMINAL, |p| p.icon.clone());
+    let cwd = pane.map(super::pane::Pane::cwd_display).unwrap_or_default();
     let branch =
         pane.and_then(|p| p.branch.clone()).filter(|_| Settings::global(cx).config.ui.show_git_branch);
     let second = {
@@ -539,7 +535,7 @@ fn sidebar_row(root: &Root, ws_idx: usize, index: usize, cx: &mut Context<Root>)
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |root, _, window, cx| {
-                crate::menus::tab_context_menu(root, ws_idx, tab_id, window, cx)
+                crate::menus::tab_context_menu(root, ws_idx, tab_id, window, cx);
             }),
         )
         .on_drag(DraggedTab { ws: ws_idx, tab: tab_id, label }, |d, _, _, cx| cx.new(|_| d.clone()))
@@ -599,10 +595,10 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
         .children(if all { dot } else { others }.map(|c| div().size(px(6.)).rounded_full().bg(c)))
         .child(svg().path("icons/ui/chevron-down.svg").size(px(12.)).text_color(theme.text_muted))
         .on_click(cx.listener(move |root, _, window, cx| {
-            if ws_idx != root.ws.active {
-                root.switch_workspace(ws_idx, window, cx);
-            } else {
+            if ws_idx == root.ws.active {
                 crate::menus::workspace_menu(root, window, cx);
+            } else {
+                root.switch_workspace(ws_idx, window, cx);
             }
         }))
         .on_mouse_down(
@@ -611,7 +607,7 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
         )
         .drag_over::<DraggedTab>(move |s, _, _, cx| s.bg(Theme::global(cx).accent.opacity(0.12)))
         .on_drop(cx.listener(move |root, d: &DraggedTab, window, cx| {
-            root.move_tab_to_workspace(d.ws, d.tab, ws_idx, window, cx)
+            root.move_tab_to_workspace(d.ws, d.tab, ws_idx, window, cx);
         }))
         .into_any_element()
 }

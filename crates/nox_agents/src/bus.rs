@@ -93,6 +93,7 @@ pub struct Message {
 
 impl Message {
     /// Is `pane` a recipient?
+    #[must_use]
     pub fn is_for(&self, pane: u64) -> bool {
         match self.to {
             Recipient::Pane(p) => p == pane,
@@ -100,6 +101,7 @@ impl Message {
         }
     }
 
+    #[must_use]
     pub fn is_read_by(&self, pane: u64) -> bool {
         self.read_by.contains(&pane)
     }
@@ -113,7 +115,7 @@ enum Line {
 }
 
 fn unix_ms(t: SystemTime) -> u64 {
-    t.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 #[derive(Debug, Default)]
@@ -127,6 +129,7 @@ pub struct MessageBus {
 
 impl MessageBus {
     /// An in-memory bus.
+    #[must_use]
     pub fn new() -> Self {
         Self { next_id: 1, ..Default::default() }
     }
@@ -257,6 +260,7 @@ impl MessageBus {
         out
     }
 
+    #[must_use]
     pub fn unread_count(&self, pane: u64) -> usize {
         self.messages.iter().filter(|m| m.is_for(pane) && !m.is_read_by(pane)).count()
     }
@@ -266,10 +270,12 @@ impl MessageBus {
         self.messages.iter()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.messages.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.messages.is_empty()
     }
@@ -319,6 +325,7 @@ impl Default for ActivityLog {
 impl ActivityLog {
     pub const DEFAULT_CAP: usize = 500;
 
+    #[must_use]
     pub fn new(cap: usize) -> Self {
         Self { entries: VecDeque::with_capacity(cap.min(1024)), cap: cap.max(1) }
     }
@@ -345,10 +352,12 @@ impl ActivityLog {
         self.entries.iter().rev()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

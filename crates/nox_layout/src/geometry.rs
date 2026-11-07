@@ -9,6 +9,7 @@ pub struct Point {
 }
 
 impl Point {
+    #[must_use]
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
@@ -21,6 +22,7 @@ pub struct Size {
 }
 
 impl Size {
+    #[must_use]
     pub const fn new(w: f32, h: f32) -> Self {
         Self { w, h }
     }
@@ -35,36 +37,44 @@ pub struct Rect {
 }
 
 impl Rect {
+    #[must_use]
     pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
     }
 
+    #[must_use]
     pub fn right(&self) -> f32 {
         self.x + self.w
     }
 
+    #[must_use]
     pub fn bottom(&self) -> f32 {
         self.y + self.h
     }
 
+    #[must_use]
     pub fn center(&self) -> Point {
         Point::new(self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
 
+    #[must_use]
     pub fn size(&self) -> Size {
         Size::new(self.w, self.h)
     }
 
+    #[must_use]
     pub fn area(&self) -> f32 {
         self.w.max(0.0) * self.h.max(0.0)
     }
 
     /// Half-open containment: `[x, right) × [y, bottom)`.
+    #[must_use]
     pub fn contains(&self, p: Point) -> bool {
         p.x >= self.x && p.x < self.right() && p.y >= self.y && p.y < self.bottom()
     }
 
     /// Area of the intersection with `other` (0 when they don't overlap).
+    #[must_use]
     pub fn intersection_area(&self, other: &Rect) -> f32 {
         let w = self.right().min(other.right()) - self.x.max(other.x);
         let h = self.bottom().min(other.bottom()) - self.y.max(other.y);
@@ -85,6 +95,7 @@ pub enum Direction {
 impl Direction {
     pub const ALL: [Direction; 4] = [Self::Left, Self::Right, Self::Up, Self::Down];
 
+    #[must_use]
     pub fn opposite(self) -> Self {
         match self {
             Self::Left => Self::Right,
@@ -96,6 +107,7 @@ impl Direction {
 
     /// The split direction whose divider moves along this direction:
     /// left/right → [`SplitDirection::Vertical`], up/down → [`SplitDirection::Horizontal`].
+    #[must_use]
     pub fn axis(self) -> SplitDirection {
         match self {
             Self::Left | Self::Right => SplitDirection::Vertical,

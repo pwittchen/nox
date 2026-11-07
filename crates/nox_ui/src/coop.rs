@@ -72,7 +72,7 @@ impl Root {
                 let task = cx.spawn_in(window, async move |this, cx| {
                     while let Ok((caller, method, reply)) = rx.recv().await {
                         let ok = this.update_in(cx, |this, window, cx| {
-                            this.handle_ipc(caller, method, reply, window, cx)
+                            this.handle_ipc(caller, method, reply, window, cx);
                         });
                         if ok.is_err() {
                             break;
@@ -84,7 +84,7 @@ impl Root {
                 let tick = cx.spawn(async move |this, cx| {
                     loop {
                         cx.background_executor().timer(Duration::from_secs(1)).await;
-                        if this.update(cx, |this, cx| this.ipc_tick(cx)).is_err() {
+                        if this.update(cx, super::root::Root::ipc_tick).is_err() {
                             break;
                         }
                     }
@@ -111,7 +111,7 @@ impl Root {
             self.coop_changed(cx);
         }
         let Some(ipc) = &mut self.ipc else { return };
-        for w in ipc.waiters.iter_mut() {
+        for w in &mut ipc.waiters {
             if w.deadline.is_some_and(|d| now >= d)
                 && let Some(r) = w.reply.take()
             {
@@ -254,7 +254,8 @@ impl Root {
                 match text {
                     Some(Some(text)) => reply.ok_typed(&ReadResult { text }),
                     Some(None) => {
-                        reply.err(ErrorCode::NotFound, "no finished command output (needs shell integration)")
+                        reply
+                            .err(ErrorCode::NotFound, "no finished command output (needs shell integration)");
                     }
                     None => reply.err(ErrorCode::NotFound, "pane has no session"),
                 }
@@ -456,7 +457,7 @@ impl Root {
             Method::Notify { title, body } => {
                 let Some(p) = cpane else { return reply.err(ErrorCode::Unauthorized, "no pane") };
                 if !self.is_looked_at(p) {
-                    self.trigger_attention(p, title, body.unwrap_or_default(), cx);
+                    self.trigger_attention(p, &title, &body.unwrap_or_default(), cx);
                 }
                 reply.ok(serde_json::json!({}));
             }
@@ -476,7 +477,7 @@ impl Root {
     fn workspace_panes(&self, ws: WorkspaceId) -> Vec<PaneId> {
         self.ws
             .index_of(ws)
-            .map(|i| self.ws.list[i].tabs.iter().flat_map(|t| t.panes()).collect())
+            .map(|i| self.ws.list[i].tabs.iter().flat_map(nox_layout::Tab::panes).collect())
             .unwrap_or_default()
     }
 
@@ -501,8 +502,10 @@ impl Root {
                             PaneInfo {
                                 id: p.0,
                                 name: self.pane_name(p, cx),
-                                program: e.and_then(|e| e.process_display_name()),
-                                agent_state: e.and_then(|e| e.agent_state()).map(|s| s.to_string()),
+                                program: e.and_then(super::pane::Pane::process_display_name),
+                                agent_state: e
+                                    .and_then(super::pane::Pane::agent_state)
+                                    .map(|s| s.to_string()),
                                 cwd: e.and_then(|e| e.cwd.as_ref().map(|c| c.to_string_lossy().into_owned())),
                                 branch: e.and_then(|e| e.branch.clone()),
                                 focused: t.focused == p,
@@ -533,7 +536,7 @@ impl Root {
         let root = self.ws.index_of(ws).and_then(|i| self.ws.list[i].root.clone());
         let name = self.pane_name(p, cx);
         let coop = self.coop.entry(ws).or_insert_with(|| crate::root::Coop::new(ws));
-        match coop.claims.claim(p.0, &name, paths, reason.clone(), root.as_deref(), Instant::now()) {
+        match coop.claims.claim(p.0, &name, paths, reason.as_deref(), root.as_deref(), Instant::now()) {
             Ok(()) => {
                 let claimed: Vec<String> = paths
                     .iter()
@@ -591,8 +594,7 @@ impl Root {
             Placement::Tab => {
                 let tab_id = nox_layout::TabId::next();
                 // Insert after the caller's tab, keeping the user's active tab.
-                let after =
-                    self.ws.find_pane(caller).map(|(_, t)| t + 1).unwrap_or(self.ws.list[w].tabs.len());
+                let after = self.ws.find_pane(caller).map_or(self.ws.list[w].tabs.len(), |(_, t)| t + 1);
                 self.ws.list[w].insert_tab(after, nox_layout::Tab::new(tab_id, pane));
                 self.spawn_pane(pane, w, tab_id, spawn, window, cx);
             }
@@ -628,7 +630,7 @@ impl Root {
         let Some(ipc) = &mut self.ipc else { return };
         let mut waiters = std::mem::take(&mut ipc.waiters);
         let now = Instant::now();
-        for w in waiters.iter_mut() {
+        for w in &mut waiters {
             let Some(reply) = w.reply.take() else { continue };
             let done: Option<Result<serde_json::Value, IpcError>> = match &w.kind {
                 WaitKind::State { pane, state } => {
@@ -637,9 +639,8 @@ impl Root {
                         (e.exited.is_some(), e.agent_state())
                     });
                     let reached = match (current, state) {
-                        (None, _) => Some(WaitState::Exited),
-                        (Some((true, _)), _) => Some(WaitState::Exited),
-                        (Some((_, Some(AgentState::Exited))), WaitState::Exited) => Some(WaitState::Exited),
+                        (None | Some((true, _)), _)
+                        | (Some((_, Some(AgentState::Exited))), WaitState::Exited) => Some(WaitState::Exited),
                         (Some((_, Some(AgentState::Idle))), WaitState::Idle) => Some(WaitState::Idle),
                         (Some((_, Some(AgentState::NeedsInput))), WaitState::NeedsInput) => {
                             Some(WaitState::NeedsInput)

@@ -60,7 +60,7 @@ pub fn ensure_loaded(cx: &mut App, config: &Config) {
 /// Families for the terminal font picker: bundled first, then installed monospace-looking ones.
 pub fn terminal_font_choices(cx: &mut App) -> Vec<String> {
     let mut v: Vec<String> = BUNDLED_TERMINAL_FONTS.iter().map(|(n, _)| n.to_string()).collect();
-    v.extend(SYSTEM_TERMINAL_FONTS.iter().map(|s| s.to_string()));
+    v.extend(SYSTEM_TERMINAL_FONTS.iter().map(std::string::ToString::to_string));
     let mut installed: Vec<String> = cx
         .text_system()
         .all_font_names()

@@ -48,8 +48,8 @@ fn shell_quote(s: &str) -> String {
     if safe { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
 }
 
-fn non_empty(s: &Option<String>) -> Option<&str> {
-    s.as_deref().map(str::trim).filter(|s| !s.is_empty())
+fn non_empty(s: Option<&String>) -> Option<&str> {
+    s.map(|s| s.trim()).filter(|s| !s.is_empty())
 }
 
 /// Plans how to bring back each agent pane, in order. Rules:
@@ -59,14 +59,15 @@ fn non_empty(s: &Option<String>) -> Option<&str> {
 /// - no `resume` / `resume_last` configured (or kind unknown) → [`ResumeAction::TypeOnly`] with
 ///   the original command (falling back to the definition's `command`);
 /// - only `resume` configured and no id → [`ResumeAction::SessionUnknown`].
+#[must_use]
 pub fn plan_resume(agents: &[ResumeCandidate], defs: &BTreeMap<String, AgentDefLite>) -> Vec<ResumePlan> {
     let mut last_used: HashSet<(&str, &PathBuf)> = HashSet::new();
     agents
         .iter()
         .map(|a| {
             let def = defs.get(&a.kind);
-            let resume = def.and_then(|d| non_empty(&d.resume));
-            let resume_last = def.and_then(|d| non_empty(&d.resume_last));
+            let resume = def.and_then(|d| non_empty(d.resume.as_ref()));
+            let resume_last = def.and_then(|d| non_empty(d.resume_last.as_ref()));
             let session = a.session_id.as_deref().filter(|s| !s.is_empty());
             let action = match (resume, resume_last, session) {
                 (Some(tpl), _, Some(id)) => ResumeAction::Run(tpl.replace("{session}", &shell_quote(id))),

@@ -5,7 +5,11 @@ use gpui::{Context, Window};
 use nox_layout::{PaneId, TabId};
 use nox_mac::MenuItem;
 
-use crate::actions::*;
+use crate::actions::{
+    AgentsPanel, ClearBuffer, CloseWorkspace, Copy, CopyLastOutput, NewAgentInWorktree, NewAgentTab, NewTab,
+    NewWorkspace, OpenFolderAsWorkspace, Paste, RenameWorkspace, SelectAll, SendSelectionTo, SplitHorizontal,
+    SplitVertical, ToggleMaximizePane,
+};
 use crate::root::{RenameTarget, Root};
 
 type Handler = Box<dyn FnOnce(&mut Root, &mut Window, &mut Context<Root>)>;
@@ -78,7 +82,7 @@ pub fn tab_context_menu(
         root.start_rename(RenameTarget::Tab(tab), window, cx);
     });
     m.add("Set Icon…", move |root, window, cx| {
-        crate::features::set_icon_picker(root, Some(tab), None, window, cx)
+        crate::features::set_icon_picker(root, Some(tab), None, window, cx);
     });
     m.add("Duplicate Tab", move |root, window, cx| root.duplicate_tab(ws_idx, tab, window, cx));
     m.sep();
@@ -104,7 +108,7 @@ pub fn tab_context_menu(
             continue;
         }
         let it = m.item(w.name.clone(), move |root, window, cx| {
-            root.move_tab_to_workspace(ws_idx, tab, i, window, cx)
+            root.move_tab_to_workspace(ws_idx, tab, i, window, cx);
         });
         sub.push(it);
     }
@@ -139,14 +143,14 @@ pub fn pane_context_menu(root: &mut Root, pane: PaneId, window: &mut Window, cx:
                 let u2 = u.clone();
                 m.add("Open Link", move |_, _, cx| cx.open_url(&u));
                 m.add("Copy Link", move |_, _, cx| {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(u2))
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(u2));
                 });
             }
             crate::pane::LinkTarget::Path(p) => {
                 let (p2, p3) = (p.clone(), p.clone());
                 m.add("Open", move |_, _, cx| cx.open_url(&format!("file://{}", p.display())));
                 m.add("Copy Path", move |_, _, cx| {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(p2.to_string_lossy().into_owned()))
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(p2.to_string_lossy().into_owned()));
                 });
                 m.add("Reveal in Finder", move |_, _, cx| cx.reveal_path(&p3));
             }
@@ -166,7 +170,7 @@ pub fn pane_context_menu(root: &mut Root, pane: PaneId, window: &mut Window, cx:
     m.action("Maximize Pane", ToggleMaximizePane);
     m.add("Rename Pane…", move |root, window, cx| root.start_rename(RenameTarget::Pane(pane), window, cx));
     m.add("Set Icon…", move |root, window, cx| {
-        crate::features::set_icon_picker(root, None, Some(pane), window, cx)
+        crate::features::set_icon_picker(root, None, Some(pane), window, cx);
     });
     if is_agent {
         m.sep();

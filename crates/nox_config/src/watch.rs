@@ -59,19 +59,19 @@ impl ChangeFilter {
 /// Watches `path` (through its parent directory, since editors replace files) and calls
 /// `on_change` with the reparsed config after each external change.
 pub fn watch(
-    path: PathBuf,
+    path: &Path,
     on_change: impl Fn(Result<(crate::Config, Vec<Notice>), ParseError>) + Send + 'static,
 ) -> Result<WatchHandle, WatchError> {
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| WatchError::NoParent(path.clone()))?
+        .ok_or_else(|| WatchError::NoParent(path.to_path_buf()))?
         .to_path_buf();
     std::fs::create_dir_all(&dir)?;
-    let file_name = path.file_name().map(|n| n.to_os_string());
-    let initial = std::fs::read(&path).ok();
+    let file_name = path.file_name().map(std::ffi::OsStr::to_os_string);
+    let initial = std::fs::read(path).ok();
     let mut filter = ChangeFilter::new(initial.as_deref());
-    let watched = path.clone();
+    let watched = path.to_path_buf();
 
     let mut debouncer = new_debouncer(DEBOUNCE, move |res: DebounceEventResult| {
         let events = match res {
@@ -81,15 +81,13 @@ pub fn watch(
                 return;
             }
         };
-        let relevant = events.iter().any(|e| e.path.file_name().map(|n| n.to_os_string()) == file_name);
+        let relevant =
+            events.iter().any(|e| e.path.file_name().map(std::ffi::OsStr::to_os_string) == file_name);
         if !relevant {
             return;
         }
-        let bytes = match std::fs::read(&watched) {
-            Ok(b) => b,
-            // Deleted or mid-replace: keep the last good config.
-            Err(_) => return,
-        };
+        // Deleted or mid-replace: keep the last good config.
+        let Ok(bytes) = std::fs::read(&watched) else { return };
         if !filter.should_deliver(&watched, &bytes) {
             return;
         }

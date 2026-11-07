@@ -1,5 +1,26 @@
-//! nox_theme: theme model, the built-in `nox` palette, bundled themes and theme-file parsing
+//! `nox_theme`: theme model, the built-in `nox` palette, bundled themes and theme-file parsing
 //! (SPEC §9). No GPUI here: colors are plain [`Rgba`]; the UI converts them.
+
+// `cargo lint` runs clippy::pedantic. These lints are allowed on purpose: numeric casts are
+// bounded grid / pixel / color math, `# Errors` / `# Panics` sections would only restate the
+// signature, hex color literals read better without separators, and long UI builders and
+// flag-heavy config structs are clearer kept whole; `assert!(x.is_empty())` reads fine in tests
+// and `(n..).find(..)` searches are meant to be unbounded.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::unreadable_literal,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::similar_names,
+    clippy::many_single_char_names,
+    clippy::assert_is_empty,
+    clippy::maybe_infinite_iter
+)]
 
 mod color;
 
@@ -51,6 +72,7 @@ pub const ANSI_NAMES: [&str; 16] = [
 ];
 
 /// `bg-elevated` derived from `bg`: slightly lighter in dark variants, darker in light ones.
+#[must_use]
 pub fn derive_bg_elevated(bg: Rgba, dark: bool) -> Rgba {
     if dark { bg.mix(Rgba::WHITE, 0.07).with_alpha(bg.a) } else { bg.mix(Rgba::BLACK, 0.06).with_alpha(bg.a) }
 }
@@ -66,12 +88,14 @@ pub struct Theme {
 impl Theme {
     /// The variant for the given appearance; a single-variant theme always returns its only
     /// variant.
+    #[must_use]
     pub fn variant(&self, dark: bool) -> &ThemeVariant {
         let (preferred, other) = if dark { (&self.dark, &self.light) } else { (&self.light, &self.dark) };
         preferred.as_ref().or(other.as_ref()).expect("a Theme always has at least one variant")
     }
 
     /// Only one of light / dark exists (the appearance toggle is disabled).
+    #[must_use]
     pub fn is_single_variant(&self) -> bool {
         self.light.is_none() || self.dark.is_none()
     }
@@ -99,6 +123,7 @@ fn variant_from_hex(ui: [&str; 9], ansi: [&str; 16]) -> ThemeVariant {
 }
 
 /// The built-in `nox` dark palette.
+#[must_use]
 pub fn nox_dark() -> ThemeVariant {
     variant_from_hex(
         ["#18191B", "#1C1D20", "#2A2B2F", "#E6E6E8", "#8A8A8F", "#2A2A2E", "#22D3EE", "#22D3EE33", "#D7DED7"],
@@ -112,6 +137,7 @@ pub fn nox_dark() -> ThemeVariant {
 }
 
 /// The built-in `nox` light palette.
+#[must_use]
 pub fn nox_light() -> ThemeVariant {
     variant_from_hex(
         ["#FFFFFF", "#F7F7F8", "#EFEFF1", "#1D1D1F", "#8A8A8E", "#E6E6E8", "#0891B2", "#0891B233", "#1D1D1F"],
@@ -125,6 +151,7 @@ pub fn nox_light() -> ThemeVariant {
 }
 
 /// The built-in default theme `nox` (SPEC §9).
+#[must_use]
 pub fn builtin_nox() -> Theme {
     Theme { name: "nox".into(), light: Some(nox_light()), dark: Some(nox_dark()) }
 }
@@ -164,6 +191,7 @@ pub fn bundled_theme_names() -> &'static [&'static str] {
 }
 
 /// The TOML source of a bundled theme.
+#[must_use]
 pub fn bundled_theme_source(name: &str) -> Option<&'static str> {
     BUNDLED.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
 }
@@ -172,19 +200,21 @@ pub fn bundled_theme_source(name: &str) -> Option<&'static str> {
 pub const RESERVED_NAMES: &[&str] = &["nox", "system", "light", "dark"];
 
 /// Theme file names: letters, digits, `_`, `-`.
+#[must_use]
 pub fn is_valid_theme_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// All selectable theme names: `nox`, bundled ones, then user files in `user_themes_dir`
 /// (sorted, deduplicated).
+#[must_use]
 pub fn available_theme_names(user_themes_dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::iter::once("nox".to_string())
-        .chain(bundled_theme_names().iter().map(|s| s.to_string()))
+        .chain(bundled_theme_names().iter().map(std::string::ToString::to_string))
         .collect();
     if let Ok(entries) = std::fs::read_dir(user_themes_dir) {
         let mut user: Vec<String> = entries
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter_map(|e| {
                 let p = e.path();
                 (p.extension()? == "toml").then(|| p.file_stem()?.to_str().map(str::to_string))?
@@ -204,6 +234,7 @@ pub fn available_theme_names(user_themes_dir: &Path) -> Vec<String> {
 /// Resolves `ui.theme`: `nox` is built in; otherwise `~/.nox/themes/<name>.toml` overrides a
 /// bundled theme of the same name. Anything unusable falls back to `nox` with a notice; invalid
 /// keys inside a theme are reported as notices too.
+#[must_use]
 pub fn load_theme(name: &str, user_themes_dir: &Path) -> (Theme, Vec<String>) {
     if name == "nox" {
         return (builtin_nox(), Vec::new());
@@ -249,9 +280,8 @@ pub fn load_theme(name: &str, user_themes_dir: &Path) -> (Theme, Vec<String>) {
 /// are reported in the notices.
 pub fn parse_theme(name: &str, src: &str) -> Result<(Theme, Vec<String>), String> {
     let table: toml::Table = src.parse().map_err(|e: toml::de::Error| {
-        let line = e
-            .span()
-            .map(|sp| src.as_bytes()[..sp.start.min(src.len())].iter().filter(|&&b| b == b'\n').count() + 1);
+        let line =
+            e.span().map(|sp| src.as_bytes()[..sp.start.min(src.len())].split(|&b| b == b'\n').count());
         match line {
             Some(l) => format!("line {l}: {}", e.message().trim()),
             None => e.message().trim().to_string(),
@@ -294,14 +324,13 @@ fn parse_variant(
 ) -> ThemeVariant {
     let mut v = if dark { nox_dark() } else { nox_light() };
     let color = |key: &str, val: &toml::Value, notices: &mut Vec<String>| -> Option<Rgba> {
-        match val.as_str().and_then(Rgba::from_hex) {
-            Some(c) => Some(c),
-            None => {
-                notices.push(format!(
-                    "theme \"{name}\": [{section}] {key} = {val} is not a #rgb / #rrggbb / #rrggbbaa color; ignored"
-                ));
-                None
-            }
+        if let Some(c) = val.as_str().and_then(Rgba::from_hex) {
+            Some(c)
+        } else {
+            notices.push(format!(
+                "theme \"{name}\": [{section}] {key} = {val} is not a #rgb / #rrggbb / #rrggbbaa color; ignored"
+            ));
+            None
         }
     };
     let (mut bg_elevated, mut caret_text) = (None, None);
@@ -335,7 +364,7 @@ fn parse_variant(
                 match val.as_table() {
                     Some(a) => parse_ansi(name, section, a, &mut v.ansi, notices),
                     None => {
-                        notices.push(format!("theme \"{name}\": [{section}] ansi must be a table; ignored"))
+                        notices.push(format!("theme \"{name}\": [{section}] ansi must be a table; ignored"));
                     }
                 }
                 continue;
@@ -378,10 +407,11 @@ fn parse_ansi(name: &str, section: &str, t: &toml::Table, ansi: &mut [Rgba; 16],
 
 /// The xterm 256-color palette: the variant's 16 ANSI colors, the 6×6×6 cube and the
 /// 24-step grayscale ramp.
+#[must_use]
 pub fn palette256(v: &ThemeVariant) -> [Rgba; 256] {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
     let mut p = [Rgba::BLACK; 256];
     p[..16].copy_from_slice(&v.ansi);
-    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
     for i in 0..216 {
         let (r, g, b) = (i / 36, (i / 6) % 6, i % 6);
         p[16 + i] = Rgba::from_u8(LEVELS[r], LEVELS[g], LEVELS[b], 255);

@@ -9,6 +9,7 @@ use gpui::{
 use crate::theme::Theme;
 
 /// `4m 12s`, `30s`, `2h 5m`.
+#[must_use]
 pub fn short_duration(d: Duration) -> String {
     let s = d.as_secs();
     if s < 60 {
@@ -45,6 +46,7 @@ pub fn tooltip(text: String, _window: &mut Window, cx: &mut App) -> AnyView {
 }
 
 /// Fuzzy subsequence match; higher is better, `None` = no match.
+#[must_use]
 pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     if query.is_empty() {
         return Some(0);
@@ -97,6 +99,6 @@ mod tests {
     fn durations() {
         assert_eq!(short_duration(Duration::from_secs(30)), "30s");
         assert_eq!(short_duration(Duration::from_secs(252)), "4m 12s");
-        assert_eq!(short_duration(Duration::from_secs(7500)), "2h 5m");
+        assert_eq!(short_duration(Duration::from_mins(125)), "2h 5m");
     }
 }

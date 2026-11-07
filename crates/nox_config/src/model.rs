@@ -226,6 +226,7 @@ pub struct AgentsConfig {
 
 impl AgentsConfig {
     /// The built-in agent definitions (`claude`, `codex`).
+    #[must_use]
     pub fn default_defs() -> BTreeMap<String, AgentDef> {
         let mut defs = BTreeMap::new();
         defs.insert(
@@ -431,6 +432,7 @@ pub enum KeyBinding {
 
 impl KeyBinding {
     /// `""`: the action is unbound and the key passes through to the program.
+    #[must_use]
     pub fn is_unbind(&self) -> bool {
         matches!(self, KeyBinding::Shortcut(s) if s.trim().is_empty())
     }

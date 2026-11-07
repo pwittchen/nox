@@ -262,7 +262,7 @@ fn now_ms() -> u64 {
 }
 
 impl TerminalSession {
-    pub fn spawn(opts: SpawnOptions) -> io::Result<Self> {
+    pub fn spawn(opts: &SpawnOptions) -> io::Result<Self> {
         let program = opts.program.clone().unwrap_or_else(crate::process::login_shell);
         let mut args = opts.args.clone();
         let mut env: HashMap<String, String> = HashMap::new();
@@ -270,7 +270,7 @@ impl TerminalSession {
         env.insert("COLORTERM".into(), "truecolor".into());
         env.insert("TERM_PROGRAM".into(), "nox".into());
         env.insert("TERM_PROGRAM_VERSION".into(), env!("CARGO_PKG_VERSION").into());
-        if std::env::var("LANG").map(|l| l.is_empty()).unwrap_or(true) {
+        if std::env::var("LANG").map_or(true, |l| l.is_empty()) {
             env.insert("LANG".into(), "en_US.UTF-8".into());
         }
         if let Some(dir) = &opts.integration_dir
@@ -308,7 +308,7 @@ impl TerminalSession {
             osc52: osc52.clone(),
             clipboard_reply: clipboard_reply.clone(),
         };
-        let config = term_config(&opts);
+        let config = term_config(opts);
         let dims = TermDims { cols: opts.size.cols as usize, rows: opts.size.rows as usize };
         let term: SharedTerm = Arc::new(FairMutex::new(Term::new(config, &dims, listener)));
 
@@ -355,7 +355,7 @@ impl TerminalSession {
             thread::Builder::new().name(format!("nox-pty-waiter-{pid}")).spawn(move || {
                 let mut status: libc::c_int = 0;
                 let rc = loop {
-                    let rc = unsafe { libc::waitpid(pid, &mut status, 0) };
+                    let rc = unsafe { libc::waitpid(pid, &raw mut status, 0) };
                     if rc == -1 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                         continue;
                     }
@@ -440,10 +440,12 @@ impl TerminalSession {
         })
     }
 
+    #[must_use]
     pub fn term(&self) -> &SharedTerm {
         &self.term
     }
 
+    #[must_use]
     pub fn events(&self) -> async_channel::Receiver<TerminalEvent> {
         self.events.clone()
     }
@@ -454,23 +456,28 @@ impl TerminalSession {
         self.dirty.store(false, Ordering::SeqCst);
     }
 
+    #[must_use]
     pub fn pid(&self) -> i32 {
         self.pid
     }
 
+    #[must_use]
     pub fn pty_fd(&self) -> RawFd {
         self.fd
     }
 
+    #[must_use]
     pub fn has_exited(&self) -> bool {
         self.exited.load(Ordering::SeqCst)
     }
 
+    #[must_use]
     pub fn started(&self) -> Instant {
         self.started
     }
 
     /// Time since the last output chunk.
+    #[must_use]
     pub fn since_last_output(&self) -> Duration {
         Duration::from_millis(now_ms().saturating_sub(self.last_output.load(Ordering::Relaxed)))
     }
@@ -530,6 +537,7 @@ impl TerminalSession {
         let _ = self.resize_tx.send(size);
     }
 
+    #[must_use]
     pub fn size(&self) -> GridSize {
         *self.size.lock().unwrap()
     }
@@ -575,22 +583,26 @@ impl TerminalSession {
         }
     }
 
+    #[must_use]
     pub fn foreground(&self) -> Option<crate::process::ForegroundProcess> {
         crate::process::foreground_process(self.fd)
     }
 
     /// Whether something other than the shell itself is in the foreground.
+    #[must_use]
     pub fn is_busy(&self) -> bool {
         crate::process::foreground_pid(self.fd).is_some_and(|p| p != self.pid)
     }
 
     // ---- prompt marks & text extraction -------------------------------------------------
 
+    #[must_use]
     pub fn marks(&self) -> Vec<Mark> {
         self.marks.lock().unwrap().marks.clone()
     }
 
     /// Lines (viewport-relative `Line` values, may be negative = in history) of prompt starts.
+    #[must_use]
     pub fn prompt_lines(&self) -> Vec<i32> {
         let term = self.term.lock();
         let hist = term.grid().history_size() as i64;
@@ -605,6 +617,7 @@ impl TerminalSession {
     }
 
     /// Plain text of the visible screen.
+    #[must_use]
     pub fn screen_text(&self) -> String {
         let term = self.term.lock();
         let rows = term.screen_lines() as i32;
@@ -613,6 +626,7 @@ impl TerminalSession {
     }
 
     /// The last `n` lines (screen bottom upwards, including history).
+    #[must_use]
     pub fn last_lines(&self, n: usize) -> String {
         let term = self.term.lock();
         let rows = term.screen_lines() as i32;
@@ -620,6 +634,7 @@ impl TerminalSession {
         lines_text(&term, top, rows - 1)
     }
 
+    #[must_use]
     pub fn scrollback_text(&self) -> String {
         let term = self.term.lock();
         let rows = term.screen_lines() as i32;
@@ -627,6 +642,7 @@ impl TerminalSession {
     }
 
     /// Output of the last finished command (between OSC 133 C and D). Needs shell integration.
+    #[must_use]
     pub fn last_output(&self) -> Option<String> {
         let marks = self.marks.lock().unwrap().marks.clone();
         let end_idx = marks.iter().rposition(|m| m.kind == MarkKind::CommandEnd)?;
@@ -681,7 +697,7 @@ pub fn lines_text<T>(term: &Term<T>, from: i32, to: i32) -> String {
     }
     let last_col = term.last_column();
     let raw = term.bounds_to_string(Point::new(Line(from), Column(0)), Point::new(Line(to), last_col));
-    let mut out: String = raw.lines().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n");
+    let mut out: String = raw.lines().map(str::trim_end).collect::<Vec<_>>().join("\n");
     while out.ends_with('\n') {
         out.pop();
     }
@@ -696,7 +712,7 @@ fn set_winsize(fd: RawFd, s: GridSize) {
         ws_ypixel: s.rows.saturating_mul(s.cell_h),
     };
     unsafe {
-        libc::ioctl(fd, libc::TIOCSWINSZ, &ws as *const libc::winsize);
+        libc::ioctl(fd, libc::TIOCSWINSZ, &raw const ws);
     }
 }
 
@@ -709,7 +725,7 @@ fn write_all_fd(writer: &Mutex<File>, mut buf: &[u8]) -> io::Result<()> {
             Ok(n) => buf = &buf[n..],
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 let mut pfd = libc::pollfd { fd: file.as_raw_fd(), events: libc::POLLOUT, revents: 0 };
-                let rc = unsafe { libc::poll(&mut pfd, 1, 1000) };
+                let rc = unsafe { libc::poll(&raw mut pfd, 1, 1000) };
                 if rc == 0 {
                     return Err(io::ErrorKind::TimedOut.into());
                 }
@@ -723,6 +739,8 @@ fn write_all_fd(writer: &Mutex<File>, mut buf: &[u8]) -> io::Result<()> {
 
 const READ_BUF: usize = 64 * 1024;
 
+// Thread entry point: it owns everything it is handed for the life of the reader thread.
+#[allow(clippy::needless_pass_by_value)]
 fn reader_loop(
     mut master: File,
     term: SharedTerm,
@@ -752,7 +770,7 @@ fn reader_loop(
             None => -1,
         };
         let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
-        let rc = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        let rc = unsafe { libc::poll(&raw mut pfd, 1, timeout_ms) };
         if rc < 0 {
             if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                 continue;
@@ -790,7 +808,8 @@ fn reader_loop(
                             _ => None,
                         };
                         if let Some(kind) = kind {
-                            let abs = t.grid().history_size() as i64 + t.grid().cursor.point.line.0 as i64;
+                            let abs =
+                                t.grid().history_size() as i64 + i64::from(t.grid().cursor.point.line.0);
                             marks.lock().unwrap().push(Mark { kind, abs_line: abs });
                         }
                         let _ = tx.try_send(TerminalEvent::Osc(hit.event));
@@ -845,7 +864,7 @@ mod tests {
 
     #[test]
     fn spawns_shell_and_reads_echo_back_from_grid() {
-        let session = TerminalSession::spawn(SpawnOptions {
+        let session = TerminalSession::spawn(&SpawnOptions {
             program: Some("/bin/sh".into()),
             args: vec![],
             ..SpawnOptions::default()
@@ -871,7 +890,7 @@ mod tests {
 
     #[test]
     fn osc_events_and_last_output() {
-        let session = TerminalSession::spawn(SpawnOptions {
+        let session = TerminalSession::spawn(&SpawnOptions {
             program: Some("/bin/sh".into()),
             args: vec![],
             ..SpawnOptions::default()
@@ -887,7 +906,7 @@ mod tests {
 
     #[test]
     fn resize_updates_grid() {
-        let session = TerminalSession::spawn(SpawnOptions {
+        let session = TerminalSession::spawn(&SpawnOptions {
             program: Some("/bin/sh".into()),
             args: vec![],
             ..SpawnOptions::default()

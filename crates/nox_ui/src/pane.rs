@@ -25,7 +25,10 @@ use nox_terminal::keys::{self, KeyInput, KeyModes, Mods};
 use nox_terminal::mouse::{self, MouseAction, MouseMods};
 use nox_terminal::{OscEvent, SpawnOptions, TerminalEvent, TerminalSession};
 
-use crate::actions::*;
+use crate::actions::{
+    ClearBuffer, Copy, CopyLastOutput, Find, FindNext, FindPrevious, NextPrompt, Paste, PreviousPrompt,
+    RestartPane, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, SelectAll, SendShiftEnter,
+};
 use crate::icons::{IconRegistry, icon_element};
 use crate::scroll::ScrollState;
 use crate::settings_state::Settings;
@@ -170,7 +173,7 @@ pub struct Pane {
     pub font_size_override: Option<f32>,
     pub header_hovered: bool,
     pub shake: Option<Instant>,
-    _tasks: Vec<Task<()>>,
+    tasks: Vec<Task<()>>,
 }
 
 impl EventEmitter<PaneEvent> for Pane {}
@@ -206,6 +209,7 @@ fn spawn_options(cfg: &nox_config::Config, spawn: &PaneSpawn) -> SpawnOptions {
     }
 }
 
+#[must_use]
 pub fn cursor_style(cfg: &nox_config::Config) -> nox_terminal::session::CursorConfig {
     nox_terminal::session::CursorConfig {
         shape: match cfg.terminal.cursor_style {
@@ -220,16 +224,18 @@ pub fn cursor_style(cfg: &nox_config::Config) -> nox_terminal::session::CursorCo
 impl Pane {
     pub fn new(id: PaneId, spawn: PaneSpawn, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
+        let custom_name = spawn.name.clone();
+        let cwd = spawn.cwd.clone();
         let mut this = Self {
             id,
             session: None,
             spawn_error: None,
             focus_handle: focus_handle.clone(),
-            spawn: spawn.clone(),
-            custom_name: spawn.name.clone(),
+            spawn,
+            custom_name,
             custom_icon: None,
             osc_title: None,
-            cwd: spawn.cwd.clone(),
+            cwd,
             process: None,
             process_is_shell: true,
             icon: Icon::TERMINAL,
@@ -265,7 +271,7 @@ impl Pane {
             font_size_override: None,
             header_hovered: false,
             shake: None,
-            _tasks: vec![],
+            tasks: vec![],
         };
         cx.on_focus(&focus_handle, window, |this: &mut Self, _, cx| {
             this.blink_epoch = Instant::now();
@@ -310,7 +316,7 @@ impl Pane {
     fn start(&mut self, cx: &mut Context<Self>) {
         let settings = Settings::global(cx).clone();
         let opts = spawn_options(&settings.config, &self.spawn);
-        match TerminalSession::spawn(opts) {
+        match TerminalSession::spawn(&opts) {
             Ok(session) => {
                 session.set_query_colors(query_colors(Theme::global(cx)));
                 let events = session.events();
@@ -340,7 +346,7 @@ impl Pane {
                         }
                     }
                 });
-                self._tasks.push(task);
+                self.tasks.push(task);
             }
             Err(e) => {
                 self.spawn_error = Some(e.to_string());
@@ -354,7 +360,7 @@ impl Pane {
         if self.exited.is_none() && self.session.is_some() {
             return;
         }
-        self._tasks.clear();
+        self.tasks.clear();
         self.session = None;
         self.spawn.cwd = self.cwd.clone().or(self.spawn.cwd.clone());
         self.spawn.startup = match (&self.agent, self.resume_failed) {
@@ -507,7 +513,7 @@ impl Pane {
         match self.last_refresh {
             Some(t) if now.duration_since(t) < Duration::from_millis(500) => {
                 if self.refresh_task.is_none() {
-                    let wait = Duration::from_millis(500) - now.duration_since(t);
+                    let wait = Duration::from_millis(500).checked_sub(now.duration_since(t)).unwrap();
                     self.refresh_task = Some(cx.spawn(async move |this, cx| {
                         cx.background_executor().timer(wait).await;
                         let _ = this.update(cx, |this, cx| {
@@ -588,16 +594,15 @@ impl Pane {
                 let mut tracker = AgentTracker::new(kind.clone(), now);
                 let args = self.process.as_ref().map(|p| p.args.clone()).unwrap_or_default();
                 tracker.set_session_id(nox_agents::session_id_from_cmdline(&kind, &args));
-                let cmdline = self
-                    .process
-                    .as_ref()
-                    .map(|p| {
+                let cmdline = self.process.as_ref().map_or_else(
+                    || kind.clone(),
+                    |p| {
                         std::iter::once(p.exe.clone())
                             .chain(p.args.iter().cloned())
                             .collect::<Vec<_>>()
                             .join(" ")
-                    })
-                    .unwrap_or_else(|| kind.clone());
+                    },
+                );
                 self.agent = Some(AgentInfo { kind, tracker, launch: None, cmdline });
                 changed = true;
                 cx.emit(PaneEvent::AgentChanged { transition: None });
@@ -610,7 +615,7 @@ impl Pane {
             }
             (Some(a), Some(kind)) if a.tracker.state() == AgentState::Exited || a.kind != kind => {
                 let now = Instant::now();
-                a.kind = kind.clone();
+                a.kind.clone_from(&kind);
                 a.tracker = AgentTracker::new(kind, now);
                 changed = true;
                 cx.emit(PaneEvent::AgentChanged { transition: None });
@@ -682,6 +687,7 @@ impl Pane {
 
     // ---- derived info ---------------------------------------------------------------------
 
+    #[must_use]
     pub fn process_display_name(&self) -> Option<String> {
         if self.process_is_shell {
             return None;
@@ -700,6 +706,7 @@ impl Pane {
         Some(p.exe.clone())
     }
 
+    #[must_use]
     pub fn cwd_display(&self) -> String {
         match &self.cwd {
             Some(p) => nox_terminal::process::tildify(p),
@@ -708,6 +715,7 @@ impl Pane {
     }
 
     /// The pane title (SPEC §4.4).
+    #[must_use]
     pub fn title(&self, mode: nox_config::TabTitle) -> String {
         if let Some(n) = &self.custom_name {
             return n.clone();
@@ -716,7 +724,7 @@ impl Pane {
             nox_config::TabTitle::Cwd => return self.cwd_display(),
             nox_config::TabTitle::Process => {
                 return self.process_display_name().unwrap_or_else(|| {
-                    self.process.as_ref().map(|p| p.exe.clone()).unwrap_or_else(|| "shell".into())
+                    self.process.as_ref().map_or_else(|| "shell".into(), |p| p.exe.clone())
                 });
             }
             nox_config::TabTitle::Auto => {}
@@ -730,14 +738,17 @@ impl Pane {
         format!("{}:{}", nox_terminal::process::user_at_host(), self.cwd_display())
     }
 
+    #[must_use]
     pub fn agent_state(&self) -> Option<AgentState> {
         self.agent.as_ref().map(|a| a.tracker.state())
     }
 
+    #[must_use]
     pub fn is_agent(&self) -> bool {
         self.agent.as_ref().is_some_and(|a| a.tracker.state() != AgentState::Exited)
     }
 
+    #[must_use]
     pub fn status(&self) -> TabStatus {
         if self.bell_unseen {
             return TabStatus::Bell;
@@ -768,10 +779,12 @@ impl Pane {
     }
 
     /// Something other than the shell runs (close confirmation, SPEC §6.4).
+    #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.exited.is_none() && self.session.as_ref().is_some_and(|s| s.is_busy())
+        self.exited.is_none() && self.session.as_ref().is_some_and(nox_terminal::TerminalSession::is_busy)
     }
 
+    #[must_use]
     pub fn font_size(&self, settings: &Settings) -> f32 {
         self.font_size_override.unwrap_or(settings.term_font.size)
     }
@@ -784,6 +797,7 @@ impl Pane {
 
     // ---- cursor blink ---------------------------------------------------------------------
 
+    #[must_use]
     pub fn cursor_visible(&self, now: Instant) -> bool {
         let blink = self.session.as_ref().is_some_and(|s| s.term().lock().cursor_style().blinking);
         if !blink {
@@ -872,7 +886,7 @@ impl Pane {
         let alt_is_meta = m.alt && {
             let (l, r) = nox_mac::option_keys_down();
             match settings.config.terminal.option_as_meta {
-                nox_config::OptionAsMeta::Left => l || (!l && !r),
+                nox_config::OptionAsMeta::Left => l || !r,
                 nox_config::OptionAsMeta::Right => r,
                 nox_config::OptionAsMeta::Both => true,
                 nox_config::OptionAsMeta::None => false,
@@ -881,10 +895,9 @@ impl Pane {
         // Plain text goes through the input handler (IME); encode only what isn't text.
         let is_plain_text = !m.control
             && !m.platform
-            && !(m.alt && alt_is_meta)
-            && ks.key_char.as_ref().is_some_and(|c| !c.is_empty() && !c.chars().any(|ch| ch.is_control()))
-            && !matches!(ks.key.as_str(), "enter" | "tab" | "backspace" | "escape" | "space")
-            && !(ks.key == "space" && m.shift);
+            && !alt_is_meta
+            && ks.key_char.as_ref().is_some_and(|c| !c.is_empty() && !c.chars().any(char::is_control))
+            && !matches!(ks.key.as_str(), "enter" | "tab" | "backspace" | "escape" | "space");
         if is_plain_text && self.marked_text.is_none() {
             return;
         }
@@ -981,7 +994,7 @@ impl Pane {
         Some(position_to_point(geom, pos, self.scroll.frac, offset))
     }
 
-    fn mouse_mods(m: &Modifiers) -> MouseMods {
+    fn mouse_mods(m: Modifiers) -> MouseMods {
         MouseMods { shift: m.shift, alt: m.alt, ctrl: m.control }
     }
 
@@ -989,7 +1002,7 @@ impl Pane {
         &self,
         button: mouse::MouseButton,
         action: MouseAction,
-        m: &Modifiers,
+        m: Modifiers,
         pos: Point<Pixels>,
     ) -> bool {
         let (Some(s), Some(geom)) = (&self.session, &self.geom) else { return false };
@@ -1014,7 +1027,7 @@ impl Pane {
         }
         let click_through = Settings::global(cx).config.ui.focus_click_through;
         if (was_focused || click_through)
-            && self.report_mouse(button_of(ev.button), MouseAction::Press, &ev.modifiers, ev.position)
+            && self.report_mouse(button_of(ev.button), MouseAction::Press, ev.modifiers, ev.position)
         {
             return;
         }
@@ -1069,7 +1082,7 @@ impl Pane {
     }
 
     fn on_mouse_up(&mut self, ev: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.report_mouse(button_of(ev.button), MouseAction::Release, &ev.modifiers, ev.position)
+        if self.report_mouse(button_of(ev.button), MouseAction::Release, ev.modifiers, ev.position)
             && self.selecting.is_none()
         {
             return;
@@ -1096,8 +1109,8 @@ impl Pane {
         }
         let pressed = ev.pressed_button;
         if self.selecting.is_none() {
-            let button = pressed.map(button_of).unwrap_or(mouse::MouseButton::None);
-            self.report_mouse(button, MouseAction::Motion, &ev.modifiers, ev.position);
+            let button = pressed.map_or(mouse::MouseButton::None, button_of);
+            self.report_mouse(button, MouseAction::Motion, ev.modifiers, ev.position);
             return;
         }
         if pressed != Some(MouseButton::Left) {
@@ -1115,7 +1128,9 @@ impl Pane {
             } else {
                 0.0
             };
-            if over != 0.0 {
+            if over == 0.0 {
+                self.autoscroll = None;
+            } else {
                 let pos = ev.position;
                 self.autoscroll = Some(cx.spawn(async move |this, cx| {
                     loop {
@@ -1139,8 +1154,6 @@ impl Pane {
                         }
                     }
                 }));
-            } else {
-                self.autoscroll = None;
             }
         }
     }
@@ -1176,7 +1189,7 @@ impl Pane {
             self.scroll.alt_accum -= n as f32;
             let button = if n > 0 { mouse::MouseButton::WheelUp } else { mouse::MouseButton::WheelDown };
             for _ in 0..n.unsigned_abs().min(20) {
-                self.report_mouse(button, MouseAction::Press, &ev.modifiers, ev.position);
+                self.report_mouse(button, MouseAction::Press, ev.modifiers, ev.position);
             }
             return;
         }
@@ -1202,7 +1215,7 @@ impl Pane {
         }
         if let Some(lines) = lines_delta {
             let mult = cfg.terminal.scroll_multiplier as f32;
-            let dur = Duration::from_millis(cfg.terminal.smooth_scroll_duration as u64);
+            let dur = Duration::from_millis(u64::from(cfg.terminal.smooth_scroll_duration));
             if dur.is_zero() || Settings::global(cx).reduce_motion() {
                 self.apply_scroll_pixels(lines * mult * line_h, cx);
             } else {
@@ -1347,10 +1360,12 @@ impl Pane {
 
     // ---- find -----------------------------------------------------------------------------
 
+    #[must_use]
     pub fn find_highlights(&self) -> Vec<Match> {
         self.find.as_ref().map(|f| f.matches.clone()).unwrap_or_default()
     }
 
+    #[must_use]
     pub fn find_current_index(&self) -> Option<usize> {
         self.find.as_ref().filter(|f| !f.matches.is_empty()).map(|f| f.current)
     }
@@ -1460,7 +1475,7 @@ impl Pane {
         let text = s.term().lock().selection_to_string();
         match text {
             Some(t) if !t.is_empty() => {
-                let trimmed: String = t.lines().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n");
+                let trimmed: String = t.lines().map(str::trim_end).collect::<Vec<_>>().join("\n");
                 cx.write_to_clipboard(ClipboardItem::new_string(trimmed));
                 true
             }
@@ -1506,7 +1521,7 @@ impl Pane {
     }
 
     fn copy_last_output(&mut self, _: &CopyLastOutput, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.session.as_ref().and_then(|s| s.last_output()) {
+        if let Some(text) = self.session.as_ref().and_then(nox_terminal::TerminalSession::last_output) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         } else {
             crate::toast::show(cx, "Copy Last Output needs shell integration (shell.integration = true).");
@@ -1837,7 +1852,7 @@ impl Pane {
                 .child(find.input.clone())
                 .child(div().text_color(theme.text_muted).text_size(px(11.)).child(count))
                 .child(toggle("find-case", "Aa", find.case_sensitive, cx, |f| {
-                    f.case_sensitive = !f.case_sensitive
+                    f.case_sensitive = !f.case_sensitive;
                 }))
                 .child(toggle("find-regex", ".*", find.regex, cx, |f| f.regex = !f.regex))
                 .into_any_element(),
@@ -1847,13 +1862,13 @@ impl Pane {
 
 fn button_of(b: MouseButton) -> mouse::MouseButton {
     match b {
-        MouseButton::Left => mouse::MouseButton::Left,
+        MouseButton::Left | MouseButton::Navigate(_) => mouse::MouseButton::Left,
         MouseButton::Middle => mouse::MouseButton::Middle,
         MouseButton::Right => mouse::MouseButton::Right,
-        _ => mouse::MouseButton::Left,
     }
 }
 
+#[must_use]
 pub fn shell_escape(s: &str) -> String {
     if s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+,:@%".contains(c)) {
         s.to_string()
@@ -1874,6 +1889,7 @@ fn regex_escape(s: &str) -> String {
 }
 
 /// Colors to answer OSC 4/10/11/12 queries with.
+#[must_use]
 pub fn query_colors(theme: &Theme) -> Vec<nox_terminal::alacritty_terminal::vte::ansi::Rgb> {
     use nox_terminal::alacritty_terminal::vte::ansi::Rgb;
     let conv = |c: nox_theme::Rgba| Rgb {
@@ -2095,7 +2111,7 @@ impl Render for Pane {
                             if !this.report_mouse(
                                 mouse::MouseButton::Right,
                                 MouseAction::Press,
-                                &ev.modifiers,
+                                ev.modifiers,
                                 ev.position,
                             ) {
                                 this.hovered_link = this.link_at(ev.position, cx);
@@ -2118,6 +2134,7 @@ impl Render for Pane {
     }
 }
 
+#[must_use]
 pub fn status_color(theme: &Theme, status: TabStatus) -> Option<Hsla> {
     match status {
         TabStatus::None => None,

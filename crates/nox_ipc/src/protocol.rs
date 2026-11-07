@@ -126,6 +126,7 @@ pub enum Method {
 
 impl Method {
     /// The wire name of the method (`"ls"`, `"read"`, …).
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             Method::Ls { .. } => "ls",
@@ -146,6 +147,7 @@ impl Method {
     }
 
     /// Methods allowed without a valid token.
+    #[must_use]
     pub fn allowed_without_token(&self) -> bool {
         matches!(self, Method::Ls { .. } | Method::Open { .. })
     }
@@ -161,6 +163,7 @@ pub enum AgentStateWire {
 }
 
 impl AgentStateWire {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             AgentStateWire::Working => "working",
@@ -196,6 +199,7 @@ pub enum WaitState {
 }
 
 impl WaitState {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             WaitState::Idle => "idle",
@@ -237,6 +241,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// CLI exit code: `0` ok, `1` error, `2` usage, `3` conflict, `4` timeout.
+    #[must_use]
     pub fn exit_code(self) -> i32 {
         match self {
             ErrorCode::Usage => 2,
@@ -250,6 +255,7 @@ impl ErrorCode {
         }
     }
 
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             ErrorCode::Usage => "usage",
@@ -280,6 +286,7 @@ impl IpcError {
         Self { code, message: message.into(), data: None }
     }
 
+    #[must_use]
     pub fn with_data(mut self, data: Value) -> Self {
         self.data = Some(data);
         self
@@ -304,10 +311,12 @@ pub struct Response {
 }
 
 impl Response {
+    #[must_use]
     pub fn ok(id: u64, value: Value) -> Self {
         Self { v: PROTOCOL_VERSION, id, result: ResponseResult::Ok(value) }
     }
 
+    #[must_use]
     pub fn err(id: u64, error: IpcError) -> Self {
         Self { v: PROTOCOL_VERSION, id, result: ResponseResult::Error(error) }
     }

@@ -30,11 +30,13 @@ pub struct Tab {
 }
 
 impl Tab {
+    #[must_use]
     pub fn new(id: TabId, pane: PaneId) -> Self {
         Self::with_layout(id, Layout::Leaf(pane))
     }
 
     /// A tab over an existing layout, focused on its first pane.
+    #[must_use]
     pub fn with_layout(id: TabId, layout: Layout) -> Self {
         Self {
             id,
@@ -46,14 +48,17 @@ impl Tab {
         }
     }
 
+    #[must_use]
     pub fn panes(&self) -> Vec<PaneId> {
         self.layout.panes()
     }
 
+    #[must_use]
     pub fn contains(&self, pane: PaneId) -> bool {
         self.layout.contains(pane)
     }
 
+    #[must_use]
     pub fn is_maximized(&self) -> bool {
         self.maximized.is_some()
     }
@@ -154,6 +159,7 @@ impl Tab {
     }
 
     /// The panes to draw and where: only the maximized pane (filling `area`) when maximized.
+    #[must_use]
     pub fn visible_rects(&self, area: Rect, divider_px: f32) -> Vec<(PaneId, Rect)> {
         match self.maximized {
             Some(p) => vec![(p, area)],
@@ -179,6 +185,7 @@ impl Tab {
     }
 
     /// True when `focused` and `maximized` point at panes of the layout and no pane repeats.
+    #[must_use]
     pub fn is_consistent(&self) -> bool {
         self.layout.is_valid()
             && self.layout.contains(self.focused)

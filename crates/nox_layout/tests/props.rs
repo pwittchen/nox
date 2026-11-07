@@ -62,7 +62,7 @@ fn check_tiling(tab: &Tab) {
         assert!(a.w >= 0.0 && a.h >= 0.0);
         assert!(a.x >= AREA.x - 0.01 && a.right() <= AREA.right() + 0.01, "{a:?}");
         assert!(a.y >= AREA.y - 0.01 && a.bottom() <= AREA.bottom() + 0.01, "{a:?}");
-        covered += a.area() as f64;
+        covered += f64::from(a.area());
         for (_, b) in &rects[i + 1..] {
             assert!(a.intersection_area(b) < 0.01, "overlap {a:?} {b:?}");
         }
@@ -71,9 +71,9 @@ fn check_tiling(tab: &Tab) {
         }
     }
     for d in &divs {
-        covered += d.rect.area() as f64;
+        covered += f64::from(d.rect.area());
     }
-    let total = AREA.area() as f64;
+    let total = f64::from(AREA.area());
     assert!((covered - total).abs() < 1.0, "covered {covered} of {total}");
 
     let visible = tab.visible_rects(AREA, DIVIDER);
@@ -161,7 +161,7 @@ fn apply(tab: &mut Tab, op: &Op, next_id: &mut u64, guarded: bool) -> bool {
             tab.toggle_maximize();
         }
         Op::Resize(d, n) => {
-            tab.resize_focused(d, n as f32 * CELL.w, AREA, DIVIDER, min);
+            tab.resize_focused(d, f32::from(n) * CELL.w, AREA, DIVIDER, min);
         }
         Op::Drag { pick: i, frac } => {
             let divs = tab.layout.dividers(AREA, DIVIDER);

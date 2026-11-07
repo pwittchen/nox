@@ -3,7 +3,10 @@
 
 use std::sync::OnceLock;
 
-use crate::model::*;
+use crate::model::{
+    AgentRestore, AgentScope, Bell, CloseOnExit, Config, ConfigEnum, CursorStyle, Deliver, Mode, NewTabCwd,
+    OptionAsMeta, Osc52, SidebarWorkspaces, SizeAppliesTo, TabTitle, TabsPosition, WorktreeOpens,
+};
 
 /// Sidebar sections of the Settings window, mirroring the config tables.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -34,6 +37,7 @@ impl Section {
         Section::Keys,
     ];
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Section::General => "General",
@@ -75,7 +79,7 @@ pub enum SettingKind {
         max: i64,
         step: i64,
     },
-    /// The `[agents.<name>]` tables (name → command, resume, resume_last, match, icon).
+    /// The `[agents.<name>]` tables (name → command, resume, `resume_last`, match, icon).
     Agents,
 }
 
@@ -109,7 +113,7 @@ const fn float(min: f64, max: f64, step: f64) -> SettingKind {
 }
 
 fn build() -> Vec<SettingMeta> {
-    use Section::*;
+    use Section::{Agents, Appearance, Font, General, Icons, Keys, Shell, Tabs, Terminal, Workspaces};
     use SettingKind::{Bool, Enum, Map, StringList};
     let s = SettingKind::String;
     vec![
@@ -551,6 +555,7 @@ fn build() -> Vec<SettingMeta> {
 }
 
 /// Every setting shown in the Settings window, in display order.
+#[must_use]
 pub fn settings_schema() -> Vec<SettingMeta> {
     schema_ref().to_vec()
 }
@@ -561,11 +566,13 @@ fn schema_ref() -> &'static [SettingMeta] {
 }
 
 /// Metadata of one dotted key, if it's a Settings row.
+#[must_use]
 pub fn find_setting(key: &str) -> Option<&'static SettingMeta> {
     schema_ref().iter().find(|m| m.key == key)
 }
 
 /// The current value of a dotted key (`"tabs.position"`, `"agents.claude.command"`, `"keys"`).
+#[must_use]
 pub fn get_value(config: &Config, key: &str) -> Option<toml::Value> {
     let root = toml::Value::try_from(config).ok()?;
     if key.is_empty() {
@@ -585,6 +592,7 @@ pub fn default_value(key: &str) -> Option<toml::Value> {
 }
 
 /// Whether a key's current value differs from its default (shows the "reset" control).
+#[must_use]
 pub fn differs_from_default(config: &Config, key: &str) -> bool {
     get_value(config, key) != default_value(key)
 }

@@ -12,6 +12,7 @@ use crate::pane::{AgentLaunch, PaneSpawn, Startup};
 use crate::root::{Coop, Root, default_cwd};
 use crate::settings_state::Settings;
 
+#[must_use]
 pub fn session_path() -> PathBuf {
     nox_config::nox_dir().join("session.toml")
 }
@@ -21,6 +22,7 @@ pub struct RestorePlan {
     pub restored: Restored,
 }
 
+#[must_use]
 pub fn load_plan() -> Option<RestorePlan> {
     let path = session_path();
     if !path.exists() {
@@ -56,6 +58,7 @@ fn agent_defs(cfg: &nox_config::Config) -> BTreeMap<String, AgentDefLite> {
 }
 
 /// Resume commands for saved agent panes.
+#[must_use]
 pub fn plan_resume(
     cfg: &nox_config::Config,
     agents: &[(PaneId, AgentSnapshot)],
@@ -158,7 +161,7 @@ impl Root {
             let has_agents = self.ws.list[i]
                 .tabs
                 .iter()
-                .flat_map(|t| t.panes())
+                .flat_map(nox_layout::Tab::panes)
                 .any(|p| self.pending.get(&p).is_some_and(|s| s.agent.is_some()));
             if i == self.ws.active || has_agents || !lazy {
                 self.ensure_started(i, window, cx);
@@ -185,16 +188,16 @@ impl Root {
             );
         }
         if !ask.is_empty() {
-            self.show_resume_sheet(ask, window, cx);
+            self.show_resume_sheet(&ask, window, cx);
         } else if !unknown.is_empty() {
-            self.show_resume_sheet(unknown, window, cx);
+            self.show_resume_sheet(&unknown, window, cx);
         }
     }
 
     /// The "Resume agents" sheet (SPEC §7.12, `agents.restore = "ask"`).
     pub fn show_resume_sheet(
         &mut self,
-        agents: Vec<(PaneId, AgentSnapshot)>,
+        agents: &[(PaneId, AgentSnapshot)],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -315,8 +318,7 @@ fn pane_snapshot(root: &Root, p: PaneId, cx: &App) -> PaneSnapshot {
                     .launch
                     .as_ref()
                     .filter(|l| !l.resumed)
-                    .map(|l| l.command.clone())
-                    .unwrap_or_else(|| a.cmdline.clone()),
+                    .map_or_else(|| a.cmdline.clone(), |l| l.command.clone()),
                 session_id: a
                     .tracker
                     .session_id()

@@ -26,7 +26,7 @@ impl Handler for Mock {
             Method::Open { .. } => reply.ok(json!({"workspace_id": 1})),
             Method::Name { name } => {
                 let c = caller.expect("authenticated");
-                reply.ok(json!({"pane": c.pane_id, "name": name}))
+                reply.ok(json!({"pane": c.pane_id, "name": name}));
             }
             Method::Inbox { .. } => {
                 // Deferred: answered from another thread later.
@@ -36,9 +36,9 @@ impl Handler for Mock {
                 });
             }
             Method::Wait { timeout_s, .. } => {
-                let ms = (timeout_s.unwrap_or(0.0) * 1000.0) as u64;
+                let wait = Duration::from_secs_f64(timeout_s.unwrap_or(0.0).max(0.0));
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(ms));
+                    std::thread::sleep(wait);
                     reply.ok(json!({"state": "idle"}));
                 });
             }

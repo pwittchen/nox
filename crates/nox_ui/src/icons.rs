@@ -16,6 +16,7 @@ pub struct IconRegistry {
 impl Global for IconRegistry {}
 
 impl IconRegistry {
+    #[must_use]
     pub fn from_config(config: &Config) -> Self {
         let mut user_icons: BTreeMap<String, String> = config.icons.clone();
         let mut matches: Vec<(String, Vec<String>)> = Vec::new();
@@ -41,6 +42,7 @@ impl IconRegistry {
     }
 
     /// A user-set icon (Set Icon…): a built-in name or a path.
+    #[must_use]
     pub fn custom_icon(&self, name: &str) -> Icon {
         if name.starts_with('/') || name.starts_with('~') {
             return Icon::Custom(expand_tilde(name));
@@ -52,6 +54,7 @@ impl IconRegistry {
     }
 }
 
+#[must_use]
 pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
         && let Some(home) = std::env::var_os("HOME")
@@ -61,6 +64,7 @@ pub fn expand_tilde(p: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
+#[must_use]
 pub fn icon_path(icon: &Icon) -> String {
     match icon {
         Icon::Builtin(name) => format!("icons/process/{name}.svg"),
@@ -70,6 +74,7 @@ pub fn icon_path(icon: &Icon) -> String {
 
 /// The icon tinted with its brand color blended towards `base` (low saturation, readable in
 /// both light and dark mode), or `base` when the brand has no tint.
+#[must_use]
 pub fn icon_color(icon: &Icon, base: Hsla) -> Hsla {
     if let Icon::Builtin(name) = icon
         && let Some(rgb) = nox_agents::brand_tint(name)

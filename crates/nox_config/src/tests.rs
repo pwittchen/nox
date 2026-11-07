@@ -29,7 +29,7 @@ fn defaults_match_spec() {
 fn empty_file_is_defaults() {
     let (c, n) = load_from_str("").unwrap();
     assert_eq!(c, Config::default());
-    assert!(n.is_empty());
+    assert_eq!(n, [] as [load::Notice; 0]);
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn syntax_error_reports_line() {
     let src = "[ui]\ntheme = \"nox\"\nmode = \n";
     let err = load_from_str(src).unwrap_err();
     assert_eq!(err.line, Some(3));
-    assert!(!err.message.is_empty());
+    assert_ne!(err.message, "");
     assert!(err.to_string().starts_with("line 3:"));
 }
 
@@ -262,7 +262,7 @@ fn watcher_reports_external_changes_only() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "").unwrap();
     let (tx, rx) = mpsc::channel();
-    let _handle = watch(path.clone(), move |r| {
+    let _handle = watch(&path, move |r| {
         let _ = tx.send(r.map(|(c, _)| c.ui.theme));
     })
     .unwrap();

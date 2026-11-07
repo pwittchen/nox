@@ -69,19 +69,23 @@ impl Workspace {
         }
     }
 
+    #[must_use]
     pub fn with_tab(mut self, tab: Tab) -> Self {
         self.add_tab_after_active(tab);
         self
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.tabs.len()
     }
 
+    #[must_use]
     pub fn active(&self) -> Option<&Tab> {
         self.tabs.get(self.active_tab)
     }
@@ -90,10 +94,12 @@ impl Workspace {
         self.tabs.get_mut(self.active_tab)
     }
 
+    #[must_use]
     pub fn tab_index(&self, id: TabId) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
     }
 
+    #[must_use]
     pub fn tab(&self, id: TabId) -> Option<&Tab> {
         self.tabs.iter().find(|t| t.id == id)
     }
@@ -103,6 +109,7 @@ impl Workspace {
     }
 
     /// Index of the tab holding `pane`.
+    #[must_use]
     pub fn find_pane(&self, pane: PaneId) -> Option<usize> {
         self.tabs.iter().position(|t| t.contains(pane))
     }
@@ -240,12 +247,14 @@ pub struct Workspaces {
 }
 
 impl Workspaces {
+    #[must_use]
     pub fn new(first: Workspace) -> Self {
         let id = first.id;
         Self { list: vec![first], active: 0, mru: vec![id] }
     }
 
     /// Builds from a list (e.g. after restore). `active` is clamped.
+    #[must_use]
     pub fn from_list(list: Vec<Workspace>, active: usize) -> Self {
         let active = active.min(list.len().saturating_sub(1));
         let first = list.get(active).map(|w| w.id);
@@ -254,14 +263,17 @@ impl Workspaces {
         Self { list, active, mru }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.list.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.list.is_empty()
     }
 
+    #[must_use]
     pub fn active(&self) -> &Workspace {
         &self.list[self.active]
     }
@@ -270,10 +282,12 @@ impl Workspaces {
         &mut self.list[self.active]
     }
 
+    #[must_use]
     pub fn index_of(&self, id: WorkspaceId) -> Option<usize> {
         self.list.iter().position(|w| w.id == id)
     }
 
+    #[must_use]
     pub fn get(&self, id: WorkspaceId) -> Option<&Workspace> {
         self.list.iter().find(|w| w.id == id)
     }
@@ -283,6 +297,7 @@ impl Workspaces {
     }
 
     /// Index of the previously active workspace (the `⌃⌘\` target).
+    #[must_use]
     pub fn last_active(&self) -> Option<usize> {
         let cur = self.list.get(self.active)?.id;
         self.mru.iter().filter(|id| **id != cur).find_map(|id| self.index_of(*id))
@@ -341,11 +356,13 @@ impl Workspaces {
         n > 1 && self.switch_to((self.active + n - 1) % n)
     }
 
+    #[must_use]
     pub fn name_taken(&self, name: &str) -> bool {
         self.list.iter().any(|w| w.name == name)
     }
 
     /// `base`, or `base 2`, `base 3`, … — the first not taken.
+    #[must_use]
     pub fn unique_name(&self, base: &str) -> String {
         if !self.name_taken(base) {
             return base.to_string();
@@ -354,6 +371,7 @@ impl Workspaces {
     }
 
     /// `workspace N` for a workspace without name or root: N = count + 1, bumped while taken.
+    #[must_use]
     pub fn default_name(&self) -> String {
         (self.list.len() + 1..)
             .map(|n| format!("workspace {n}"))
@@ -362,6 +380,7 @@ impl Workspaces {
     }
 
     /// The first workspace rooted at `path` (compared as given; canonicalize beforehand).
+    #[must_use]
     pub fn find_by_root(&self, path: &Path) -> Option<usize> {
         self.list.iter().position(|w| w.root.as_deref() == Some(path))
     }
@@ -416,11 +435,13 @@ impl Workspaces {
     }
 
     /// (workspace index, tab index) of the tab holding `pane`.
+    #[must_use]
     pub fn find_pane(&self, pane: PaneId) -> Option<(usize, usize)> {
         self.list.iter().enumerate().find_map(|(wi, w)| w.find_pane(pane).map(|ti| (wi, ti)))
     }
 
     /// (workspace index, tab index) of a tab.
+    #[must_use]
     pub fn find_tab(&self, tab: TabId) -> Option<(usize, usize)> {
         self.list.iter().enumerate().find_map(|(wi, w)| w.tab_index(tab).map(|ti| (wi, ti)))
     }

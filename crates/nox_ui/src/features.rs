@@ -35,7 +35,7 @@ impl Root {
                 None => self.ws.default_name(),
             },
         };
-        let ws = Workspace::new(WorkspaceId::next(), name, root.clone());
+        let ws = Workspace::new(WorkspaceId::next(), name, root);
         let id = ws.id;
         let idx = self.ws.push_and_switch(ws);
         self.coop.insert(id, Coop::new(id));
@@ -82,8 +82,7 @@ impl Root {
         }
         self.ws.list[idx].env = pf.env.clone();
         let file_path = ProjectFile::path(&path);
-        let trusted =
-            TrustStore::load(&trust_path()).map(|t| t.is_trusted(&file_path, &hash)).unwrap_or(false);
+        let trusted = TrustStore::load(&trust_path()).is_ok_and(|t| t.is_trusted(&file_path, &hash));
         if !pf.has_commands() || trusted {
             self.open_project_tabs(idx, &path, &pf, true, window, cx);
         } else {
@@ -182,7 +181,7 @@ impl Root {
             .iter()
             .flat_map(|t| t.pane_commands().into_iter().map(|c| c.map(str::to_string)))
             .collect();
-        let panes: Vec<PaneId> = self.ws.list[idx].tabs.iter().flat_map(|t| t.panes()).collect();
+        let panes: Vec<PaneId> = self.ws.list[idx].tabs.iter().flat_map(nox_layout::Tab::panes).collect();
         for (p, cmd) in panes.into_iter().zip(commands) {
             if let (Some(cmd), Some(e)) = (cmd, self.panes.get(&p)) {
                 e.update(cx, |e, _| e.write(format!("{cmd}\r").as_bytes()));
@@ -284,7 +283,7 @@ impl Root {
         if from == to || to >= self.ws.len() {
             return;
         }
-        let panes = self.ws.list[from].tab(tab).map(|t| t.panes()).unwrap_or_default();
+        let panes = self.ws.list[from].tab(tab).map(nox_layout::Tab::panes).unwrap_or_default();
         let from_id = self.ws.list[from].id;
         let to_id = self.ws.list[to].id;
         if let Some(c) = self.coop.get_mut(&from_id) {
@@ -401,13 +400,13 @@ impl Root {
 }
 
 /// After closing a tab whose cwd is a clean git worktree, offer to remove it (never a dirty one).
-pub fn offer_worktree_removal(path: PathBuf, window: &mut Window, cx: &mut App) {
-    let Some(git_dir) = nox_agents::git_dir(&path) else { return };
+pub fn offer_worktree_removal(path: &Path, window: &mut Window, cx: &mut App) {
+    let Some(git_dir) = nox_agents::git_dir(path) else { return };
     // Only linked worktrees (their git dir lives under the main repo's .git/worktrees).
     if !git_dir.to_string_lossy().contains("/worktrees/") {
         return;
     }
-    let Some(top) = nox_agents::repo_root(&path) else { return };
+    let Some(top) = nox_agents::repo_root(path) else { return };
     let task = cx.background_spawn({
         let top = top.clone();
         async move { nox_agents::worktree_is_clean(&top) }
@@ -545,7 +544,7 @@ pub fn install_agent_hooks(window: &mut Window, cx: &mut App) {
                 .transpose()
                 .and_then(|_| std::fs::write(&path, &new));
             match res {
-                Ok(_) => crate::toast::show(cx, "Claude Code hooks installed."),
+                Ok(()) => crate::toast::show(cx, "Claude Code hooks installed."),
                 Err(e) => crate::toast::show(cx, format!("Writing {}: {e}", path.display())),
             }
         })
@@ -554,6 +553,7 @@ pub fn install_agent_hooks(window: &mut Window, cx: &mut App) {
 }
 
 /// A minimal line diff (`-` / `+`) for review sheets.
+#[must_use]
 pub fn line_diff(old: &str, new: &str) -> String {
     let a: Vec<&str> = old.lines().collect();
     let b: Vec<&str> = new.lines().collect();

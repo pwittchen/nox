@@ -38,11 +38,13 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Issue a new random token (32 hex chars) for a pane. Put it in the pane's `NOX_TOKEN`.
+    #[must_use]
     pub fn issue(&self, caller: Caller) -> String {
         let token = uuid::Uuid::new_v4().simple().to_string();
         self.write().insert(token.clone(), caller);
@@ -50,6 +52,7 @@ impl Tokens {
     }
 
     /// The caller a token belongs to.
+    #[must_use]
     pub fn resolve(&self, token: &str) -> Option<Caller> {
         self.read().get(token).copied()
     }
@@ -72,20 +75,22 @@ impl Tokens {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.read().len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     fn read(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, Caller>> {
-        self.inner.read().unwrap_or_else(|e| e.into_inner())
+        self.inner.read().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn write(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, Caller>> {
-        self.inner.write().unwrap_or_else(|e| e.into_inner())
+        self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -117,6 +122,7 @@ impl std::fmt::Debug for Responder {
 
 impl Responder {
     /// Request id this responder answers.
+    #[must_use]
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -126,7 +132,7 @@ impl Responder {
         if self.workspaces_only {
             strip_tabs(&mut value);
         }
-        self.send(Response::ok(self.id, value));
+        self.send(&Response::ok(self.id, value));
     }
 
     /// Answer with a serializable result.
@@ -144,7 +150,7 @@ impl Responder {
 
     /// Answer with a full error (incl. `data`).
     pub fn error(mut self, error: IpcError) {
-        self.send(Response::err(self.id, error));
+        self.send(&Response::err(self.id, error));
     }
 
     /// Answer with `Ok(v)` / `Err(e)`.
@@ -155,9 +161,9 @@ impl Responder {
         }
     }
 
-    fn send(&mut self, response: Response) {
+    fn send(&mut self, response: &Response) {
         self.answered = true;
-        write_response(&self.writer, &response);
+        write_response(&self.writer, response);
     }
 }
 
@@ -174,7 +180,7 @@ impl Drop for Responder {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn write_response(writer: &SharedWriter, response: &Response) {
@@ -187,7 +193,7 @@ fn write_response(writer: &SharedWriter, response: &Response) {
     };
     line.push('\n');
     let mut stream = lock(writer);
-    if let Err(e) = stream.write_all(line.as_bytes()).and_then(|_| stream.flush()) {
+    if let Err(e) = stream.write_all(line.as_bytes()).and_then(|()| stream.flush()) {
         log::debug!("nox_ipc: write response {}: {e}", response.id);
     }
 }
@@ -270,6 +276,8 @@ struct Shared {
 /// socket file was deleted, so the wake-up connect in `shutdown` cannot reach it).
 const ACCEPT_POLL_MS: i32 = 200;
 
+// Thread entry point: it owns the listener and its share of the state for the thread's life.
+#[allow(clippy::needless_pass_by_value)]
 fn accept_loop(listener: UnixListener, shared: Arc<Shared>) {
     let fd = listener.as_raw_fd();
     loop {
@@ -278,7 +286,7 @@ fn accept_loop(listener: UnixListener, shared: Arc<Shared>) {
         }
         let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
         // SAFETY: one valid pollfd, the listener outlives the call.
-        let n = unsafe { libc::poll(&mut pfd, 1, ACCEPT_POLL_MS) };
+        let n = unsafe { libc::poll(&raw mut pfd, 1, ACCEPT_POLL_MS) };
         if n <= 0 {
             continue;
         }
@@ -413,11 +421,13 @@ impl std::fmt::Debug for ServerHandle {
 }
 
 impl ServerHandle {
+    #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.path
     }
 
     /// The token table this server authenticates against.
+    #[must_use]
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }
