@@ -92,6 +92,9 @@ pub struct Root {
     pub font_override: Option<f32>,
     pub window_active: bool,
     pub appearance: WindowAppearance,
+    /// Set once the last tab / workspace closed and the app is quitting: the session is already
+    /// saved, so later saves (debounced, on-quit hook) must not overwrite it.
+    pub quitting: bool,
     _subs: Vec<Subscription>,
     pub tasks: Vec<Task<()>>,
 }
@@ -151,6 +154,7 @@ impl Root {
             font_override: None,
             window_active: true,
             appearance,
+            quitting: false,
             _subs: subs,
             tasks: vec![],
         };
@@ -538,6 +542,9 @@ impl Root {
             }
             Some(WorkspaceAfterClose::Remaining) | None => {}
         }
+        if self.quitting {
+            return;
+        }
         if let Some(path) = worktree {
             crate::features::offer_worktree_removal(&path, window, cx);
         }
@@ -563,6 +570,11 @@ impl Root {
                 self.coop.remove(&id);
                 if Self::quit_on_last(cx) {
                     self.save_session_now(cx);
+                    self.quitting = true;
+                    self.session_task = None;
+                    // `cx.quit()` is asynchronous: keep `ws` non-empty (an empty placeholder, no
+                    // panes) so callers and renders before the app exits still see a valid state.
+                    self.ws = Workspaces::new(Workspace::new(WorkspaceId::next(), "default", None));
                     cx.quit();
                     return;
                 }
@@ -1164,6 +1176,9 @@ impl Root {
     }
 
     pub fn save_session_now(&mut self, cx: &mut Context<Self>) {
+        if self.quitting {
+            return;
+        }
         crate::persist::save(self, cx);
     }
 }
