@@ -1,5 +1,14 @@
-# nox
-nox — stay in command — a minimalistic, fast, native terminal for macOS, built in Rust with GPUI.
+<p align="center">
+  <img src="logo.png" alt="nox" width="128">
+</p>
+
+<h1 align="center">nox</h1>
+
+<p align="center">
+  <a href="https://github.com/pwittchen/nox/actions/workflows/ci.yml"><img src="https://github.com/pwittchen/nox/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI"></a>
+</p>
+
+<p align="center">stay in command — a minimalistic, fast, native terminal for macOS, built in Rust with GPUI.</p>
 
 - Splits and tabs like iTerm; tabs on top, bottom or in a sidebar
 - Workspaces: named groups of tabs per project, switched instantly, restored on relaunch
