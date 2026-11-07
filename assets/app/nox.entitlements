@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Minimal on purpose (SPEC §15.2): hardened runtime only. No App Sandbox (a terminal must run
+  arbitrary programs with the user's permissions), no disable-library-validation, no JIT.
+  Anything added later must be justified in the PR.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

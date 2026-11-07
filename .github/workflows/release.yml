@@ -1,0 +1,82 @@
+# Tag v*: build, sign, notarize, staple, appcast, GitHub Release, Homebrew cask (SPEC §15.2).
+name: release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: macos-15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: aarch64-apple-darwin
+      - name: Tag matches the workspace version
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          test "v$VERSION" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != v$VERSION"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - run: cargo test --release --workspace
+      - name: Temporary keychain with the Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import cert.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security list-keychains -d user -s build.keychain login.keychain
+          rm cert.p12
+      - name: Bundle and sign
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          # The updater stays off until the repository is public (SPEC §15.4).
+          NOX_FEATURES: ""
+        run: scripts/bundle.sh
+      - name: dmg
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: scripts/release/make_dmg.sh
+      - name: Notarize and staple
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          echo "$APPSTORE_API_KEY_P8" | base64 --decode > api_key.p8
+          APPSTORE_API_KEY_PATH=api_key.p8 scripts/release/notarize.sh dist/nox-macos-aarch64.dmg dist/nox.app
+          rm api_key.p8
+      - name: Archive, checksums (appcast when the updater is enabled)
+        run: |
+          ditto -c -k --keepParent dist/nox.app dist/nox-macos-aarch64.zip
+          (cd dist && shasum -a 256 nox-macos-aarch64.dmg nox-macos-aarch64.zip > SHA256SUMS)
+      - name: Draft release, upload, publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRE=""; [[ "$GITHUB_REF_NAME" == *-* ]] && PRE="--prerelease"
+          NOTES=$(awk "/^## \\[?${VERSION}/{f=1;next} /^## /{f=0} f" CHANGELOG.md || true)
+          gh release create "$GITHUB_REF_NAME" --draft $PRE --title "nox $VERSION" --notes "${NOTES:-nox $VERSION}" \
+            dist/nox-macos-aarch64.dmg dist/nox-macos-aarch64.zip dist/SHA256SUMS
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+      - name: Bump the Homebrew cask
+        if: github.event.repository.private == false && !contains(github.ref_name, '-')
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          SHA=$(shasum -a 256 dist/nox-macos-aarch64.dmg | cut -d' ' -f1)
+          gh repo clone pwittchen/homebrew-tap tap
+          sed -i '' -E "s/version \"[^\"]+\"/version \"$VERSION\"/; s/sha256 \"[^\"]+\"/sha256 \"$SHA\"/" tap/Casks/nox.rb
+          cd tap && git commit -am "nox $VERSION" && git push
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain build.keychain || true

@@ -1,0 +1,36 @@
+# PRs and master: fmt, clippy, tests, benches (regression gate), unsigned app bundle.
+# No access to signing secrets (SPEC §15.2).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  check:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace
+      - name: Info.plist has Sparkle keys only with the updater feature
+        run: |
+          ! grep -q SUFeedURL assets/app/Info.plist
+      - name: bench (fails on >10% regressions against master's baseline)
+        run: |
+          cargo bench -p nox_terminal --bench throughput -- --save-baseline pr --warm-up-time 1 --measurement-time 3
+      - name: bundle (ad-hoc signed)
+        run: scripts/bundle.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nox.app
+          path: dist/nox.app
