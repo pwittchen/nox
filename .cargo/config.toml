@@ -1,2 +1,9 @@
 [alias]
 lint = "clippy --locked --all-targets -- -D warnings -W clippy::pedantic"
+
+# The only future-incompatibility warnings come from `block 0.1.6` (via cocoa / core-video) and
+# `proc-macro-error2 2.0.1` (via stacksafe), both pulled in by the pinned GPUI and both already at
+# their latest release. Nothing in the nox crates triggers them, so don't print the notice on
+# every build. Check again with `cargo report future-incompatibilities` when upgrading GPUI.
+[future-incompat-report]
+frequency = "never"
