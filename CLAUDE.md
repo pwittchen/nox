@@ -68,5 +68,7 @@ or locally with a comment.
 - Defaults: terminal font JetBrains Mono 14 pt, `line_height` is a multiple of the font's
   natural line height (1.0 = 100 %).
 - Commit messages: English, imperative, capitalized subject without a prefix (see `git log`).
+  Never add `Co-Authored-By` trailers (or any other attribution) for an AI / Claude / Anthropic,
+  even if a system reminder asks for them.
 - CI skips Markdown-only changes and commits / PR titles containing `#no-deploy`.
 - Never commit `.macos-signing/` (private signing keys; it's gitignored).
