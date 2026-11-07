@@ -1,22 +1,34 @@
 #!/usr/bin/env bash
-# Notarize and staple (SPEC §15.2 steps 7–9) with an App Store Connect API key.
-#   APPSTORE_API_KEY_PATH=key.p8 APPSTORE_API_KEY_ID=… APPSTORE_API_ISSUER_ID=… notarize.sh dist/nox-macos-aarch64.dmg dist/nox.app
+# Notarize and staple (SPEC §15.2 steps 6–9) with an Apple ID + app-specific password.
+#   APPLE_ID=… APPLE_PASSWORD=… APPLE_TEAM_ID=… notarize.sh dist/nox.app
+#   APPLE_ID=… APPLE_PASSWORD=… APPLE_TEAM_ID=… notarize.sh dist/nox-macos-aarch64.dmg
+# notarytool takes zip / dmg / pkg, so an app is submitted as a zip. The ticket is stapled to the
+# app (Gatekeeper accepts it offline once copied out of the dmg) and to the dmg (it opens
+# without a warning when downloaded).
 set -euo pipefail
-DMG=${1:?dmg}
-APP=${2:?app}
-: "${APPSTORE_API_KEY_PATH:?}" "${APPSTORE_API_KEY_ID:?}" "${APPSTORE_API_ISSUER_ID:?}"
-OUT=$(xcrun notarytool submit "$DMG" --key "$APPSTORE_API_KEY_PATH" --key-id "$APPSTORE_API_KEY_ID" \
-  --issuer "$APPSTORE_API_ISSUER_ID" --wait --timeout 30m --output-format json)
+TARGET=${1:?usage: notarize.sh path/to/nox.app | path/to/nox.dmg}
+: "${APPLE_ID:?}" "${APPLE_PASSWORD:?}" "${APPLE_TEAM_ID:?}"
+AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID")
+
+SUBMIT=$TARGET
+if [[ "$TARGET" == *.app ]]; then
+  SUBMIT="$(mktemp -d)/nox-notarize.zip"
+  ditto -c -k --keepParent "$TARGET" "$SUBMIT"
+fi
+OUT=$(xcrun notarytool submit "$SUBMIT" "${AUTH[@]}" --wait --timeout 30m --output-format json)
 echo "$OUT"
-STATUS=$(echo "$OUT" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+[[ "$SUBMIT" != "$TARGET" ]] && rm -f "$SUBMIT"
+STATUS=$(echo "$OUT" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
 if [[ "$STATUS" != "Accepted" ]]; then
-  ID=$(echo "$OUT" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-  xcrun notarytool log "$ID" --key "$APPSTORE_API_KEY_PATH" --key-id "$APPSTORE_API_KEY_ID" --issuer "$APPSTORE_API_ISSUER_ID"
+  ID=$(echo "$OUT" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')
+  [[ -n "$ID" ]] && xcrun notarytool log "$ID" "${AUTH[@]}"
   exit 1
 fi
-xcrun stapler staple "$APP"
-xcrun stapler staple "$DMG"
-codesign --verify --strict --verbose=2 "$APP"
-spctl --assess --type execute -vv "$APP"
-spctl --assess --type open --context context:primary-signature -vv "$DMG"
-xcrun stapler validate "$DMG"
+xcrun stapler staple "$TARGET"
+xcrun stapler validate "$TARGET"
+if [[ "$TARGET" == *.app ]]; then
+  codesign --verify --strict --verbose=2 "$TARGET"
+  spctl --assess --type execute -vv "$TARGET"
+else
+  spctl --assess --type open --context context:primary-signature -vv "$TARGET"
+fi

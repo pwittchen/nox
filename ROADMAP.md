@@ -5,6 +5,9 @@
 - **Sparkle auto-update** (SPEC §15.3): the `updater` cargo feature, Info.plist keys, appcast
   script and release workflow are in place, but Sparkle.framework is not embedded or driven
   yet. Off by design until the repository is public (§15.4).
+- **Homebrew cask** (§15.2 step 12): `release.yml` starts the tap's `update-formulae.yml` with
+  `formula=nox` once the repo is public, but `pwittchen/homebrew-tap` has no `Casks/nox.rb` (nor
+  a `nox` choice in that workflow) and the `HOMEBREW_TAP_TOKEN` secret isn't set on nox yet.
 - **Kitty keyboard protocol** (§7.1): `terminal.kitty_keyboard` is passed to the emulator, but
   the key encoder still sends legacy sequences.
 - **GPUI UI tests** (§14): `#[gpui::test]` coverage for tab / pane actions, tabs position

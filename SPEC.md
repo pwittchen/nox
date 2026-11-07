@@ -1450,24 +1450,23 @@ nox is distributed outside the Mac App Store, so it is signed with a **Developer
 Application** certificate, uses the hardened runtime and is notarized by Apple; Gatekeeper opens
 it without warnings, also when downloaded from a browser.
 
-Repository secrets, available only to the `release` GitHub environment (protected: tags `v*`
-on `master`, required reviewer = owner), never to PR workflows or forks:
+Repository secrets, read only by `release.yml` (tag pushes), never by PR workflows or forks.
+Names and flow are shared with the author's other macOS apps (kayet, zora):
 
 | Secret                         | Content                                                       |
 |--------------------------------|---------------------------------------------------------------|
-| `MACOS_CERTIFICATE_P12`        | Developer ID Application certificate + private key, `.p12`, base64 |
+| `MACOS_CERTIFICATE`            | Developer ID Application certificate + private key, `.p12`, base64 |
 | `MACOS_CERTIFICATE_PASSWORD`   | password of the `.p12`                                        |
-| `MACOS_SIGNING_IDENTITY`       | `Developer ID Application: Piotr Wittchen (TEAMID)`           |
+| `KEYCHAIN_PASSWORD`            | password of the temporary CI keychain                         |
+| `APPLE_SIGNING_IDENTITY`       | `Developer ID Application: Piotr Wittchen (TEAMID)`           |
+| `APPLE_ID`                     | Apple ID of the developer account, for `notarytool`           |
+| `APPLE_PASSWORD`               | app-specific password of that Apple ID                        |
 | `APPLE_TEAM_ID`                | 10-character team ID                                          |
-| `APPSTORE_API_KEY_P8`          | App Store Connect API key (`.p8`, base64), role Developer, for `notarytool` |
-| `APPSTORE_API_KEY_ID`, `APPSTORE_API_ISSUER_ID` | key and issuer IDs of that API key           |
-| `SPARKLE_ED_PRIVATE_KEY`       | EdDSA private key for signing update archives (see 15.3)      |
-| `HOMEBREW_TAP_TOKEN`           | fine-grained PAT with write access to `pwittchen/homebrew-tap` only |
+| `SPARKLE_ED_PRIVATE_KEY`       | EdDSA private key for signing update archives (see 15.3); not set until public |
+| `HOMEBREW_TAP_TOKEN`           | PAT that can start workflows in `pwittchen/homebrew-tap`; not set until public |
 
-An App Store Connect API key is used instead of Apple ID + app-specific password: no 2FA, can
-be revoked independently, not tied to a personal login.
-
-`release.yml` (runs on `macos-15` arm64, triggered by `push: tags: ['v*']`):
+`release.yml` (triggered by `push: tags: ['v*']`; a `build` job on `macos-15` arm64, then a
+`release` job on Linux):
 
 1. Check out, verify tag == workspace version, `cargo test --release`.
 2. `cargo build --release --target aarch64-apple-darwin`, bundle `nox.app` (Info.plist with
@@ -1478,29 +1477,36 @@ be revoked independently, not tied to a personal login.
    `always()` cleanup step.
 4. Sign **inside-out**, never with `--deep`: Sparkle's XPC services, `Autoupdate`, `Updater.app`,
    then `Sparkle.framework`, then `nox.app` — each with
-   `codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY"`, the app
+   `codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY"`, the app
    with `--entitlements assets/app/nox.entitlements`.
 5. Entitlements are minimal: hardened runtime, **no** App Sandbox (a terminal must run arbitrary
    programs with the user's permissions), no `disable-library-validation`, no JIT. Anything
    added later must be justified in the PR.
-6. Build `nox-macos-aarch64.dmg` (app + `/Applications` symlink, background, icon layout), sign
-   the dmg.
-7. Notarize: `xcrun notarytool submit nox-macos-aarch64.dmg --key … --key-id … --issuer …
-   --wait --timeout 30m`; on rejection, fetch and print `notarytool log` and fail.
-8. Staple: `xcrun stapler staple` on `nox.app` and the dmg, so first launch works offline.
-9. Verify, fail the release on any error: `codesign --verify --strict --verbose=2 nox.app`,
-   `spctl --assess --type execute -vv nox.app`, `spctl --assess --type open
-   --context context:primary-signature -vv nox-macos-aarch64.dmg`, `stapler validate`.
-10. Produce the update archive and appcast (15.3), `SHA256SUMS`.
-11. Create the GitHub Release for the tag (notes from the matching `CHANGELOG.md` section) with
-    assets: `nox-macos-aarch64.dmg`, `nox-macos-aarch64.zip`, `appcast.xml`, `SHA256SUMS`.
-    Created as a draft and published only after every asset is uploaded, so the updater never
-    sees a half-uploaded release.
-12. Bump the cask in `pwittchen/tap` (version + sha256) through a commit with
-    `HOMEBREW_TAP_TOKEN` (stable releases only).
+6. Notarize the app: zip it (`ditto -c -k --keepParent`), `xcrun notarytool submit … --apple-id
+   … --password … --team-id … --wait --timeout 30m`; on rejection, fetch and print
+   `notarytool log` and fail.
+7. Staple the ticket to `nox.app`, so first launch works offline once it is copied out of the dmg.
+8. Verify, fail the release on any error: `stapler validate`, `codesign --verify --strict
+   --verbose=2 nox.app`, `spctl --assess --type execute -vv nox.app`.
+9. Build `nox-macos-aarch64.dmg` from the stapled app (app + `/Applications` symlink), sign it,
+   notarize it (submitted as is), staple it and check `spctl --assess --type open --context
+   context:primary-signature`, so a downloaded dmg opens without a Gatekeeper warning.
+10. Produce `nox-macos-aarch64.zip` (after stapling), the appcast when the updater is on (15.3),
+    and `SHA256SUMS`. The dmg, zip and checksums are kept as the workflow artifact
+    `nox-macos-aarch64`.
+11. Create the GitHub Release for the tag (notes from the matching `CHANGELOG.md` section, else
+    the commits since the previous tag) with assets: `nox-macos-aarch64.dmg`,
+    `nox-macos-aarch64.zip`, `SHA256SUMS` (+ `appcast.xml` with the updater). Created as a
+    draft and published only after every asset is uploaded, so the updater never sees a
+    half-uploaded release.
+12. Start the `update-formulae.yml` workflow of `pwittchen/homebrew-tap` (cask `nox`) with
+    `HOMEBREW_TAP_TOKEN` (stable releases of a public repository only).
 
 The same steps live in `scripts/release/*.sh`, so a release can be built and notarized locally
-from a Mac with the certificate in the login keychain, if CI is unavailable.
+from a Mac with the certificate in the login keychain, if CI is unavailable:
+`SIGN_IDENTITY=… scripts/bundle.sh`, `APPLE_ID=… APPLE_PASSWORD=… APPLE_TEAM_ID=…
+scripts/release/notarize.sh dist/nox.app`, `SIGN_IDENTITY=… scripts/release/make_dmg.sh`, then
+`notarize.sh dist/nox-macos-aarch64.dmg`.
 
 `ci.yml` (PRs and `master`) checks formatting, runs `cargo lint` (clippy::pedantic, warnings
 denied), builds and tests, produces an **unsigned** (ad-hoc signed) `nox.app` artifact, and

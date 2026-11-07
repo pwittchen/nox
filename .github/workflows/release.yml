@@ -1,82 +1,152 @@
-# Tag v*: build, sign, notarize, staple, appcast, GitHub Release, Homebrew cask (SPEC §15.2).
+# Pushing a `vX.Y.Z` tag builds nox for Apple Silicon, signs it with the Developer ID, notarizes
+# and staples it, and publishes the dmg + zip to GitHub Releases (also kept as a workflow
+# artifact). Same secrets and flow as kayet / zora (SPEC §15.2). ci.yml stays unsigned.
 name: release
 on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  release:
+  build:
     runs-on: macos-15
-    environment: release
-    permissions:
-      contents: write
+    # Build + tests take ~15 min; cap it so a stuck Apple notary queue can't burn runner minutes.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
       - name: Tag matches the workspace version
         run: |
           VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
-          test "v$VERSION" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != v$VERSION"; exit 1; }
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          test "v$VERSION" = "${GITHUB_REF_NAME}" || { echo "::error::tag ${GITHUB_REF_NAME} != v$VERSION"; exit 1; }
+
       - run: cargo test --release --workspace
-      - name: Temporary keychain with the Developer ID certificate
+
+      - name: Import Developer ID certificate
+        # Imports the base64-encoded .p12 into a one-shot keychain; removed in the last step.
         env:
-          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
-          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > cert.p12
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security set-keychain-settings -lut 3600 build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security import cert.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          security list-keychains -d user -s build.keychain login.keychain
-          rm cert.p12
-      - name: Bundle and sign
+          CERT_PATH="$RUNNER_TEMP/devid.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          echo -n "$MACOS_CERTIFICATE" | base64 --decode -o "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/[" ]//g')
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+
+      - name: Bundle and sign (inside-out, hardened runtime)
         env:
-          SIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           BUILD_NUMBER: ${{ github.run_number }}
           # The updater stays off until the repository is public (SPEC §15.4).
           NOX_FEATURES: ""
         run: scripts/bundle.sh
-      - name: dmg
+
+      - name: Notarize and staple app
         env:
-          SIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: scripts/release/make_dmg.sh
-      - name: Notarize and staple
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/release/notarize.sh dist/nox.app
+
+      - name: Package and sign dmg
         env:
-          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
-          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
-          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
-        run: |
-          echo "$APPSTORE_API_KEY_P8" | base64 --decode > api_key.p8
-          APPSTORE_API_KEY_PATH=api_key.p8 scripts/release/notarize.sh dist/nox-macos-aarch64.dmg dist/nox.app
-          rm api_key.p8
-      - name: Archive, checksums (appcast when the updater is enabled)
+          SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: scripts/release/make_dmg.sh dist/nox.app dist/nox-macos-aarch64.dmg
+
+      - name: Notarize and staple dmg
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/release/notarize.sh dist/nox-macos-aarch64.dmg
+
+      - name: Zip and checksums
         run: |
           ditto -c -k --keepParent dist/nox.app dist/nox-macos-aarch64.zip
           (cd dist && shasum -a 256 nox-macos-aarch64.dmg nox-macos-aarch64.zip > SHA256SUMS)
-      - name: Draft release, upload, publish
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
+          rm -f "$RUNNER_TEMP/devid.p12"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nox-macos-aarch64
+          path: |
+            dist/nox-macos-aarch64.dmg
+            dist/nox-macos-aarch64.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nox-macos-aarch64
+          path: dist
+
+      - name: Release notes (CHANGELOG.md section, else commits since the previous tag)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk "/^## \\[?${VERSION}[] ]/{f=1;next} /^## /{f=0} f" CHANGELOG.md > notes.md || true
+          if ! grep -q '[^[:space:]]' notes.md; then
+            PREV=$(git tag --list 'v*' --sort=-v:refname | grep -vx "$GITHUB_REF_NAME" | head -n 1)
+            git log --pretty=format:'- %s (%h)' ${PREV:+"$PREV.."}"$GITHUB_REF_NAME" > notes.md
+          fi
+          cat notes.md
+
+      # Created as a draft and published once every asset is uploaded (SPEC §15.2 step 11).
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           PRE=""; [[ "$GITHUB_REF_NAME" == *-* ]] && PRE="--prerelease"
-          NOTES=$(awk "/^## \\[?${VERSION}/{f=1;next} /^## /{f=0} f" CHANGELOG.md || true)
-          gh release create "$GITHUB_REF_NAME" --draft $PRE --title "nox $VERSION" --notes "${NOTES:-nox $VERSION}" \
+          gh release create "$GITHUB_REF_NAME" --draft $PRE --title "nox ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md \
             dist/nox-macos-aarch64.dmg dist/nox-macos-aarch64.zip dist/SHA256SUMS
           gh release edit "$GITHUB_REF_NAME" --draft=false
-      - name: Bump the Homebrew cask
-        if: github.event.repository.private == false && !contains(github.ref_name, '-')
+
+  update-homebrew-cask:
+    # Only once the repository is public (SPEC §15.4) and for stable releases. GITHUB_TOKEN can't
+    # start a workflow in another repository, hence the personal token.
+    needs: release
+    if: github.event.repository.private == false && !contains(github.ref_name, '-')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Start the tap's Update formulae workflow
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          SHA=$(shasum -a 256 dist/nox-macos-aarch64.dmg | cut -d' ' -f1)
-          gh repo clone pwittchen/homebrew-tap tap
-          sed -i '' -E "s/version \"[^\"]+\"/version \"$VERSION\"/; s/sha256 \"[^\"]+\"/sha256 \"$SHA\"/" tap/Casks/nox.rb
-          cd tap && git commit -am "nox $VERSION" && git push
-      - name: Remove the keychain
-        if: always()
-        run: security delete-keychain build.keychain || true
+          gh workflow run update-formulae.yml -R pwittchen/homebrew-tap \
+            -f formula=nox -f version="${GITHUB_REF_NAME#v}"
