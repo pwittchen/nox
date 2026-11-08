@@ -194,6 +194,8 @@ impl SettingsView {
                 .child("reset")
                 .on_click(move |_, _, cx| remove_value(cx, key))
         });
+        // The shortcuts editor is a full-width list: its label goes above it, not beside it.
+        let stacked = key == "keys";
         div()
             .flex()
             .flex_col()
@@ -204,9 +206,8 @@ impl SettingsView {
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
+                    .when(stacked, |d| d.flex_col().gap_2())
+                    .when(!stacked, |d| d.items_center().justify_between().gap_4())
                     .child(
                         div()
                             .flex()
@@ -231,7 +232,13 @@ impl SettingsView {
                                     .child(key),
                             ),
                     )
-                    .child(div().flex_none().when(disabled, |d| d.opacity(0.4)).child(control)),
+                    .child(
+                        div()
+                            .when(stacked, gpui::Styled::w_full)
+                            .when(!stacked, gpui::Styled::flex_none)
+                            .when(disabled, |d| d.opacity(0.4))
+                            .child(control),
+                    ),
             )
             .children(Self::extra_for(key, cx))
             .into_any_element()
@@ -657,7 +664,16 @@ impl SettingsView {
                     .gap_2()
                     .py(px(2.))
                     .text_size(px(12.))
-                    .child(div().w(px(170.)).text_color(theme.text).child(name.replace('_', " ")))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_color(theme.text)
+                            .child(name.replace('_', " ")),
+                    )
                     .child(
                         div()
                             .id(SharedString::from(format!("rec-{name}")))
@@ -707,7 +723,7 @@ impl SettingsView {
                     .into_any_element()
             })
             .collect();
-        div().flex().flex_col().children(rows).into_any_element()
+        div().flex().flex_col().w_full().children(rows).into_any_element()
     }
 }
 

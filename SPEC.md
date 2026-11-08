@@ -434,7 +434,9 @@ keeps the toggle and the buttons.
   (`[shell]`, `[shell.env]`), Workspaces (`[workspaces]`), Agents (`[agents]`, the configured
   agents and their commands), Icons (`[icons]`), Keys (`[keys]`) — and a scrollable form on the
   right. Each setting shows a label, a one-line description and the matching config key in muted
-  monospace (`tabs.position`), so the UI teaches the file.
+  monospace (`tabs.position`), so the UI teaches the file: on the left with the control on the
+  right, except for the Keys shortcut list, which has its label above it and takes the full
+  width (action name on the left, recorder and buttons on the right).
 - Controls by type: switches for booleans, segmented controls / popups for enums, steppers or
   sliders with a numeric field for numbers, text inputs (see 5.8) for strings, font pickers
   (see 5.10), a theme picker with live preview, key-value tables for
