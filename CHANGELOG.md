@@ -1,7 +1,5 @@
 # Changelog
 
-## [Unreleased]
-
 ## 0.1.2 — 2026-11-08
 
 - nox updates itself: nox → Check for Updates…, the palette, the About window and Settings check
@@ -18,7 +16,7 @@
 - Add install and update instructions to the README (5618d8a)
 - Take the release version from the git tag and update the changelog (c6f87d7)
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-11-08
 
 First implementation of SPEC.md: GPUI terminal with splits, tabs (top / bottom / sidebar),
 workspaces with project files, session restore with agent resume, agent detection and state,
