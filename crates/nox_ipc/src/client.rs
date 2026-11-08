@@ -93,7 +93,14 @@ impl Client {
                 }
                 None => None,
             };
-            self.reader.get_ref().set_read_timeout(read_timeout).map_err(|e| io_error("set timeout", &e))?;
+            // On macOS `setsockopt` fails with `EINVAL` once the peer closed the socket. Reads
+            // can't block then (they return buffered data or EOF), so that's not an error: the
+            // answer may already be buffered behind a line for another id.
+            if let Err(e) = self.reader.get_ref().set_read_timeout(read_timeout)
+                && e.raw_os_error() != Some(libc::EINVAL)
+            {
+                return Err(io_error("set timeout", &e));
+            }
             match self.reader.read_until(b'\n', &mut self.pending) {
                 Ok(0) => {
                     return Err(IpcError::new(ErrorCode::Internal, "nox closed the connection"));

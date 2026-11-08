@@ -105,8 +105,8 @@ points `NOX_HOME` at a per-process temp dir and uses a plain `/bin/sh` (no `-l`,
 with IPC off. Test windows have no native handle, so `window_bg::apply` is a no-op under
 `cfg(test)`, and `menus.rs` hands context menus to the test instead of showing an `NSMenu`.
 Tests that write the shared `config.toml` or `session.toml` take the lock in
-`config_io::tests` / `persist::tests`; pane tests that spawn PTYs serialize through
-`pane::tests::spawn_lock` (macOS `openpty` isn't thread-safe). What stays untested is native
+`config_io::tests` / `persist::tests` (PTY creation is serialized by
+`TerminalSession::spawn` itself, see below). What stays untested is native
 glue (`nox_mac`, `nox/main.rs`) and paths the test platform leaves `unimplemented!` (file
 pickers, character palette, minimize / zoom).
 
@@ -129,6 +129,12 @@ PTY ─▶ reader thread: poll + read 64 KiB ─▶ OscSniffer (OSC 7/133/9/777,
   them. Once scrollback is full the marks drift by the number of dropped lines (accepted).
 - The child is reaped by a waiter thread (`waitpid`); if a background process keeps the PTY
   open, the exit is still reported after 300 ms.
+- PTY creation + spawn is serialized by a process-wide lock in `TerminalSession::spawn` (macOS
+  `openpty` uses the static `ptsname` buffer, and the master's `FD_CLOEXEC` is set after the
+  fact, so concurrent spawns could fail or leak a master fd into another child).
+- Dropping a session sends SIGHUP and hands the `Pty` to a reaper thread: alacritty's
+  `Pty::drop` waits on the child without a timeout, so the reaper first escalates to SIGTERM /
+  SIGKILL (0.5 s grace each, only while the child is unreaped) and drops the `Pty` after that.
 - PTY resizes go through `ResizeCoalescer` (≤ 1 per 33 ms, final one 50 ms after the last change)
   on a thread that is idle unless the size changes; `Term::resize` happens in the same frame.
 

@@ -2179,14 +2179,6 @@ pub(crate) mod tests {
         config_running("exec cat >/dev/null")
     }
 
-    /// Creating PTYs concurrently is racy on macOS (`libc::openpty` uses the static `ptsname`
-    /// buffer and sets `CLOEXEC` non-atomically), and tests run in parallel threads: spawn one
-    /// session at a time.
-    pub(crate) fn spawn_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     /// Open a 640×360 window whose root is one focused pane.
     pub(crate) fn open(
         cx: &mut TestAppContext,
@@ -2197,9 +2189,7 @@ pub(crate) mod tests {
             crate::test_support::init_app(cx, config);
             cx.set_global(crate::root::UiFlags::default());
         });
-        let guard = spawn_lock();
         let (pane, cx) = cx.add_window_view(|window, cx| Pane::new(PaneId(1), spawn, window, cx));
-        drop(guard);
         cx.simulate_resize(size(px(640.), px(360.)));
         pane.update_in(cx, |p, window, cx| {
             window.activate_window();
@@ -2651,9 +2641,7 @@ pub(crate) mod tests {
         // ⌘R restarts it: a new shell is spawned (which exits again at once, so whether
         // `exited` is still clear right after the restart depends on timing — check the pid).
         let pid = pane.read_with(cx, |p, _| p.session.as_ref().map(TerminalSession::pid));
-        let guard = spawn_lock();
         cx.dispatch_action(RestartPane);
-        drop(guard);
         let new_pid = pane.read_with(cx, |p, _| p.session.as_ref().map(TerminalSession::pid));
         assert!(new_pid.is_some() && new_pid != pid, "restart spawns a new session");
         wait_until(cx, |cx| pane.read_with(cx, |p, _| p.exited.is_some()));
@@ -3388,9 +3376,7 @@ pub(crate) mod tests {
         cx.simulate_keystrokes("enter");
         assert!(!events.borrow().iter().any(|e| matches!(e, PaneEvent::Close)));
         pane.update(cx, |p, _| p.resume_failed = true);
-        let guard = spawn_lock();
         pane.update(cx, Pane::restart);
-        drop(guard);
         pane.read_with(cx, |p, _| {
             assert!(matches!(&p.spawn.startup, Some(Startup::Run(c)) if c == "claude --resume s1"));
             assert!(p.agent.is_none() && p.osc_title.is_none() && p.exited.is_none() && !p.resume_failed);

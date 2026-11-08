@@ -7,7 +7,11 @@
 //!   `Wakeup` unless one is already pending — the UI coalesces into one repaint per frame.
 //! - **Waiter thread**: blocking `waitpid` on the shell; reports the exit status.
 //! - **Writer thread**: large writes (pastes) so the UI thread never blocks; small writes
-//!   (keystrokes, `^C`) are written directly from the caller's thread.
+//!   (keystrokes, `^C`) are written directly from the caller's thread, unless the writer
+//!   thread still has queued data — then they queue behind it so input stays in order.
+//! - **Reaper thread** (only after the session is dropped): escalates SIGHUP → SIGTERM →
+//!   SIGKILL if the shell survives, then drops the `Pty` (whose `Drop` waits on the child) —
+//!   so dropping a session never blocks.
 //! - **Resize thread**: applies coalesced `TIOCSWINSZ` (see [`crate::resize`]); idle when the
 //!   size isn't changing.
 //!
@@ -18,9 +22,9 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -245,11 +249,15 @@ pub struct TerminalSession {
     writer: Arc<Mutex<File>>,
     fd: RawFd,
     pid: i32,
-    _pty: Arc<Mutex<tty::Pty>>,
+    /// Taken by `Drop` and handed to the reaper thread.
+    pty: Mutex<Option<tty::Pty>>,
+    exit_status: Arc<ExitStatus>,
     events: async_channel::Receiver<TerminalEvent>,
     dirty: Arc<AtomicBool>,
     resize_tx: mpsc::Sender<GridSize>,
     write_tx: mpsc::Sender<Vec<u8>>,
+    /// Writes queued on (or being written by) the writer thread.
+    write_pending: Arc<AtomicUsize>,
     size: Arc<Mutex<GridSize>>,
     colors: Arc<RwLock<Vec<Rgb>>>,
     osc52: Arc<RwLock<ClipboardPolicy>>,
@@ -260,6 +268,45 @@ pub struct TerminalSession {
     last_output: Arc<AtomicU64>,
     started: Instant,
 }
+
+/// The child was reaped; `code` is `None` if it was killed by a signal.
+#[derive(Debug, Clone, Copy)]
+struct Reaped {
+    code: Option<i32>,
+}
+
+/// Set by the waiter thread once it reaped the child.
+#[derive(Default)]
+struct ExitStatus {
+    status: Mutex<Option<Reaped>>,
+    cv: Condvar,
+}
+
+impl ExitStatus {
+    fn set(&self, code: Option<i32>) {
+        *self.status.lock().unwrap_or_else(PoisonError::into_inner) = Some(Reaped { code });
+        self.cv.notify_all();
+    }
+
+    /// Wait up to `timeout` for the child to be reaped.
+    fn wait(&self, timeout: Duration) -> Option<Reaped> {
+        let guard = self.status.lock().unwrap_or_else(PoisonError::into_inner);
+        let (guard, _) = self
+            .cv
+            .wait_timeout_while(guard, timeout, |s| s.is_none())
+            .unwrap_or_else(PoisonError::into_inner);
+        *guard
+    }
+}
+
+/// Serializes PTY creation + spawn: macOS `openpty` uses the static `ptsname` buffer and the
+/// master's `FD_CLOEXEC` is set after the fact, so concurrent spawns can fail (`Os { code: -6 }`)
+/// or leak a master fd into another session's child.
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+/// How long a dropped session's shell gets after SIGHUP (and again after SIGTERM) before the
+/// next signal.
+const KILL_GRACE: Duration = Duration::from_millis(500);
 
 /// Monotonic milliseconds since an arbitrary process-wide epoch.
 fn now_ms() -> u64 {
@@ -295,7 +342,10 @@ impl TerminalSession {
             #[cfg(target_os = "windows")]
             escape_args: false,
         };
-        let pty = tty::new(&pty_opts, window_size(opts.size), 0)?;
+        let pty = {
+            let _guard = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+            tty::new(&pty_opts, window_size(opts.size), 0)?
+        };
         let master = pty.file().try_clone()?;
         let fd = master.as_raw_fd();
         let pid = pty.child().id() as i32;
@@ -322,7 +372,7 @@ impl TerminalSession {
         let dirty = Arc::new(AtomicBool::new(false));
         let marks = Arc::new(Mutex::new(Marks::default()));
         let exited = Arc::new(AtomicBool::new(false));
-        let exit_status: Arc<Mutex<Option<Option<i32>>>> = Arc::new(Mutex::new(None));
+        let exit_status = Arc::new(ExitStatus::default());
         let reader_done = Arc::new(AtomicBool::new(false));
         let last_output = Arc::new(AtomicU64::new(now_ms()));
 
@@ -341,13 +391,7 @@ impl TerminalSession {
                 reader_loop(master, term, tx.clone(), dirty, marks, last_output, &graphemes);
                 reader_done.store(true, Ordering::SeqCst);
                 // Give the waiter a moment to collect the status.
-                for _ in 0..50 {
-                    if exit_status.lock().unwrap().is_some() {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                let status = exit_status.lock().unwrap().unwrap_or(None);
+                let status = exit_status.wait(Duration::from_millis(500)).and_then(|r| r.code);
                 if !exited.swap(true, Ordering::SeqCst) {
                     let _ = tx.try_send(TerminalEvent::Exited(status));
                 }
@@ -371,7 +415,7 @@ impl TerminalSession {
                 };
                 let code =
                     if rc == pid && libc::WIFEXITED(status) { Some(libc::WEXITSTATUS(status)) } else { None };
-                *exit_status.lock().unwrap() = Some(code);
+                exit_status.set(code);
                 // If a background process keeps the PTY open the reader never sees EOF; report
                 // the exit anyway after a short grace period.
                 thread::sleep(Duration::from_millis(300));
@@ -416,13 +460,16 @@ impl TerminalSession {
 
         // Writer thread for large writes.
         let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>();
+        let write_pending = Arc::new(AtomicUsize::new(0));
         {
             let writer = writer.clone();
+            let pending = write_pending.clone();
             thread::Builder::new().name(format!("nox-pty-writer-{pid}")).spawn(move || {
                 while let Ok(buf) = write_rx.recv() {
-                    if write_all_fd(&writer, &buf).is_err() {
-                        break;
-                    }
+                    // A failed write (program not reading, shell gone) drops that buffer only;
+                    // the counter must come down so later writes aren't queued forever.
+                    let _ = write_all_fd(&writer, &buf);
+                    pending.fetch_sub(1, Ordering::SeqCst);
                 }
             })?;
         }
@@ -432,11 +479,13 @@ impl TerminalSession {
             writer,
             fd,
             pid,
-            _pty: Arc::new(Mutex::new(pty)),
+            pty: Mutex::new(Some(pty)),
+            exit_status,
             events: rx,
             dirty,
             resize_tx,
             write_tx,
+            write_pending,
             size,
             colors,
             osc52,
@@ -492,15 +541,19 @@ impl TerminalSession {
     }
 
     /// Write input to the program. Small writes go straight to the PTY; large ones through the
-    /// writer thread.
+    /// writer thread — and so does every write while it still has data queued, so a key typed
+    /// right after a big paste can't overtake it.
     pub fn write(&self, bytes: &[u8]) {
         if bytes.is_empty() || self.has_exited() {
             return;
         }
-        if bytes.len() <= 1024 {
+        if bytes.len() <= 1024 && self.write_pending.load(Ordering::SeqCst) == 0 {
             let _ = write_all_fd(&self.writer, bytes);
         } else {
-            let _ = self.write_tx.send(bytes.to_vec());
+            self.write_pending.fetch_add(1, Ordering::SeqCst);
+            if self.write_tx.send(bytes.to_vec()).is_err() {
+                self.write_pending.fetch_sub(1, Ordering::SeqCst);
+            }
         }
     }
 
@@ -673,8 +726,33 @@ impl TerminalSession {
 }
 
 impl Drop for TerminalSession {
+    /// SIGHUP, then hand the `Pty` to a reaper thread: `Pty::drop` waits on the child without
+    /// a timeout, and a shell that gets SIGHUP while still starting up (or traps it) can survive
+    /// it. The reaper escalates to SIGTERM and SIGKILL for the process group, each after
+    /// [`KILL_GRACE`], and only signals while the child is unreaped (its pid can't be reused).
     fn drop(&mut self) {
         self.kill();
+        let pty = self.pty.get_mut().unwrap_or_else(PoisonError::into_inner).take();
+        let exit_status = self.exit_status.clone();
+        let pid = self.pid;
+        let reap = move || {
+            for sig in [libc::SIGTERM, libc::SIGKILL] {
+                if exit_status.wait(KILL_GRACE).is_some() {
+                    break;
+                }
+                let guard = exit_status.status.lock().unwrap_or_else(PoisonError::into_inner);
+                if guard.is_none() {
+                    unsafe {
+                        libc::kill(-pid, sig);
+                        libc::kill(pid, sig);
+                    }
+                }
+            }
+            drop(pty);
+        };
+        if let Err(e) = thread::Builder::new().name(format!("nox-pty-reaper-{pid}")).spawn(reap) {
+            log::warn!("nox_terminal: can't start the reaper thread for {pid}: {e}");
+        }
     }
 }
 
@@ -859,14 +937,6 @@ fn reader_loop(
 mod tests {
     use super::*;
 
-    /// Concurrent PTY spawns in one process occasionally fail (`Os { code: -6 }` from the
-    /// fork / `TIOCSCTTY` dance); the app spawns from one thread, so serialize them here too.
-    fn spawn(opts: &SpawnOptions) -> io::Result<TerminalSession> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        TerminalSession::spawn(opts)
-    }
-
     fn wait_for(
         rx: &async_channel::Receiver<TerminalEvent>,
         mut pred: impl FnMut(&TerminalEvent) -> bool,
@@ -888,9 +958,12 @@ mod tests {
 
     #[test]
     fn spawns_shell_and_reads_echo_back_from_grid() {
-        let session =
-            spawn(&SpawnOptions { program: Some("/bin/sh".into()), args: vec![], ..SpawnOptions::default() })
-                .unwrap();
+        let session = TerminalSession::spawn(&SpawnOptions {
+            program: Some("/bin/sh".into()),
+            args: vec![],
+            ..SpawnOptions::default()
+        })
+        .unwrap();
         let rx = session.events();
         session.write(b"echo nox-$((40+2))\r");
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -911,9 +984,12 @@ mod tests {
 
     #[test]
     fn osc_events_and_last_output() {
-        let session =
-            spawn(&SpawnOptions { program: Some("/bin/sh".into()), args: vec![], ..SpawnOptions::default() })
-                .unwrap();
+        let session = TerminalSession::spawn(&SpawnOptions {
+            program: Some("/bin/sh".into()),
+            args: vec![],
+            ..SpawnOptions::default()
+        })
+        .unwrap();
         let rx = session.events();
         session
             .write(b"printf '\\033]7;file://h/tmp\\007\\033]133;C\\007line1\\nline2\\n\\033]133;D;0\\007'\r");
@@ -924,7 +1000,7 @@ mod tests {
 
     /// Run `script` with `/bin/sh -c`.
     fn spawn_script(script: &str, opts: SpawnOptions) -> TerminalSession {
-        spawn(&SpawnOptions {
+        TerminalSession::spawn(&SpawnOptions {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), script.into()],
             ..opts
@@ -1280,9 +1356,12 @@ mod tests {
 
     #[test]
     fn foreground_and_busy() {
-        let session =
-            spawn(&SpawnOptions { program: Some("/bin/sh".into()), args: vec![], ..SpawnOptions::default() })
-                .unwrap();
+        let session = TerminalSession::spawn(&SpawnOptions {
+            program: Some("/bin/sh".into()),
+            args: vec![],
+            ..SpawnOptions::default()
+        })
+        .unwrap();
         assert!(wait_until(|| session.foreground().is_some_and(|p| p.pid == session.pid())));
         assert!(!session.is_busy());
         session.write(b"exec 2>&1; sleep 30\r");
@@ -1314,7 +1393,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let integration = tempfile::tempdir().unwrap();
         crate::shell::install(integration.path()).unwrap();
-        let session = spawn(&SpawnOptions {
+        let session = TerminalSession::spawn(&SpawnOptions {
             program: Some("/bin/bash".into()),
             args: vec!["-l".into()],
             cwd: Some(home.path().to_path_buf()),
@@ -1338,10 +1417,83 @@ mod tests {
         );
     }
 
+    fn process_gone(pid: i32) -> bool {
+        let rc = unsafe { libc::kill(pid, 0) };
+        rc == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+
+    /// Drop `session` on another thread and assert that returns within a second (so a
+    /// regression fails the test instead of hanging it).
+    fn assert_drop_is_prompt(session: TerminalSession) {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            drop(session);
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(1)).is_ok(), "dropping the session blocked");
+    }
+
+    #[test]
+    fn drop_does_not_block_on_a_shell_that_survives_sighup() {
+        let session = spawn_script(r#"trap "" HUP; printf 'READY\n'; sleep 100"#, SpawnOptions::default());
+        wait_screen(&session, |s| s.contains("READY"));
+        let pid = session.pid();
+        assert_drop_is_prompt(session);
+        assert!(wait_until(|| process_gone(pid)), "shell {pid} survived the drop");
+    }
+
+    #[test]
+    fn drop_right_after_spawn_returns_promptly() {
+        let pids: Vec<i32> = (0..8)
+            .map(|_| {
+                let session = spawn_script("sleep 100", SpawnOptions::default());
+                let pid = session.pid();
+                assert_drop_is_prompt(session);
+                pid
+            })
+            .collect();
+        for pid in pids {
+            assert!(wait_until(|| process_gone(pid)), "shell {pid} survived the drop");
+        }
+    }
+
+    #[test]
+    fn keystroke_after_large_paste_stays_in_order() {
+        let session =
+            spawn_script(r#"printf 'READY\n'; n=$(wc -l); echo "COUNT=$((n))""#, SpawnOptions::default());
+        wait_screen(&session, |s| s.contains("READY"));
+        let paste = "line of the large paste, 25\n".repeat(100);
+        assert!(paste.len() > 2048);
+        session.write(paste.as_bytes());
+        session.write(&[0x04]); // ^D: end of input for `wc`
+        wait_screen(&session, |s| s.contains("COUNT=100"));
+    }
+
+    #[test]
+    fn concurrent_spawns_all_succeed() {
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    TerminalSession::spawn(&SpawnOptions {
+                        program: Some("/bin/sh".into()),
+                        args: vec!["-c".into(), "printf 'UP\\n'; read x".into()],
+                        ..SpawnOptions::default()
+                    })
+                })
+            })
+            .collect();
+        let sessions: Vec<TerminalSession> =
+            handles.into_iter().map(|h| h.join().unwrap().expect("concurrent spawn failed")).collect();
+        for s in &sessions {
+            wait_screen(s, |t| t.contains("UP"));
+        }
+    }
+
     #[test]
     fn resize_updates_grid() {
-        // Wait until the shell is up: a shell that gets SIGHUP while it is still starting can
-        // miss it, and then dropping the session blocks in `Pty::drop`'s `wait`.
         let session = spawn_script(r"printf 'READY\n'; read x", SpawnOptions::default());
         wait_screen(&session, |s| s.contains("READY"));
         session.resize(GridSize { cols: 100, rows: 30, cell_w: 8, cell_h: 16 });

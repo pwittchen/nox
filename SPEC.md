@@ -1023,7 +1023,11 @@ text between them. Everything goes through nox and stays visible to the user.
   once per frame, so no queue builds up. `^C` is written to the PTY directly from the UI thread
   and is never stuck behind output.
 - **Input path**: `KeyDownEvent` → key encoder → `write(2)` on the PTY master on the UI thread
-  (small writes; large pastes go to a writer thread so the UI never blocks).
+  (small writes; large pastes go to a writer thread so the UI never blocks). Input stays in
+  order: while the writer thread still has a paste queued, keystrokes queue behind it.
+- **Closing a pane** sends SIGHUP to the shell's process group and never blocks: if the shell
+  survives (it traps HUP, or was still starting), SIGTERM and then SIGKILL follow, 0.5 s apart,
+  on a background thread.
 - **Only visible panes render.** Hidden tabs keep parsing but don't paint.
 - **Idle is idle**: GPUI doesn't redraw without `notify`; the cursor-blink timer stops after 5 s;
   the cwd poll runs only while output flows. Target ~0% CPU idle.

@@ -89,6 +89,16 @@ fn closed_or_truncated_connection() {
 }
 
 #[test]
+fn answer_after_other_id_is_read_when_the_server_closed() {
+    // Both lines arrive, then the server closes; re-arming the read timeout for the second
+    // (already buffered) line then fails with `EINVAL` on macOS, which must not fail the call.
+    let (_dir, path, _server) =
+        fake(b"{\"v\":1,\"id\":99,\"ok\":\"other\"}\n{\"v\":1,\"id\":1,\"ok\":\"mine\"}\n", true);
+    let mut client = Client::connect(&path, None).unwrap();
+    assert_eq!(client.call(ls(), Some(Duration::from_secs(5))).unwrap(), json!("mine"));
+}
+
+#[test]
 fn unexpected_result_shape() {
     let (_dir, path, _server) = fake(b"{\"v\":1,\"id\":1,\"ok\":\"not an ls result\"}\n", false);
     let mut client = Client::connect(&path, None).unwrap();
