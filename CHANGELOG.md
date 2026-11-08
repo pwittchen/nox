@@ -1,5 +1,7 @@
 # Changelog
 
+## [Unreleased]
+
 ## [0.1.0] — unreleased
 
 First implementation of SPEC.md: GPUI terminal with splits, tabs (top / bottom / sidebar),

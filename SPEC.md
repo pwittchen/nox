@@ -1539,8 +1539,17 @@ shell ◀───────────────────────�
 ## 15. Release, Signing & Updates
 
 ### 15.1 Versioning
-- SemVer. The workspace `version` in `Cargo.toml` is the single source of truth; a release is
-  cut by pushing a tag `vX.Y.Z` that matches it (the release workflow fails on a mismatch).
+- SemVer. A release is cut by pushing a tag `vX.Y.Z`; the tag is the source of truth for the
+  version. The release workflow writes it into the workspace `version` in `Cargo.toml` and the
+  workspace entries of `Cargo.lock` (`scripts/release/set_version.sh`) before building, and for
+  stable tags commits that bump to `master` afterwards, so `Cargo.toml` there always holds the
+  latest released version. A tag that isn't valid SemVer fails the release.
+- `CHANGELOG.md`: changes for the next release go into the `## [Unreleased]` section at the top
+  (optional). On release, `scripts/release/changelog.sh` takes the notes from that section if it
+  has content, else from an existing `## [X.Y.Z]` section, else from the commit subjects since
+  the previous `v*` tag (`Release …` commits excluded), and replaces both sections with an empty
+  `## [Unreleased]` and `## [X.Y.Z] — YYYY-MM-DD` above older ones. Re-releasing the current
+  version works the same way (the version bump is then a no-op). Pre-releases get notes but leave `CHANGELOG.md` and `master` untouched.
 - `CFBundleShortVersionString` = `X.Y.Z`; `CFBundleVersion` = a monotonically increasing build
   number (`github.run_number` of the release workflow), which is what Sparkle compares.
 - A tag with a pre-release suffix (`v1.2.0-beta.1`) produces a GitHub **pre-release** and goes
@@ -1569,7 +1578,7 @@ Names and flow are shared with the author's other macOS apps (kayet, zora):
 `release.yml` (triggered by `push: tags: ['v*']`; a `build` job on `macos-15` arm64, then a
 `release` job on Linux):
 
-1. Check out, verify tag == workspace version, `cargo test --release`.
+1. Check out, set the workspace version from the tag (15.1), `cargo test --release`.
 2. `cargo build --release --target aarch64-apple-darwin`, bundle `nox.app` (Info.plist with
    version numbers from 15.1, `SUFeedURL`, `SUPublicEDKey`), embed `Sparkle.framework` in
    `Contents/Frameworks`.
@@ -1595,13 +1604,17 @@ Names and flow are shared with the author's other macOS apps (kayet, zora):
 10. Produce `nox-macos-aarch64.zip` (after stapling), the appcast when the updater is on (15.3),
     and `SHA256SUMS`. The dmg, zip and checksums are kept as the workflow artifact
     `nox-macos-aarch64`.
-11. Create the GitHub Release for the tag (notes from the matching `CHANGELOG.md` section, else
-    the commits since the previous tag) with assets: `nox-macos-aarch64.dmg`,
-    `nox-macos-aarch64.zip`, `SHA256SUMS` (+ `appcast.xml` with the updater). Created as a
+11. Create the GitHub Release for the tag (notes as in 15.1: the `Unreleased` or matching
+    `CHANGELOG.md` section, else the commits since the previous tag) with assets:
+    `nox-macos-aarch64.dmg`, `nox-macos-aarch64.zip`, `SHA256SUMS` (+ `appcast.xml` with the
+    updater). Created as a
     draft and published only after every asset is uploaded, so the updater never sees a
     half-uploaded release.
 12. Start the `update-formulae.yml` workflow of `pwittchen/homebrew-tap` (cask `nox`) with
     `HOMEBREW_TAP_TOKEN` (stable releases of a public repository only).
+13. Stable tags on `master` only: commit the version bump and the new `CHANGELOG.md` section as
+    `Release X.Y.Z` (by `github-actions[bot]`, rebased onto the current `master`) and push it.
+    This runs after the release is published, so a rejected push doesn't affect the release.
 
 The same steps live in `scripts/release/*.sh`, so a release can be built and notarized locally
 from a Mac with the certificate in the login keychain, if CI is unavailable:

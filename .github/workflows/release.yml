@@ -1,6 +1,8 @@
 # Pushing a `vX.Y.Z` tag builds nox for Apple Silicon, signs it with the Developer ID, notarizes
 # and staples it, and publishes the dmg + zip to GitHub Releases (also kept as a workflow
 # artifact). Same secrets and flow as kayet / zora (SPEC §15.2). ci.yml stays unsigned.
+# The version comes from the tag (SPEC §15.1): the build sets it in Cargo.toml / Cargo.lock,
+# and for stable tags the bump and the new CHANGELOG.md section are committed to master.
 name: release
 on:
   push:
@@ -30,10 +32,8 @@ jobs:
         with:
           key: release
 
-      - name: Tag matches the workspace version
-        run: |
-          VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
-          test "v$VERSION" = "${GITHUB_REF_NAME}" || { echo "::error::tag ${GITHUB_REF_NAME} != v$VERSION"; exit 1; }
+      - name: Set the workspace version from the tag
+        run: scripts/release/set_version.sh "$GITHUB_REF_NAME"
 
       - run: cargo test --release --workspace
 
@@ -116,15 +116,8 @@ jobs:
           name: nox-macos-aarch64
           path: dist
 
-      - name: Release notes (CHANGELOG.md section, else commits since the previous tag)
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          awk "/^## \\[?${VERSION}[] ]/{f=1;next} /^## /{f=0} f" CHANGELOG.md > notes.md || true
-          if ! grep -q '[^[:space:]]' notes.md; then
-            PREV=$(git tag --list 'v*' --sort=-v:refname | grep -vx "$GITHUB_REF_NAME" | head -n 1)
-            git log --pretty=format:'- %s (%h)' ${PREV:+"$PREV.."}"$GITHUB_REF_NAME" > notes.md
-          fi
-          cat notes.md
+      - name: Release notes (CHANGELOG.md Unreleased / version section, else commits since the previous tag)
+        run: scripts/release/changelog.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/notes.md"
 
       # Created as a draft and published once every asset is uploaded (SPEC §15.2 step 11).
       - name: Create GitHub release
@@ -133,9 +126,41 @@ jobs:
         run: |
           PRE=""; [[ "$GITHUB_REF_NAME" == *-* ]] && PRE="--prerelease"
           gh release create "$GITHUB_REF_NAME" --draft $PRE --title "nox ${GITHUB_REF_NAME#v}" \
-            --notes-file notes.md \
+            --notes-file "$RUNNER_TEMP/notes.md" \
             dist/nox-macos-aarch64.dmg dist/nox-macos-aarch64.zip dist/SHA256SUMS
           gh release edit "$GITHUB_REF_NAME" --draft=false
+
+  update-master:
+    # Stable tags only: commit the version bump and the new CHANGELOG.md section to the default
+    # branch, if the tagged commit is on it. Runs after the release is published, so a rejected
+    # push (e.g. branch protection) leaves the release intact. A push with GITHUB_TOKEN doesn't
+    # start ci.yml.
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    env:
+      BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Commit version and changelog
+        run: |
+          git fetch origin "$BRANCH"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$BRANCH"; then
+            echo "::notice::$GITHUB_REF_NAME is not on $BRANCH; not committing the version bump"
+            exit 0
+          fi
+          scripts/release/set_version.sh "$GITHUB_REF_NAME"
+          scripts/release/changelog.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/notes.md"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml Cargo.lock CHANGELOG.md
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "Release ${GITHUB_REF_NAME#v}"
+          git rebase "origin/$BRANCH"
+          git push origin "HEAD:$BRANCH"
 
   update-homebrew-cask:
     # Only once the repository is public (SPEC §15.4) and for stable releases. GITHUB_TOKEN can't
