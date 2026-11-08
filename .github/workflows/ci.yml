@@ -13,6 +13,11 @@ on:
     branches: [master]
     paths-ignore: ['**.md']
 
+# A newer run for the same branch / PR cancels the one still in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   audit:
     if: >-
