@@ -175,31 +175,29 @@ fn render_titlebar(root: &mut Root, window: &mut Window, cx: &mut Context<Root>)
         .gap_2()
         .bg(theme.bg_sidebar);
     match pos {
-        nox_config::TabsPosition::Top => {
-            bar = bar
-                .child(render_workspace_chip(root, cx))
-                .child(render_tab_strip(root, cx))
-                .child(drag_region("titlebar-drag"))
-                .child(title_bar_buttons(cx));
-        }
         nox_config::TabsPosition::Bottom => {
             bar = bar.child(drag_region("titlebar-drag"));
         }
-        nox_config::TabsPosition::Left => {
-            let visible = Settings::global(cx).config.tabs.sidebar_visible;
-            bar = bar
-                .child(
-                    icon_button("sidebar-toggle", "icons/ui/sidebar.svg", &theme)
-                        .when(visible, |d| d.text_color(theme.text))
-                        .on_click(cx.listener(|_, _, window, cx| {
-                            window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx);
-                        })),
-                )
-                .child(drag_region("titlebar-drag"))
-                .child(title_bar_buttons(cx));
+        nox_config::TabsPosition::Top | nox_config::TabsPosition::Left => {
+            bar = bar.child(sidebar_toggle(root, &theme, cx));
+            if root.tab_bar_shown(cx) {
+                bar = bar.child(render_workspace_chip(root, cx)).child(render_tab_strip(root, cx));
+            }
+            bar = bar.child(drag_region("titlebar-drag")).child(title_bar_buttons(cx));
         }
     }
     bar.into_any_element()
+}
+
+/// The `[◧]` button: highlighted while the sidebar shows (SPEC 5.4).
+fn sidebar_toggle(root: &Root, theme: &Theme, cx: &mut Context<Root>) -> AnyElement {
+    let shown = root.sidebar_shown(cx);
+    icon_button("sidebar-toggle", "icons/ui/sidebar.svg", theme)
+        .when(shown, |d| d.text_color(theme.text))
+        .on_click(cx.listener(|_, _, window, cx| {
+            window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx);
+        }))
+        .into_any_element()
 }
 
 fn title_bar_buttons(cx: &mut Context<Root>) -> AnyElement {
@@ -448,7 +446,8 @@ fn render_tab_strip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
 
 fn render_bottom_bar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     let theme = Theme::global(cx).clone();
-    div()
+    let tabs = root.tab_bar_shown(cx);
+    let mut bar = div()
         .h(px(crate::root::BOTTOM_BAR_PX))
         .flex_none()
         .flex()
@@ -456,11 +455,11 @@ fn render_bottom_bar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         .px(px(8.))
         .gap_2()
         .bg(theme.bg_sidebar)
-        .child(render_workspace_chip(root, cx))
-        .child(render_tab_strip(root, cx))
-        .child(div().flex_1())
-        .child(title_bar_buttons(cx))
-        .into_any_element()
+        .child(sidebar_toggle(root, &theme, cx));
+    if tabs {
+        bar = bar.child(render_workspace_chip(root, cx)).child(render_tab_strip(root, cx));
+    }
+    bar.child(div().flex_1()).child(title_bar_buttons(cx)).into_any_element()
 }
 
 // ---- sidebar ---------------------------------------------------------------------------------

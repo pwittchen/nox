@@ -247,12 +247,15 @@ pub fn register(el: Stateful<Div>, cx: &mut Context<Root>) -> Stateful<Div> {
     // View.
     let el = on!(el, cx, CommandPalette, |r: &mut Root, w: &mut Window, cx| open_command_palette(r, w, cx));
     let el = on!(el, cx, SwitchTab, |r: &mut Root, w: &mut Window, cx| open_tab_switcher(r, w, cx));
-    let el = on!(el, cx, ToggleSidebar, |r: &mut Root, _w: &mut Window, cx: &mut Context<Root>| {
+    let el = on!(el, cx, ToggleSidebar, |_r: &mut Root, _w: &mut Window, cx: &mut Context<Root>| {
         let t = &Settings::global(cx).config.tabs;
+        // Left mode hides / shows the sidebar; top / bottom mode swaps the tab bar for it.
         if t.position == nox_config::TabsPosition::Left {
             let v = !t.sidebar_visible;
             crate::config_io::set_value(cx, "tabs.sidebar_visible", v);
-            let _ = r;
+        } else {
+            let v = !t.sidebar_replaces_tabs;
+            crate::config_io::set_value(cx, "tabs.sidebar_replaces_tabs", v);
         }
     });
     let el = on!(el, cx, FontBigger, |r: &mut Root, w: &mut Window, cx| font_step(r, 1.0, w, cx));

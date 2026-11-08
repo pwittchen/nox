@@ -236,6 +236,13 @@ fn build() -> Vec<SettingMeta> {
         m(Tabs, "tabs.sidebar_visible", "Show sidebar", "Sidebar visibility (left position only).", Bool),
         m(
             Tabs,
+            "tabs.sidebar_replaces_tabs",
+            "Sidebar instead of tab bar",
+            "Top / bottom positions: show the sidebar and hide the tab bar (toggled with ⌘\\).",
+            Bool,
+        ),
+        m(
+            Tabs,
             "tabs.sidebar_width",
             "Sidebar width",
             "Sidebar width in pixels (left position only).",

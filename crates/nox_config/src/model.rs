@@ -167,6 +167,7 @@ impl Default for UiConfig {
 pub struct TabsConfig {
     pub position: TabsPosition,
     pub sidebar_visible: bool,
+    pub sidebar_replaces_tabs: bool,
     pub sidebar_width: u32,
     pub show_index: bool,
     pub title: TabTitle,
@@ -179,6 +180,7 @@ impl Default for TabsConfig {
         Self {
             position: TabsPosition::Top,
             sidebar_visible: true,
+            sidebar_replaces_tabs: false,
             sidebar_width: 220,
             show_index: true,
             title: TabTitle::Auto,

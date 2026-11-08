@@ -294,13 +294,15 @@ precedence where details differ):
 
 Title bar (left to right):
 - Traffic lights (native).
+- **Sidebar toggle** `[◧]` (see 5.4).
 - **Workspace chip** `[▢ nox]`: the active workspace (see 4.7) — color swatch, name, and the
   workspace status dot when another workspace needs attention (so the user sees it without
   opening anything). Hovering shows the root and the focused pane's cwd. Click → menu: the list
   of workspaces with their status dots (click to switch), New Workspace…, Open Folder as
   Workspace…, New Agent…, New Agent in Worktree…, Rename Workspace…, Set Color ▸, Copy Path, Reveal in
-  Finder, Close Workspace. Dropping a folder on it opens that folder as a workspace. In `left`
-  mode this slot holds the sidebar toggle instead and the chip moves to the sidebar (see 5.4).
+  Finder, Close Workspace. Dropping a folder on it opens that folder as a workspace. While the
+  sidebar shows (`left` mode, or toggled on in `top` / `bottom` mode) the chip and the tab strip
+  are hidden and move to the sidebar (see 5.4).
 - **Tab strip**: one pill per tab, with a process icon (see 4.6; the default `>_` is tinted with
   `ansi.green` at low alpha when the tab is active, muted otherwise), the index and the title. Active tab:
   `bg-elevated` fill with a hairline border; inactive: no fill, `text-muted` label. Pills share
@@ -330,9 +332,10 @@ Pane card:
 
 ### 5.3 Tabs on the bottom
 
-Same as 5.2, with the tab strip, the workspace chip, `⚙`, `⌘` and `+` moved to a 34 px bar under the
-pane card. The title bar keeps only the traffic lights and stays draggable; its height shrinks to
-28 px. No sidebar.
+Same as 5.2, with the sidebar toggle, the tab strip, the workspace chip, `⚙`, `⌘` and `+` moved to
+a 34 px bar under the pane card. The title bar keeps only the traffic lights and stays draggable;
+its height shrinks to 28 px. Toggling the sidebar on hides the chip and the tab strip; the bar
+keeps the toggle and the buttons.
 
 ### 5.4 Tabs in the left sidebar
 
@@ -366,8 +369,11 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 - Sidebar width: drag its 1px divider, min 160 px, max 360 px, default 220 px; persisted.
 - `⌘\` or the sidebar toggle `[◧]` in the title bar hides and shows it; the state is persisted.
   While hidden, `⌘1…9` and the palette still switch tabs.
-- **When `tabs.position` is `top` or `bottom` there is no sidebar**: it is not rendered, `⌘\`
-  does nothing and the toggle is not shown.
+- **When `tabs.position` is `top` or `bottom`** the sidebar is off by default and the tab bar
+  shows. `⌘\` or the toggle `[◧]` (in the title bar, or in the bottom bar for `bottom`) swaps
+  them: the sidebar shows and the workspace chip and tab strip hide; toggling again brings the
+  tab bar back and hides the sidebar. The state is persisted (`tabs.sidebar_replaces_tabs`),
+  separately from `tabs.sidebar_visible` of `left` mode.
 - Switching `tabs.position` in the config applies live, without restarting sessions.
 
 ### 5.5 Context menus (native)
@@ -1097,7 +1103,7 @@ for WCAG AA against `bg` in both variants.
 | Resize pane                     | `⌘⌃←/→/↑/↓`         |
 | Equalize panes                  | `⌘⌃=`               |
 | Maximize / restore pane         | `⌘⇧↵`               |
-| Toggle sidebar (left mode only) | `⌘\`                |
+| Toggle sidebar / tab bar        | `⌘\`                |
 | New workspace                   | `⌘⇧N`               |
 | Open folder as workspace        | `⌘O`                |
 | Switch workspace…               | `⌘P`                |
@@ -1156,8 +1162,9 @@ window_padding = 6           # px between the window edge and the pane card
 show_git_branch = true       # branch of the pane's cwd in pane headers and sidebar rows (see 7.12)
 
 [tabs]
-position = "top"             # "top" | "bottom" | "left"; top/bottom: no sidebar
+position = "top"             # "top" | "bottom" | "left"; top/bottom: tab bar (sidebar via ⌘\)
 sidebar_visible = true       # left mode only
+sidebar_replaces_tabs = false # top/bottom mode: sidebar shown instead of the tab bar (⌘\)
 sidebar_width = 220          # left mode only
 show_index = true            # "1 ~" vs "~"
 title = "auto"               # "auto" (see 4.4) | "cwd" | "process"

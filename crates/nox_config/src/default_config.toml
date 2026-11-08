@@ -16,8 +16,9 @@ window_padding = 6           # px between the window edge and the pane card
 show_git_branch = true       # branch of the pane's cwd in pane headers and sidebar rows (SPEC.md §7.12)
 
 [tabs]
-position = "top"             # "top" | "bottom" | "left"; top/bottom: no sidebar
+position = "top"             # "top" | "bottom" | "left"; top/bottom: tab bar (sidebar via ⌘\)
 sidebar_visible = true       # left mode only
+sidebar_replaces_tabs = false # top/bottom mode: sidebar shown instead of the tab bar (⌘\)
 sidebar_width = 220          # left mode only
 show_index = true            # "1 ~" vs "~"
 title = "auto"               # "auto" (SPEC.md §4.4) | "cwd" | "process"

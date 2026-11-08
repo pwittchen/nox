@@ -313,6 +313,7 @@ fn from_table(root: &Table, notices: &mut Vec<Notice>) -> Config {
         let mut s = Sec::new(root, "tabs", notices);
         s.enumeration("position", &mut t.position);
         s.bool("sidebar_visible", &mut t.sidebar_visible);
+        s.bool("sidebar_replaces_tabs", &mut t.sidebar_replaces_tabs);
         s.int("sidebar_width", &mut t.sidebar_width);
         s.bool("show_index", &mut t.show_index);
         s.enumeration("title", &mut t.title);

@@ -707,7 +707,13 @@ impl Root {
 
     pub fn sidebar_shown(&self, cx: &App) -> bool {
         let t = &Settings::global(cx).config.tabs;
-        t.position == nox_config::TabsPosition::Left && t.sidebar_visible
+        if t.position == nox_config::TabsPosition::Left { t.sidebar_visible } else { t.sidebar_replaces_tabs }
+    }
+
+    /// Whether the tab strip and workspace chip show (top / bottom mode, sidebar not toggled on).
+    pub fn tab_bar_shown(&self, cx: &App) -> bool {
+        let t = &Settings::global(cx).config.tabs;
+        t.position != nox_config::TabsPosition::Left && !t.sidebar_replaces_tabs
     }
 
     pub fn sidebar_width(&self, cx: &App) -> f32 {
