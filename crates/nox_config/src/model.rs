@@ -359,7 +359,7 @@ impl Default for TerminalConfig {
             smooth_scroll_duration: 100,
             scroll_on_input: true,
             cursor_style: CursorStyle::Block,
-            cursor_blink: true,
+            cursor_blink: false,
             padding: [8, 6],
             copy_on_select: false,
             confirm_multiline_paste: true,

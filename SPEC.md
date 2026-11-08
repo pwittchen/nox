@@ -687,7 +687,7 @@ corner or a divider.
   (`font.size_applies_to = "all" | "pane"`).
 
 ### 7.5 Cursor
-- `terminal.cursor_style = "block" | "bar" | "underline"`, `terminal.cursor_blink = true`.
+- `terminal.cursor_style = "block" | "bar" | "underline"`, `terminal.cursor_blink = false`.
   Programs can change style and blinking via DECSCUSR. Blinking stops after 5 s of inactivity
   (no timers when idle) and while the window is unfocused, where the cursor is drawn hollow.
 
@@ -1243,7 +1243,7 @@ scroll_multiplier = 3
 smooth_scroll_duration = 100 # ms, mouse wheels only; 0 disables
 scroll_on_input = true
 cursor_style = "block"       # "block" | "bar" | "underline"
-cursor_blink = true
+cursor_blink = false
 padding = [8, 6]             # [horizontal, vertical] px
 copy_on_select = false
 confirm_multiline_paste = true
