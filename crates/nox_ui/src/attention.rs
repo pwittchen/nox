@@ -115,4 +115,37 @@ mod tests {
         assert_eq!(done_text("make", Some(0), "x", Duration::from_secs(1)).0, "make finished");
         assert_eq!(pane_from_notification(&notification_id(PaneId(42))), Some(PaneId(42)));
     }
+
+    #[test]
+    fn trigger_marks_the_pane_until_visited() {
+        // Sound and notifications off: nothing native runs in tests.
+        let mut cfg = nox_config::Config::default();
+        cfg.terminal.attention_sound = false;
+        cfg.terminal.notifications = false;
+        let mut a = Attention::default();
+        a.trigger(PaneId(7), "t", "b", &cfg);
+        assert!(!a.should_chime(PaneId(7), Instant::now() + Duration::from_secs(10)), "chimed already");
+        a.visited(PaneId(7));
+        assert!(a.should_chime(PaneId(7), Instant::now() + Duration::from_secs(10)));
+        a.visited(PaneId(8));
+    }
+
+    #[test]
+    fn notification_ids_round_trip() {
+        assert_eq!(notification_id(PaneId(3)), "pane-3");
+        assert_eq!(pane_from_notification("pane-x"), None);
+        assert_eq!(pane_from_notification("tab-3"), None);
+    }
+
+    #[test]
+    fn agent_texts() {
+        let (t, b) = agent_text("claude", AgentState::NeedsInput, Some("Allow edit?"), "nox", "2 ~/nox");
+        assert_eq!(t, "claude needs input");
+        assert_eq!(b, "Allow edit?\nnox · 2 ~/nox");
+        let (t, b) = agent_text("codex", AgentState::Idle, Some(""), "w", "t");
+        assert_eq!(t, "codex finished");
+        assert_eq!(b, "w · t");
+        assert_eq!(agent_text("x", AgentState::Idle, None, "w", "t").1, "w · t");
+        assert_eq!(done_text("ls", None, "t", Duration::from_secs(2)).0, "ls finished");
+    }
 }

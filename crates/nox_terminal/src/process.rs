@@ -189,6 +189,65 @@ mod tests {
     }
 
     #[test]
+    fn procargs2_edge_cases() {
+        // Too short for argc.
+        assert_eq!(parse_procargs2(&[1, 0]), None);
+        // No NUL after the exec path.
+        let mut buf = 1i32.to_ne_bytes().to_vec();
+        buf.extend(b"/bin/sh");
+        assert_eq!(parse_procargs2(&buf), None);
+        // Only padding after the exec path.
+        let mut buf = 1i32.to_ne_bytes().to_vec();
+        buf.extend(b"/bin/sh\0\0\0");
+        assert_eq!(parse_procargs2(&buf), None);
+        // argc = 0: no arguments, but the exec path is still known.
+        let mut buf = 0i32.to_ne_bytes().to_vec();
+        buf.extend(b"/bin/sh\0\0HOME=/x\0");
+        assert_eq!(parse_procargs2(&buf), Some(("/bin/sh".into(), vec![])));
+        // argc larger than what's there: missing args come out empty, no panic.
+        let mut buf = 3i32.to_ne_bytes().to_vec();
+        buf.extend(b"/bin/sh\0sh\0-c");
+        assert_eq!(parse_procargs2(&buf), Some(("/bin/sh".into(), vec!["-c".into(), String::new()])));
+    }
+
+    #[test]
+    fn missing_process_and_fd() {
+        // pid_max on macOS is 99999, so this pid can't exist.
+        let pid = 999_999;
+        assert_eq!(proc_path(pid), None);
+        assert_eq!(proc_cwd(pid), None);
+        assert_eq!(proc_args(pid), None);
+        assert_eq!(process_info(pid), None);
+        assert_eq!(foreground_pid(-1), None);
+        assert_eq!(foreground_process(-1), None);
+        assert_eq!(basename("/usr/bin/node"), "node");
+        assert_eq!(basename("node"), "node");
+    }
+
+    #[test]
+    fn own_process_args_and_path() {
+        let pid = std::process::id() as i32;
+        let path = proc_path(pid).unwrap();
+        assert_eq!(std::path::Path::new(&path), std::env::current_exe().unwrap());
+        let (_, args) = proc_args(pid).unwrap();
+        let ours: Vec<String> = std::env::args().skip(1).collect();
+        assert_eq!(args, ours);
+    }
+
+    #[test]
+    fn login_shell_and_user_at_host() {
+        let shell = login_shell();
+        match std::env::var("SHELL") {
+            Ok(s) if !s.is_empty() => assert_eq!(shell, s),
+            _ => assert!(shell.starts_with('/'), "{shell}"),
+        }
+        let uh = user_at_host();
+        let (user, host) = uh.split_once('@').unwrap();
+        assert_eq!(user, std::env::var("USER").unwrap_or_else(|_| "user".into()));
+        assert!(!host.is_empty() && !host.contains('.'), "{uh}");
+    }
+
+    #[test]
     fn own_process_info() {
         let pid = std::process::id() as i32;
         let info = process_info(pid).expect("info for self");

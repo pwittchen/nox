@@ -50,6 +50,9 @@ pub mod util;
 pub mod util_keys;
 pub mod window_bg;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 /// Percent-decode a `file://` URL path.
 #[must_use]
 pub fn links_decode(s: &str) -> String {

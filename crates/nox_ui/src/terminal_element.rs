@@ -728,3 +728,452 @@ pub fn grid_size_in(bounds: Size<Pixels>, cell: (Pixels, Pixels), pad: (f32, f32
     let h = (bounds.height - px(pad.1 * 2.)).max(px(0.));
     (((w / cell.0).floor() as usize).max(2), ((h / cell.1).floor() as usize).max(1))
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui::{TestAppContext, VisualTestContext, rgb};
+    use nox_terminal::alacritty_terminal::index::Side;
+    use nox_terminal::alacritty_terminal::selection::{Selection, SelectionType};
+    use nox_terminal::alacritty_terminal::vte::ansi::Rgb;
+
+    use super::*;
+    use crate::pane::tests::{cell, feed, geom, open, silent};
+    use crate::pane::{HoveredLink, LinkTarget, PaneSpawn};
+
+    fn rgb_hsla(r: u8, g: u8, b: u8) -> Hsla {
+        Hsla::from(rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)))
+    }
+
+    fn close(a: Hsla, b: Hsla) -> bool {
+        let (a, b): (gpui::Rgba, gpui::Rgba) = (a.into(), b.into());
+        (a.r - b.r).abs() < 0.01
+            && (a.g - b.g).abs() < 0.01
+            && (a.b - b.b).abs() < 0.01
+            && (a.a - b.a).abs() < 0.01
+    }
+
+    // ---- pure helpers ---------------------------------------------------------------------
+
+    #[gpui::test]
+    fn colors_resolve_from_overrides_then_theme(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.update(|cx| {
+            let theme = Theme::global(cx).clone();
+            let mut colors = Colors::default();
+            // Truecolor.
+            assert!(close(
+                resolve_color(Color::Spec(Rgb { r: 255, g: 0, b: 0 }), &colors, &theme, false),
+                rgb_hsla(255, 0, 0)
+            ));
+            // Palette, with bold-is-bright for the first 8.
+            assert_eq!(resolve_color(Color::Indexed(1), &colors, &theme, false), theme.palette[1]);
+            assert_eq!(resolve_color(Color::Indexed(1), &colors, &theme, true), theme.palette[9]);
+            assert_eq!(resolve_color(Color::Indexed(200), &colors, &theme, true), theme.palette[200]);
+            assert_eq!(resolve_color(Color::Named(NamedColor::Red), &colors, &theme, true), theme.palette[9]);
+            assert_eq!(
+                resolve_color(Color::Named(NamedColor::BrightRed), &colors, &theme, false),
+                theme.palette[9]
+            );
+            // Special colors default to the theme.
+            assert_eq!(
+                resolve_color(Color::Named(NamedColor::Foreground), &colors, &theme, false),
+                theme.text
+            );
+            assert_eq!(
+                resolve_color(Color::Named(NamedColor::BrightForeground), &colors, &theme, false),
+                theme.text
+            );
+            assert_eq!(resolve_color(Color::Named(NamedColor::Background), &colors, &theme, false), theme.bg);
+            assert_eq!(resolve_color(Color::Named(NamedColor::Cursor), &colors, &theme, false), theme.caret);
+            assert_eq!(
+                resolve_color(Color::Named(NamedColor::DimForeground), &colors, &theme, false),
+                theme.text.opacity(0.66)
+            );
+            assert_eq!(
+                resolve_color(Color::Named(NamedColor::DimGreen), &colors, &theme, false),
+                theme.palette[2].opacity(0.66)
+            );
+            // Programs can override palette entries and special colors (OSC 4 / 10 / 11 / 12).
+            colors[1] = Some(Rgb { r: 0, g: 0, b: 255 });
+            colors[NamedColor::Foreground] = Some(Rgb { r: 0, g: 255, b: 0 });
+            colors[NamedColor::Background] = Some(Rgb { r: 10, g: 10, b: 10 });
+            colors[NamedColor::Cursor] = Some(Rgb { r: 1, g: 2, b: 3 });
+            assert!(close(resolve_color(Color::Indexed(1), &colors, &theme, false), rgb_hsla(0, 0, 255)));
+            assert!(close(
+                resolve_color(Color::Named(NamedColor::Red), &colors, &theme, false),
+                rgb_hsla(0, 0, 255)
+            ));
+            assert!(close(
+                resolve_color(Color::Named(NamedColor::Foreground), &colors, &theme, false),
+                rgb_hsla(0, 255, 0)
+            ));
+            assert!(close(
+                resolve_color(Color::Named(NamedColor::Background), &colors, &theme, false),
+                rgb_hsla(10, 10, 10)
+            ));
+            assert!(close(
+                resolve_color(Color::Named(NamedColor::Cursor), &colors, &theme, false),
+                rgb_hsla(1, 2, 3)
+            ));
+            assert!(close(
+                resolve_color(Color::Named(NamedColor::DimForeground), &colors, &theme, false),
+                rgb_hsla(0, 255, 0).opacity(0.66)
+            ));
+            assert!(close(
+                resolve_color(Color::Named(NamedColor::DimRed), &colors, &theme, false),
+                rgb_hsla(0, 0, 255).opacity(0.66)
+            ));
+            // Round trip to the theme crate's color type.
+            let c = hsla_rgba(rgb_hsla(255, 0, 0));
+            assert!((c.r - 1.).abs() < 1e-3 && c.g.abs() < 1e-3 && (c.a - 1.).abs() < 1e-3);
+        });
+    }
+
+    #[test]
+    fn term_font_disables_ligatures_and_picks_weights() {
+        let mut f = TermFont {
+            family: "JetBrains Mono".into(),
+            fallbacks: vec![],
+            size: 14.,
+            line_height: 1.,
+            letter_spacing: 0.,
+            weight: FontWeight::NORMAL,
+            weight_bold: FontWeight::BOLD,
+        };
+        let regular = f.font(false, false);
+        assert_eq!(regular.family.as_ref(), "JetBrains Mono");
+        assert_eq!(regular.weight, FontWeight::NORMAL);
+        assert_eq!(regular.style, FontStyle::Normal);
+        assert!(regular.fallbacks.is_none());
+        let features: Vec<_> = regular.features.tag_value_list().to_vec();
+        assert!(features.contains(&("calt".into(), 0)) && features.contains(&("liga".into(), 0)));
+        let bi = f.font(true, true);
+        assert_eq!(bi.weight, FontWeight::BOLD);
+        assert_eq!(bi.style, FontStyle::Italic);
+        f.fallbacks = vec!["Menlo".into()];
+        assert!(f.font(false, false).fallbacks.is_some());
+    }
+
+    fn geom_fixture() -> GridGeom {
+        GridGeom {
+            bounds: Bounds::new(point(px(0.), px(0.)), size(px(116.), px(212.))),
+            origin: point(px(8.), px(6.)),
+            cell_w: px(10.),
+            cell_h: px(20.),
+            cols: 10,
+            rows: 10,
+        }
+    }
+
+    #[test]
+    fn positions_map_to_cells_and_sides() {
+        let g = geom_fixture();
+        let (p, side) = position_to_point(&g, point(px(8. + 22.), px(6. + 45.)), 0., 0);
+        assert_eq!((p.line, p.column), (Line(2), Column(2)));
+        assert_eq!(side, Side::Left);
+        let (_, side) = position_to_point(&g, point(px(8. + 27.), px(6. + 45.)), 0., 0);
+        assert_eq!(side, Side::Right);
+        // Scrolled up 5 lines: the top row is line -5.
+        let (p, _) = position_to_point(&g, point(px(8.), px(6. + 1.)), 0., 5);
+        assert_eq!(p.line, Line(-5));
+        // A sub-line offset shifts content down.
+        let (p, _) = position_to_point(&g, point(px(8.), px(6. + 25.)), 10., 0);
+        assert_eq!(p.line, Line(0));
+        // Clamped to the grid (one row above for the partially visible line).
+        let (p, _) = position_to_point(&g, point(px(-50.), px(-500.)), 0., 0);
+        assert_eq!((p.line, p.column), (Line(-1), Column(0)));
+        let (p, _) = position_to_point(&g, point(px(5000.), px(5000.)), 0., 0);
+        assert_eq!((p.line, p.column), (Line(9), Column(9)));
+    }
+
+    #[test]
+    fn grid_size_from_bounds() {
+        let cell = (px(10.), px(20.));
+        assert_eq!(grid_size_in(size(px(116.), px(212.)), cell, (8., 6.)), (10, 10));
+        assert_eq!(grid_size_in(size(px(125.), px(239.)), cell, (0., 0.)), (12, 11));
+        assert_eq!(grid_size_in(size(px(5.), px(5.)), cell, (8., 6.)), (2, 1), "never below 2×1");
+    }
+
+    #[gpui::test]
+    fn cell_metrics_follow_font_size_and_line_height(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let mut font = Settings::global(cx).term_font.clone();
+            let (w, h) = cell_metrics(window, &font, 14.);
+            assert!(w > px(0.) && h >= px(1.));
+            assert_eq!(f32::from(h).fract(), 0., "whole pixels");
+            font.line_height = 2.;
+            font.letter_spacing = 1.;
+            let (w2, h2) = cell_metrics(window, &font, 14.);
+            assert_eq!(w2, w + px(1.));
+            assert!((f32::from(h2) - 2. * f32::from(h)).abs() <= 1.);
+            let (w3, _) = cell_metrics(window, &font, 28.);
+            assert!(w3 > w2);
+        });
+    }
+
+    // ---- prepaint -------------------------------------------------------------------------
+
+    /// Prepaint the pane's grid at the bounds it was laid out at. (Called directly: `paint`
+    /// drains the state, and `cx.draw` runs outside a view, where the scroll animation's
+    /// `request_animation_frame` isn't allowed; the window's own frames cover that.)
+    fn frame(pane: &Entity<Pane>, cx: &mut VisualTestContext, focused: bool) -> Prepaint {
+        let b = geom(pane, cx).bounds;
+        let mut el = TerminalElement::new(pane.clone(), focused, true);
+        cx.update(|window, cx| el.prepaint(None, None, b, &mut (), window, cx))
+    }
+
+    /// Paint through `cx.draw` (layout, prepaint, paint) for the paint code paths.
+    fn draw(pane: &Entity<Pane>, cx: &mut VisualTestContext, focused: bool) {
+        let b = geom(pane, cx).bounds;
+        let pane = pane.clone();
+        let _ = cx.draw(b.origin, b.size, move |_, _| TerminalElement::new(pane, focused, true));
+    }
+
+    fn texts(pre: &Prepaint) -> Vec<(String, usize, usize)> {
+        pre.texts.iter().map(|t| (t.line.text.to_string(), t.col, t.row)).collect()
+    }
+
+    fn theme(cx: &mut VisualTestContext) -> Theme {
+        cx.update(|_, cx| Theme::global(cx).clone())
+    }
+
+    #[gpui::test]
+    fn text_is_split_into_styled_runs(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(
+            &pane,
+            cx,
+            "\x1b[31mred\x1b[0m plain   \x1b[1mbold\x1b[0m\r\na中b\x1b[4mu\x1b[9ms\x1b[0m".as_bytes(),
+        );
+        let pre = frame(&pane, cx, true);
+        let t = texts(&pre);
+        assert!(t.contains(&("red".into(), 0, 0)), "{t:?}");
+        assert!(t.contains(&(" plain".into(), 3, 0)), "same style joins, trailing spaces trimmed: {t:?}");
+        assert!(t.contains(&("bold".into(), 12, 0)), "{t:?}");
+        assert!(
+            t.contains(&("a".into(), 0, 1))
+                && t.contains(&("中".into(), 1, 1))
+                && t.contains(&("b".into(), 3, 1)),
+            "wide chars get their own run: {t:?}"
+        );
+        assert!(t.contains(&("u".into(), 4, 1)) && t.contains(&("s".into(), 5, 1)), "{t:?}");
+        assert!(pre.bg_quads.is_empty(), "default backgrounds aren't painted");
+        let g = pre.geom.clone();
+        assert_eq!((g.cols, g.rows), (geom(&pane, cx).cols, geom(&pane, cx).rows));
+    }
+
+    #[gpui::test]
+    fn backgrounds_merge_into_quads(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"ab\x1b[42mgreen\x1b[0m \x1b[7mX\x1b[0m \x1b[8mhidden\x1b[0m \x1b[2mdim\x1b[0m");
+        let pre = frame(&pane, cx, true);
+        let th = theme(cx);
+        let g = pre.geom.clone();
+        assert_eq!(pre.bg_quads.len(), 2, "one per background run");
+        let green = &pre.bg_quads[0];
+        assert_eq!(green.color, th.palette[2]);
+        assert_eq!(green.bounds.origin.x, g.origin.x + g.cell_w * 2.);
+        assert_eq!(green.bounds.size, size(g.cell_w * 5., g.cell_h));
+        // Inverse: the foreground becomes the background.
+        let inv = &pre.bg_quads[1];
+        assert_eq!(inv.color, th.text);
+        assert_eq!(inv.bounds.origin.x, g.origin.x + g.cell_w * 8.);
+        assert!(texts(&pre).iter().any(|(s, c, _)| s == "hidden" && *c == 10), "hidden text keeps its cells");
+    }
+
+    #[gpui::test]
+    fn minimum_contrast_still_draws_everything(cx: &mut TestAppContext) {
+        let mut cfg = silent();
+        cfg.terminal.minimum_contrast = 4.5;
+        cfg.terminal.bold_is_bright = true;
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        feed(&pane, cx, b"\x1b[1;30mdark\x1b[0m \x1b[38;2;20;20;20mtc\x1b[0m");
+        let t = texts(&frame(&pane, cx, true));
+        assert!(t.iter().any(|(s, _, _)| s == "dark") && t.iter().any(|(s, _, _)| s == "tc"), "{t:?}");
+    }
+
+    #[gpui::test]
+    fn cursor_follows_mode_shape_and_focus(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"ab\x1b[D");
+        let g = geom(&pane, cx);
+        let pre = frame(&pane, cx, true);
+        let c = pre.cursor.as_ref().expect("cursor");
+        assert_eq!(c.shape, CursorShape::Block);
+        assert!(!c.hollow);
+        assert_eq!(c.bounds, Bounds::new(point(g.origin.x + g.cell_w, g.origin.y), size(g.cell_w, g.cell_h)));
+        assert_eq!(
+            c.text.as_ref().map(|t| t.text.to_string()).as_deref(),
+            Some("b"),
+            "the glyph under a block cursor"
+        );
+        assert_eq!(c.color, theme(cx).caret);
+
+        let pre = frame(&pane, cx, false);
+        let c = pre.cursor.as_ref().unwrap();
+        assert!(c.hollow, "unfocused panes draw a hollow cursor");
+        assert!(c.text.is_none());
+
+        feed(&pane, cx, b"\x1b[6 q\x1b]12;#ff0000\x07");
+        let c = frame(&pane, cx, true).cursor.unwrap();
+        assert_eq!(c.shape, CursorShape::Beam);
+        assert!(close(c.color, rgb_hsla(255, 0, 0)), "OSC 12 sets the cursor color");
+        feed(&pane, cx, b"\x1b[4 q");
+        assert_eq!(frame(&pane, cx, true).cursor.unwrap().shape, CursorShape::Underline);
+        feed(&pane, cx, b"\x1b[?25l");
+        assert!(frame(&pane, cx, true).cursor.is_none(), "DECTCEM hides it");
+        feed(&pane, cx, b"\x1b[?25h\x1b[2 q\xe4\xb8\xad\x1b[D\x1b[D");
+        let c = frame(&pane, cx, true).cursor.unwrap();
+        assert_eq!(c.bounds.size.width, g.cell_w * 2., "wide cell under the cursor");
+    }
+
+    #[gpui::test]
+    fn selection_and_search_highlights(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"find me\r\nfind you\r\nthird");
+        let g = geom(&pane, cx);
+        let th = theme(cx);
+        pane.update(cx, |p, _| {
+            let mut term = p.session.as_ref().unwrap().term().lock();
+            let mut sel =
+                Selection::new(SelectionType::Simple, GridPoint::new(Line(0), Column(5)), Side::Left);
+            sel.update(GridPoint::new(Line(1), Column(2)), Side::Right);
+            term.selection = Some(sel);
+        });
+        let pre = frame(&pane, cx, true);
+        let sel: Vec<_> =
+            pre.highlight_quads.iter().filter(|q| q.color == th.selection).map(|q| q.bounds).collect();
+        assert_eq!(sel.len(), 2);
+        assert_eq!(sel[0].origin.x, g.origin.x + g.cell_w * 5.);
+        assert_eq!(sel[0].size.width, g.cell_w * (g.cols - 5) as f32, "to the end of the line");
+        assert_eq!(sel[1].origin.x, g.origin.x);
+        assert_eq!(sel[1].size.width, g.cell_w * 3.);
+
+        pane.update(cx, |p, _| {
+            let mut term = p.session.as_ref().unwrap().term().lock();
+            let mut sel =
+                Selection::new(SelectionType::Block, GridPoint::new(Line(2), Column(3)), Side::Right);
+            sel.update(GridPoint::new(Line(0), Column(1)), Side::Left);
+            term.selection = Some(sel);
+        });
+        let pre = frame(&pane, cx, true);
+        let sel: Vec<_> = pre.highlight_quads.iter().map(|q| q.bounds).collect();
+        assert_eq!(sel.len(), 3, "a block covers the same columns on every line");
+        assert!(sel.iter().all(|b| b.origin.x == g.origin.x + g.cell_w && b.size.width == g.cell_w * 3.));
+
+        pane.update(cx, |p, _| p.session.as_ref().unwrap().term().lock().selection = None);
+        cx.dispatch_action(crate::actions::Find);
+        cx.simulate_input("find");
+        let pre = frame(&pane, cx, true);
+        let current = th.accent.opacity(0.45);
+        assert_eq!(pre.highlight_quads.len(), 2);
+        assert_eq!(
+            pre.highlight_quads.iter().filter(|q| q.color == current).count(),
+            1,
+            "the current match in accent"
+        );
+        assert!(pre.highlight_quads.iter().all(|q| q.bounds.size.width == g.cell_w * 4.));
+    }
+
+    #[gpui::test]
+    fn hovered_links_are_underlined(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let g = geom(&pane, cx);
+        pane.update(cx, |p, _| {
+            p.hovered_link = Some(HoveredLink {
+                spans: vec![(Line(1), 2, 5)],
+                target: LinkTarget::Url("https://nox.dev".into()),
+            });
+        });
+        let pre = frame(&pane, cx, true);
+        assert_eq!(pre.deco_quads.len(), 1);
+        let b = pre.deco_quads[0].bounds;
+        assert_eq!(b.origin, point(g.origin.x + g.cell_w * 2., g.origin.y + g.cell_h * 2. - px(2.)));
+        assert_eq!(b.size, size(g.cell_w * 4., px(1.)));
+        assert_eq!(pre.deco_quads[0].color, theme(cx).accent);
+    }
+
+    #[gpui::test]
+    fn overlay_scrollbar_only_while_scrolling(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        assert!(frame(&pane, cx, true).scrollbar.is_none(), "hidden without scrollback");
+        let lines: String = (0..200).map(|i| format!("{i}\r\n")).collect::<Vec<_>>().concat();
+        feed(&pane, cx, lines.as_bytes());
+        assert!(frame(&pane, cx, true).scrollbar.is_none(), "hidden until scrolling");
+        // While it fades, frames keep coming (drawn by the window: the animation frame request
+        // needs the pane's view).
+        pane.update(cx, |p, cx| {
+            p.scroll.last_scroll = Some(std::time::Instant::now());
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn paint_handles_every_cursor_and_overlay(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"\x1b[41mred bg\x1b[0m text\x1b[D");
+        pane.update(cx, |p, _| {
+            p.hovered_link =
+                Some(HoveredLink { spans: vec![(Line(0), 0, 2)], target: LinkTarget::Url("x".into()) });
+            let mut term = p.session.as_ref().unwrap().term().lock();
+            let mut sel =
+                Selection::new(SelectionType::Simple, GridPoint::new(Line(0), Column(0)), Side::Left);
+            sel.update(GridPoint::new(Line(0), Column(3)), Side::Right);
+            term.selection = Some(sel);
+        });
+        for shape in [&b"\x1b[2 q"[..], b"\x1b[6 q", b"\x1b[4 q"] {
+            feed(&pane, cx, shape);
+            draw(&pane, cx, true);
+            draw(&pane, cx, false);
+        }
+        pane.update(cx, |p, _| p.marked_text = Some("か".into()));
+        draw(&pane, cx, true);
+        assert!(frame(&pane, cx, true).marked.is_some());
+    }
+
+    #[gpui::test]
+    fn sub_line_offset_draws_an_extra_row(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let lines: String = (0..200).map(|i| format!("L{i}\r\n")).collect::<Vec<_>>().concat();
+        feed(&pane, cx, lines.as_bytes());
+        let rows = geom(&pane, cx).rows;
+        pane.update(cx, |p, _| {
+            p.session
+                .as_ref()
+                .unwrap()
+                .term()
+                .lock()
+                .scroll_display(nox_terminal::alacritty_terminal::grid::Scroll::Delta(3));
+            p.scroll.frac = 5.;
+        });
+        let pre = frame(&pane, cx, true);
+        let drawn: std::collections::BTreeSet<usize> = pre.texts.iter().map(|t| t.row).collect();
+        assert_eq!(drawn.len(), rows + 1, "the partially visible line above is drawn too");
+    }
+
+    #[gpui::test]
+    fn ime_marked_text_is_drawn_at_the_cursor(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"$ ");
+        pane.update(cx, |p, _| p.marked_text = Some("にほ".into()));
+        let pre = frame(&pane, cx, true);
+        let (origin, line, h) = pre.marked.as_ref().expect("marked text");
+        let g = geom(&pane, cx);
+        assert_eq!(*origin, point(g.origin.x + g.cell_w * 2., g.origin.y));
+        assert_eq!(line.text.as_ref(), "にほ");
+        assert_eq!(*h, g.cell_h);
+    }
+
+    #[gpui::test]
+    fn without_a_session_only_geometry_is_computed(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        pane.update(cx, |p, _| p.session = None);
+        let pre = frame(&pane, cx, true);
+        assert!(pre.texts.is_empty() && pre.cursor.is_none() && pre.scrollbar.is_none());
+        assert!(pre.geom.cols >= 2 && pre.geom.rows >= 1);
+        let _ = cell;
+    }
+}

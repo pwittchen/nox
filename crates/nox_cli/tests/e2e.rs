@@ -286,3 +286,155 @@ fn mcp_over_stdio() {
         Method::Msg { to: "backend".into(), text: "hi".into() }
     );
 }
+
+/// `nox` without a controlling terminal, with a custom environment (`None` removes a variable).
+fn nox_detached(env: &[(&str, Option<&str>)], args: &[&str]) -> Output {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_nox"));
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for (k, v) in env {
+        match v {
+            Some(v) => cmd.env(k, v),
+            None => cmd.env_remove(k),
+        };
+    }
+    // SAFETY: setsid is async-signal-safe; it detaches the child from our terminal so the
+    // notification fallback can't reach the developer's real /dev/tty.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.output().unwrap()
+}
+
+#[test]
+fn notify_falls_back_to_osc777_without_nox() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("none.sock");
+    let missing = missing.to_str().unwrap();
+    let o = nox_detached(
+        &[("NOX_SOCKET", Some(missing)), ("NOX_TOKEN", None)],
+        &["notify", "Build", "all green"],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "\x1b]777;notify;Build;all green\x07");
+}
+
+#[test]
+fn notify_falls_back_to_osc777_without_token() {
+    let f = fixture();
+    let o = nox_detached(
+        &[("NOX_SOCKET", Some(f.path.to_str().unwrap())), ("NOX_TOKEN", None)],
+        &["notify", "Done"],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "\x1b]777;notify;Done;\x07");
+    assert!(f.mock.seen.lock().unwrap().is_empty(), "rejected before the handler");
+}
+
+#[test]
+fn connect_errors_explain_the_situation() {
+    let f = fixture();
+    let path = f.path.clone();
+    f.handle.stop();
+    // Inside a nox pane (NOX_SOCKET set) the hint mentions agents.cooperation.
+    let o = nox(&path, Some("t"), &["claims"], None);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        stderr(&o).contains("cannot reach nox at") && stderr(&o).contains("agents.cooperation"),
+        "{}",
+        stderr(&o)
+    );
+
+    // Outside nox: the default socket under NOX_HOME.
+    let home = tempfile::tempdir().unwrap();
+    let o = nox_detached(&[("NOX_SOCKET", None), ("NOX_HOME", Some(home.path().to_str().unwrap()))], &["ls"]);
+    assert_eq!(o.status.code(), Some(1));
+    let err = stderr(&o);
+    assert!(err.starts_with("nox: nox is not running (no control socket at "), "{err}");
+    assert!(err.contains(&home.path().join("run/nox.sock").display().to_string()), "{err}");
+
+    // Any other connect error is passed through.
+    let long = format!("/{}", "x".repeat(200));
+    let o = nox_detached(&[("NOX_SOCKET", Some(&long))], &["ls"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(stderr(&o).starts_with(&format!("nox: cannot connect to nox at {long}: ")), "{}", stderr(&o));
+}
+
+#[test]
+fn invalid_timeout_is_a_usage_error() {
+    let f = fixture();
+    let o = nox(&f.path, Some(&f.token), &["wait", "backend", "--timeout=-1"], None);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert_eq!(stderr(&o), "nox: invalid --timeout -1\n");
+    assert!(f.mock.seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn json_errors_go_to_stdout_too() {
+    let f = fixture();
+    let o = nox(&f.path, Some(&f.token), &["--json", "wait", "backend", "--timeout", "1"], None);
+    assert_eq!(o.status.code(), Some(4));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["error"]["code"], "timeout");
+    assert_eq!(stderr(&o), "nox: pane did not become idle\n");
+}
+
+#[test]
+fn mcp_reports_ipc_errors_and_reconnects() {
+    let f = fixture();
+    let input = [
+        // Timeout from nox: a tool error; the client reconnects for the next call.
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wait_for_pane","arguments":{"pane":"backend"}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_pane","arguments":{"pane":"backend"}}}),
+    ]
+    .iter()
+    .map(|v| v.to_string() + "\n")
+    .collect::<String>();
+    let o = nox(&f.path, Some(&f.token), &["mcp"], Some(&input));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let lines: Vec<serde_json::Value> =
+        stdout(&o).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines[0]["result"]["isError"], true);
+    assert_eq!(lines[0]["result"]["content"][0]["text"], "pane did not become idle (timeout)");
+    assert_eq!(lines[1]["result"]["content"][0]["text"], "hello\nworld");
+}
+
+#[test]
+fn mcp_without_nox_still_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("none.sock");
+    let input = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_claims"}})
+        .to_string()
+        + "\n";
+    let o = nox(&missing, Some("t"), &["mcp"], Some(&input));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let r: serde_json::Value = serde_json::from_str(stdout(&o).trim()).unwrap();
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("cannot reach nox"), "{r}");
+}
+
+#[test]
+fn mcp_fails_when_stdout_is_closed() {
+    let f = fixture();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_nox"))
+        .arg("mcp")
+        .env("NOX_SOCKET", &f.path)
+        .env("NOX_TOKEN", &f.token)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n").unwrap();
+    drop(stdin);
+    let o = child.wait_with_output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(stderr(&o).starts_with("nox mcp: "), "{}", stderr(&o));
+}

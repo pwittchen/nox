@@ -436,3 +436,139 @@ pub fn palette_commands() -> Vec<(&'static str, Box<dyn Action>)> {
         ("Quit", Box::new(Quit)),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use gpui::TestAppContext;
+
+    use super::*;
+    use crate::util_keys::keystroke_to_config;
+
+    /// The shortcuts bound to `action`, as config text.
+    fn shortcuts(cx: &App, action: &dyn Action) -> Vec<String> {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        keymap
+            .bindings_for_action(action)
+            .map(|b| {
+                b.keystrokes().iter().map(|k| keystroke_to_config(k.inner())).collect::<Vec<_>>().join(" ")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn default_bindings_are_unique_and_parse() {
+        let defaults = default_bindings();
+        let mut names = HashSet::new();
+        let mut keys = HashSet::new();
+        for (name, make, shortcut, ctx) in &defaults {
+            assert!(names.insert(*name), "duplicate config key {name}");
+            // Each shortcut is used once per context (conflicts are the user's doing).
+            assert!(keys.insert((*shortcut, *ctx)), "{shortcut} bound twice in {ctx:?}");
+            let b = make(shortcut, *ctx);
+            assert!(!b.keystrokes().is_empty());
+            assert!(matches!(*ctx, None | Some(ROOT | TERMINAL)), "{name}");
+        }
+        let get = |n: &str| defaults.iter().find(|d| d.0 == n).map(|d| d.2);
+        // SPEC §10 spot checks.
+        assert_eq!(get("new_tab"), Some("cmd-t"));
+        assert_eq!(get("split_vertical"), Some("cmd-d"));
+        assert_eq!(get("command_palette"), Some("cmd-k"));
+        assert_eq!(get("settings"), Some("cmd-,"));
+    }
+
+    #[gpui::test]
+    fn bind_keys_defaults(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            bind_keys(cx, &BTreeMap::new());
+            assert_eq!(shortcuts(cx, &NewTab), ["cmd-t"]);
+            assert_eq!(shortcuts(cx, &FontBigger), ["cmd-=", "cmd-+"]);
+            assert_eq!(shortcuts(cx, &PreviousTab), ["shift-cmd-[", "ctrl-shift-tab"]);
+            // The text input, palette and dialog bindings are installed too.
+            assert_eq!(shortcuts(cx, &crate::text_input::Undo), ["cmd-z"]);
+            assert_eq!(shortcuts(cx, &crate::palette::SelectNext), ["down", "ctrl-n"]);
+            assert_eq!(shortcuts(cx, &crate::dialog::DialogCancel), ["escape"]);
+        });
+    }
+
+    #[gpui::test]
+    fn config_rebinds_unbinds_and_sends(cx: &mut TestAppContext) {
+        let mut keys = BTreeMap::new();
+        keys.insert("new_tab".to_string(), CfgKey::Shortcut("ctrl-alt-t".into()));
+        keys.insert("split_vertical".to_string(), CfgKey::Shortcut(String::new()));
+        keys.insert("find".to_string(), CfgKey::Shortcut("   ".into()));
+        // `{ send = … }` on an action name drops that action's default binding …
+        keys.insert("close_pane".to_string(), CfgKey::Send { send: "x".into() });
+        // … and on any key sends the text to the PTY.
+        keys.insert("alt-left".to_string(), CfgKey::Send { send: "\x1bb".into() });
+        cx.update(|cx| {
+            bind_keys(cx, &keys);
+            assert_eq!(shortcuts(cx, &NewTab), ["ctrl-alt-t"]);
+            assert!(shortcuts(cx, &SplitVertical).is_empty());
+            assert!(shortcuts(cx, &Find).is_empty());
+            assert!(shortcuts(cx, &ClosePane).is_empty());
+            assert_eq!(shortcuts(cx, &SendText("\x1bb".into())), ["alt-left"]);
+            // Rebinding again starts from scratch (no stale bindings).
+            bind_keys(cx, &BTreeMap::new());
+            assert_eq!(shortcuts(cx, &NewTab), ["cmd-t"]);
+            assert!(shortcuts(cx, &SendText("\x1bb".into())).is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn bindings_dispatch_in_their_context(cx: &mut TestAppContext) {
+        struct Host {
+            focus: gpui::FocusHandle,
+            hits: Vec<&'static str>,
+        }
+        impl gpui::Render for Host {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                use gpui::{InteractiveElement as _, ParentElement as _};
+                gpui::div()
+                    .key_context(ROOT)
+                    .on_action(cx.listener(|h: &mut Host, _: &NewTab, _, _| h.hits.push("new_tab")))
+                    .on_action(cx.listener(|h: &mut Host, _: &Find, _, _| h.hits.push("find")))
+                    .child(gpui::div().key_context(TERMINAL).track_focus(&self.focus).on_action(cx.listener(
+                        |h: &mut Host, a: &SendText, _, _| {
+                            h.hits.push(if a.0 == "hi" { "send" } else { "?" });
+                        },
+                    )))
+            }
+        }
+        let mut keys = BTreeMap::new();
+        keys.insert("ctrl-y".to_string(), CfgKey::Send { send: "hi".into() });
+        cx.update(|cx| bind_keys(cx, &keys));
+        let (host, cx) = cx.add_window_view(|_, cx| Host { focus: cx.focus_handle(), hits: vec![] });
+        host.update_in(cx, |h, window, _| window.focus(&h.focus));
+        cx.simulate_keystrokes("cmd-t cmd-f ctrl-y");
+        host.read_with(cx, |h, _| assert_eq!(h.hits, ["new_tab", "find", "send"]));
+    }
+
+    #[test]
+    fn menus_follow_spec() {
+        let m = menus();
+        let names: Vec<_> = m.iter().map(|m| m.name.to_string()).collect();
+        assert_eq!(names, ["nox", "Shell", "Edit", "View", "Window", "Help"]);
+        assert!(m.iter().all(|m| !m.items.is_empty()));
+    }
+
+    #[test]
+    fn palette_commands_are_unique() {
+        let cmds = palette_commands();
+        let mut labels = HashSet::new();
+        for (label, _) in &cmds {
+            assert!(labels.insert(*label), "duplicate palette entry {label}");
+        }
+        for want in ["New Tab", "Switch Theme…", "Tabs Position: Left", "Settings…", "Quit"] {
+            assert!(labels.contains(want), "{want}");
+        }
+        let names: HashSet<_> = cmds.iter().map(|(_, a)| a.name()).collect();
+        assert_eq!(names.len(), cmds.len(), "each entry runs a different action");
+    }
+}

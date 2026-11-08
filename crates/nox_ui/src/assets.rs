@@ -86,3 +86,57 @@ pub fn font_files(family: &str) -> Vec<PathBuf> {
     files.sort();
     files
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_icons_load_and_list() {
+        let a = Assets;
+        let svg = a.load("icons/ui/search.svg").unwrap().expect("bundled UI icon");
+        assert!(std::str::from_utf8(&svg).unwrap().contains("<svg"));
+        assert!(a.load("icons/process/terminal.svg").unwrap().is_some());
+        assert!(a.load("icons/ui/does-not-exist.svg").unwrap().is_none());
+        let listed = a.list("icons/ui/").unwrap();
+        assert!(listed.iter().any(|p| p.as_ref() == "icons/ui/search.svg"));
+        assert!(listed.iter().all(|p| p.starts_with("icons/ui/")));
+        assert!(a.list("nope/").unwrap().is_empty());
+    }
+
+    #[test]
+    fn absolute_paths_read_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("mine.svg");
+        std::fs::write(&p, b"<svg/>").unwrap();
+        let a = Assets;
+        assert_eq!(a.load(p.to_str().unwrap()).unwrap().as_deref(), Some(&b"<svg/>"[..]));
+        // A missing user file is "no asset", not an error.
+        assert!(a.load(dir.path().join("gone.svg").to_str().unwrap()).unwrap().is_none());
+    }
+
+    #[test]
+    fn resources_dir_is_the_checkout_assets() {
+        let dir = resources_dir();
+        assert!(dir.join("fonts").is_dir(), "{}", dir.display());
+        assert!(dir.join("icons").is_dir());
+    }
+
+    #[test]
+    fn bundled_font_files() {
+        for (name, _) in BUNDLED_TERMINAL_FONTS.iter().chain(BUNDLED_UI_FONTS) {
+            let files = font_files(name);
+            assert!(!files.is_empty(), "{name}");
+            assert!(
+                files.iter().all(|f| matches!(f.extension().and_then(|e| e.to_str()), Some("ttf" | "otf")))
+            );
+            let mut sorted = files.clone();
+            sorted.sort();
+            assert_eq!(files, sorted);
+        }
+        // Case-insensitive family names; system and unknown families have no files.
+        assert_eq!(font_files("jetbrains mono"), font_files("JetBrains Mono"));
+        assert!(font_files("Menlo").is_empty());
+        assert!(font_files("Comic Sans").is_empty());
+    }
+}

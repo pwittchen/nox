@@ -121,3 +121,95 @@ pub fn apply(cx: &mut App, state: &ThemeState, appearance: WindowAppearance) -> 
     cx.set_global(theme);
     changed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    fn state(name: &str, mode: Mode) -> ThemeState {
+        // User themes are looked up in the scratch home, never in ~/.nox.
+        crate::test_support::nox_home();
+        let (file, notices) = load_theme_file(name);
+        ThemeState { file, mode, notices }
+    }
+
+    #[test]
+    fn mode_resolution() {
+        assert!(is_dark(Mode::Dark, WindowAppearance::Light));
+        assert!(!is_dark(Mode::Light, WindowAppearance::Dark));
+        assert!(is_dark(Mode::System, WindowAppearance::Dark));
+        assert!(is_dark(Mode::System, WindowAppearance::VibrantDark));
+        assert!(!is_dark(Mode::System, WindowAppearance::Light));
+        assert!(!is_dark(Mode::System, WindowAppearance::VibrantLight));
+    }
+
+    #[test]
+    fn variant_colors_and_palette() {
+        crate::test_support::nox_home();
+        let (file, notices) = load_theme_file("nox");
+        assert!(notices.is_empty());
+        let v = file.variant(true);
+        let t = Theme::from_variant("nox", v, true, false);
+        assert_eq!(t.name, "nox");
+        assert_eq!(t.bg, to_hsla(v.bg));
+        assert_eq!(t.accent, to_hsla(v.accent));
+        assert_eq!(t.palette_rgb[1], v.ansi[1]);
+        assert_eq!(t.ansi(1), to_hsla(v.ansi[1]));
+        // Out-of-range indices clamp to the last gray instead of panicking.
+        assert_eq!(t.ansi(10_000), t.palette[255]);
+        assert_eq!(t.named("red"), Some(t.palette[1]));
+        assert_eq!(t.named("bright-blue"), Some(t.palette[12]));
+        assert_eq!(t.named("chartreuse"), None);
+    }
+
+    #[test]
+    fn to_hsla_keeps_alpha() {
+        let c = to_hsla(TRgba { r: 1.0, g: 0.0, b: 0.0, a: 0.5 });
+        assert!((c.a - 0.5).abs() < 1e-6);
+        assert!(c.h.abs() < 1e-6);
+    }
+
+    #[test]
+    fn unknown_theme_falls_back_with_notice() {
+        let s = state("no-such-theme-xyz", Mode::Dark);
+        assert_eq!(s.file.name, "nox");
+        assert!(!s.notices.is_empty());
+    }
+
+    #[gpui::test]
+    fn apply_reports_changes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let dark = state("nox", Mode::System);
+            assert!(apply(cx, &dark, WindowAppearance::Dark), "first install is a change");
+            assert!(Theme::global(cx).dark);
+            assert!(!apply(cx, &dark, WindowAppearance::Dark), "same theme, same appearance");
+            assert!(apply(cx, &dark, WindowAppearance::Light), "system mode follows the appearance");
+            assert!(!Theme::global(cx).dark);
+            assert!(!Theme::global(cx).single_variant);
+
+            let forced = state("nox", Mode::Dark);
+            assert!(apply(cx, &forced, WindowAppearance::Light));
+            assert!(Theme::global(cx).dark);
+
+            let other = state("nord", Mode::Dark);
+            assert!(apply(cx, &other, WindowAppearance::Light), "another theme is a change");
+            assert_eq!(Theme::global(cx).name, "nord");
+        });
+    }
+
+    #[gpui::test]
+    fn single_variant_theme_ignores_mode(cx: &mut TestAppContext) {
+        crate::test_support::nox_home();
+        let (nox, _) = load_theme_file("nox");
+        let file = ThemeFile { name: "only-dark".into(), light: None, dark: nox.dark };
+        let s = ThemeState { file, mode: Mode::Light, notices: vec![] };
+        cx.update(|cx| {
+            apply(cx, &s, WindowAppearance::Light);
+            let t = Theme::global(cx);
+            assert!(t.single_variant);
+            assert!(t.dark, "a dark-only theme stays dark in light mode");
+            assert_eq!(t.raw, nox.dark.unwrap());
+        });
+    }
+}

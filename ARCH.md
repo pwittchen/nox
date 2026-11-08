@@ -96,6 +96,20 @@ Only `nox_ui` and `nox` depend on GPUI; everything else builds and tests without
 | `config_io.rs`        | surgical writes + applying a new config live |
 | `menus.rs`            | native context menus (tab, pane, workspace chip) |
 
+#### Tests
+
+`nox_ui` tests run on GPUI's headless test platform (`gpui` `test-support` dev-dependency,
+`#[gpui::test]` with `TestAppContext`); a `Root` built in a test window spawns real panes.
+`test_support.rs` installs the globals `main.rs` sets up (settings, theme, icons, input keys),
+points `NOX_HOME` at a per-process temp dir and uses a plain `/bin/sh` (no `-l`, no rc files)
+with IPC off. Test windows have no native handle, so `window_bg::apply` is a no-op under
+`cfg(test)`, and `menus.rs` hands context menus to the test instead of showing an `NSMenu`.
+Tests that write the shared `config.toml` or `session.toml` take the lock in
+`config_io::tests` / `persist::tests`; pane tests that spawn PTYs serialize through
+`pane::tests::spawn_lock` (macOS `openpty` isn't thread-safe). What stays untested is native
+glue (`nox_mac`, `nox/main.rs`) and paths the test platform leaves `unimplemented!` (file
+pickers, character palette, minimize / zoom).
+
 ## Data flow
 
 ```

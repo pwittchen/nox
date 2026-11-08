@@ -286,6 +286,71 @@ mod tests {
     }
 
     #[test]
+    fn c1_introducer_and_terminator() {
+        let mut s = OscSniffer::default();
+        let ev = events(&mut s, &[b"\x9d133;A\x9c", b"\x9d133;C\x07"]);
+        assert_eq!(ev, vec![OscEvent::PromptStart, OscEvent::CommandStart]);
+    }
+
+    #[test]
+    fn aborted_and_restarted_sequences() {
+        let mut s = OscSniffer::new();
+        // ESC ESC ] still starts an OSC.
+        assert_eq!(events(&mut s, &[b"\x1b\x1b]133;A\x07"]), vec![OscEvent::PromptStart]);
+        // ESC followed by something else is not an OSC.
+        assert!(s.feed(b"\x1b[0m133;A\x07").is_empty());
+        // CAN and SUB abort the sequence; the terminator that follows is ignored.
+        assert!(s.feed(b"\x1b]133;A\x18\x07").is_empty());
+        assert!(s.feed(b"\x1b]133;A\x1a\x07").is_empty());
+        // ESC ] inside an OSC drops the first one and starts over.
+        assert_eq!(events(&mut s, &[b"\x1b]133;A\x1b]133;B\x07"]), vec![OscEvent::InputStart]);
+        // ESC + anything but `\` or `]` inside an OSC aborts it.
+        assert!(s.feed(b"\x1b]133;A\x1bx\x07").is_empty());
+        assert_eq!(s.feed(b"\x1b]133;A\x07").len(), 1);
+    }
+
+    #[test]
+    fn malformed_133_9_and_777() {
+        let mut s = OscSniffer::new();
+        assert!(s.feed(b"\x1b]133;Z\x07\x1b]133\x07").is_empty());
+        // OSC 9 without a body is not a notification.
+        assert!(s.feed(b"\x1b]9;\x07\x1b]9\x07").is_empty());
+        assert!(s.feed(b"\x1b]777;other;a;b\x07\x1b]777\x07").is_empty());
+        let ev = events(&mut s, &[b"\x1b]777;notify;;only body\x07\x1b]777;notify\x07"]);
+        assert_eq!(
+            ev,
+            vec![
+                OscEvent::Notify { title: None, body: "only body".into() },
+                OscEvent::Notify { title: None, body: String::new() },
+            ]
+        );
+        // Body keeps its semicolons; exit codes are trimmed; non-numeric codes are dropped.
+        let ev = events(&mut s, &[b"\x1b]777;notify;T;a;b\x07\x1b]133;D; 2 \x07\x1b]133;D;x\x07"]);
+        assert_eq!(
+            ev,
+            vec![
+                OscEvent::Notify { title: Some("T".into()), body: "a;b".into() },
+                OscEvent::CommandEnd(Some(2)),
+                OscEvent::CommandEnd(None),
+            ]
+        );
+    }
+
+    #[test]
+    fn osc7_variants() {
+        let mut s = OscSniffer::new();
+        let ev = events(
+            &mut s,
+            &[b"\x1b]7;kitty-shell-cwd://h/a%2fb%2Fc\x07\x1b]7;file:///root\x07\x1b]7;file://hostonly\x07"],
+        );
+        assert_eq!(ev, vec![OscEvent::Cwd(PathBuf::from("/a/b/c")), OscEvent::Cwd(PathBuf::from("/root"))]);
+        assert!(s.feed(b"\x1b]7;http://h/x\x07").is_empty());
+        // Invalid or truncated escapes are kept verbatim.
+        assert_eq!(percent_decode("/a%zz/b%4"), "/a%zz/b%4");
+        assert_eq!(percent_decode("/%41%"), "/A%");
+    }
+
+    #[test]
     fn ignores_other_osc_and_oversized() {
         let mut s = OscSniffer::new();
         assert!(s.feed(b"\x1b]0;title\x07\x1b]2;x\x1b\\").is_empty());

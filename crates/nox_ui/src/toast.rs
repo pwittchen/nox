@@ -73,3 +73,70 @@ pub fn render(cx: &App) -> Option<AnyElement> {
             .into_any_element(),
     )
 }
+
+/// The notices currently shown, oldest first (tests of other modules assert on them).
+#[cfg(test)]
+pub(crate) fn messages(cx: &App) -> Vec<String> {
+    cx.try_global::<Toasts>().map(|t| t.items.iter().map(|(_, m)| m.clone()).collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn notices_expire_after_four_seconds(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.update(|cx| {
+            assert!(render(cx).is_none(), "nothing to show");
+            show(cx, "first");
+        });
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.update(|cx| show(cx, "second"));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert_eq!(messages(cx), ["first", "second"]);
+            assert!(render(cx).is_some());
+        });
+        cx.executor().advance_clock(Duration::from_millis(2100));
+        cx.read(|cx| assert_eq!(messages(cx), ["second"]));
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.read(|cx| {
+            assert!(messages(cx).is_empty());
+            assert!(render(cx).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn identical_notices_dont_stack_and_at_most_four_show(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.update(|cx| {
+            show(cx, "same");
+            show(cx, "same");
+            assert_eq!(messages(cx), ["same"]);
+            for i in 0..5 {
+                show(cx, format!("n{i}"));
+            }
+            assert_eq!(messages(cx), ["n1", "n2", "n3", "n4"]);
+        });
+        // The re-shown notice keeps only its newest timer.
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.read(|cx| assert!(messages(cx).is_empty()));
+    }
+
+    #[gpui::test]
+    fn toasts_render_in_a_window(cx: &mut TestAppContext) {
+        struct Host;
+        impl gpui::Render for Host {
+            fn render(&mut self, _: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                div().size_full().children(render(cx))
+            }
+        }
+        crate::test_support::init(cx);
+        let (_, vcx) = cx.add_window_view(|_, _| Host);
+        vcx.update(|_, cx| show(cx, "hello"));
+        vcx.run_until_parked();
+        vcx.read(|cx| assert_eq!(messages(cx), ["hello"]));
+    }
+}

@@ -222,6 +222,50 @@ mod tests {
     }
 
     #[test]
+    fn install_restores_changed_files() {
+        let d = tempfile::tempdir().unwrap();
+        install(d.path()).unwrap();
+        let rc = d.path().join("bash/nox.bash");
+        std::fs::write(&rc, "stale").unwrap();
+        install(d.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&rc).unwrap(), BASH_RC);
+        assert_eq!(std::fs::read_to_string(d.path().join("zsh/nox.zsh")).unwrap(), ZSH_HOOKS);
+    }
+
+    #[test]
+    fn install_fails_when_dir_is_a_file() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        assert!(install(&file).is_err());
+    }
+
+    #[test]
+    fn bash_keeps_other_args_and_existing_interactive_flag() {
+        let inj = inject(Path::new("/x"), "-bash", &["--login".into(), "-i".into(), "-x".into()]).unwrap();
+        assert_eq!(inj.args, vec!["--rcfile", "/x/bash/nox.bash", "-i", "-x"]);
+        assert_eq!(inj.env.get("NOX_BASH_LOGIN").map(String::as_str), Some("1"));
+        let inj = inject(Path::new("/x"), "bash", &[]).unwrap();
+        assert_eq!(inj.args, vec!["--rcfile", "/x/bash/nox.bash", "-i"]);
+        assert!(!inj.env.contains_key("NOX_BASH_LOGIN"));
+        assert_eq!(inj.env.get("NOX_SHELL_INTEGRATION_DIR").map(String::as_str), Some("/x"));
+    }
+
+    #[test]
+    fn fish_prepends_xdg_data_dirs() {
+        let inj = inject(Path::new("/x"), "/opt/homebrew/bin/fish", &["-l".into()]).unwrap();
+        assert_eq!(inj.args, vec!["-l"]);
+        let dirs = inj.env.get("XDG_DATA_DIRS").unwrap();
+        assert!(dirs.starts_with("/x/fish:"), "{dirs}");
+        assert!(dirs.len() > "/x/fish:".len());
+    }
+
+    #[test]
+    fn default_dir_is_under_nox_dir() {
+        assert_eq!(default_dir(Path::new("/h/.nox")), Path::new("/h/.nox/shell-integration"));
+    }
+
+    #[test]
     fn zsh_sets_zdotdir() {
         let inj = inject(Path::new("/x"), "zsh", &["-l".into()]).unwrap();
         assert_eq!(inj.env.get("ZDOTDIR").map(String::as_str), Some("/x/zsh"));

@@ -1274,3 +1274,665 @@ pub fn direction_of(a: &str) -> Direction {
 
 #[allow(unused)]
 fn _assert_any_element(_: AnyElement) {}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::pane::AgentInfo;
+    use gpui::{TestAppContext, VisualTestContext};
+    use nox_agents::AgentTracker;
+
+    /// The test config with every native side effect (notifications, sounds, dock bounce, sleep
+    /// assertions) and quitting switched off. Panes run `/bin/cat` instead of a shell: it starts
+    /// instantly, reads no profile, and dies on the `SIGHUP` a closed pane sends (a shell killed
+    /// while still starting up can survive it, and dropping its session then blocks in
+    /// `waitpid`). Tests that need a real shell use [`shell_config`].
+    pub(crate) fn quiet_config() -> nox_config::Config {
+        let mut c = shell_config();
+        c.shell.program = "/bin/cat".into();
+        c
+    }
+
+    /// [`quiet_config`] with a plain, non-login `/bin/sh`.
+    pub(crate) fn shell_config() -> nox_config::Config {
+        let mut c = crate::test_support::config();
+        c.shell.args.clear();
+        c.terminal.notifications = false;
+        c.terminal.attention_sound = false;
+        c.app.dock_bounce_on_bell = false;
+        c.agents.keep_awake = false;
+        c.app.quit_when_last_tab_closed = false;
+        c
+    }
+
+    /// Install globals and keys for `cfg`, then open a fresh root window.
+    pub(crate) fn open(
+        cx: &mut TestAppContext,
+        cfg: nox_config::Config,
+    ) -> (Entity<Root>, &mut VisualTestContext) {
+        let keys = cfg.keys.clone();
+        cx.update(|cx| {
+            crate::test_support::init_app(cx, cfg);
+            crate::actions::bind_keys(cx, &keys);
+        });
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(Initial::Fresh, window, cx));
+        cx.run_until_parked();
+        (root, cx)
+    }
+
+    pub(crate) fn dialog_title(cx: &mut VisualTestContext) -> Option<String> {
+        cx.update(|_, cx| {
+            cx.try_global::<crate::dialog::ActiveDialog>()
+                .and_then(|d| d.0.as_ref().map(|(v, _)| v.read(cx).title.to_string()))
+        })
+    }
+
+    /// Replace the text of the dialog's field `i`.
+    pub(crate) fn set_dialog_field(cx: &mut VisualTestContext, i: usize, text: &str) {
+        cx.update(|_, cx| {
+            let view = cx.global::<crate::dialog::ActiveDialog>().0.as_ref().unwrap().0.clone();
+            let input = view.read(cx).fields[i].input.clone();
+            input.update(cx, |inp, cx| inp.set_text(text.to_string(), cx));
+        });
+    }
+
+    pub(crate) fn pane_count(root: &Entity<Root>, cx: &mut VisualTestContext) -> usize {
+        root.read_with(cx, |r, _| r.panes.len())
+    }
+
+    thread_local! {
+        /// Shell sessions taken out of panes by [`detach_session`]; dropped (killed) at test end.
+        static DETACHED: std::cell::RefCell<Vec<nox_terminal::TerminalSession>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Take the shell out of `pane` (kept alive until the test ends), so its process detection
+    /// can't race with a test that drives the pane's agent state.
+    pub(crate) fn detach_session(root: &Entity<Root>, pane: PaneId, cx: &mut VisualTestContext) {
+        let e = root.read_with(cx, |r, _| r.panes[&pane].clone());
+        cx.update(|_, cx| {
+            if let Some(s) = e.update(cx, |p, _| p.session.take()) {
+                DETACHED.with(|d| d.borrow_mut().push(s));
+            }
+        });
+    }
+
+    /// `p` canonicalized (temp dirs are under a symlinked `/var`).
+    pub(crate) fn canon(p: &Path) -> PathBuf {
+        p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+    }
+
+    pub(crate) fn pane_cwd(root: &Entity<Root>, pane: PaneId, cx: &mut VisualTestContext) -> Option<PathBuf> {
+        root.read_with(cx, |r, cx| r.panes[&pane].read(cx).cwd.as_deref().map(canon))
+    }
+
+    /// Give `pane` an agent of `kind` in `state` (its shell detached, see [`detach_session`]).
+    pub(crate) fn make_agent(
+        root: &Entity<Root>,
+        pane: PaneId,
+        kind: &str,
+        state: AgentState,
+        cx: &mut VisualTestContext,
+    ) {
+        detach_session(root, pane, cx);
+        let e = root.read_with(cx, |r, _| r.panes[&pane].clone());
+        cx.update(|_, cx| {
+            e.update(cx, |p, _| {
+                let now = Instant::now();
+                let mut tracker = AgentTracker::new(kind, now);
+                tracker.on_report(state, Some(format!("{kind} msg")), Some("sess-1".into()), now);
+                p.agent = Some(AgentInfo { kind: kind.into(), tracker, launch: None, cmdline: kind.into() });
+            });
+        });
+    }
+
+    fn emit(root: &Entity<Root>, pane: PaneId, ev: PaneEvent, cx: &mut VisualTestContext) {
+        let e = root.read_with(cx, |r, _| r.panes[&pane].clone());
+        cx.update(|_, cx| e.update(cx, |_, cx| cx.emit(ev)));
+        cx.run_until_parked();
+    }
+
+    fn focused(root: &Entity<Root>, cx: &mut VisualTestContext) -> PaneId {
+        root.read_with(cx, |r, _| r.focused_pane_id().unwrap())
+    }
+
+    #[gpui::test]
+    fn fresh_root_has_one_tab_in_the_shell_directory(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let p = focused(&root, cx);
+        assert_eq!(pane_cwd(&root, p, cx), Some(canon(&crate::test_support::nox_home())));
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.len(), 1);
+            assert_eq!(r.ws.active().tabs.len(), 1);
+            assert!(r.coop.contains_key(&r.ws.active().id));
+            assert!(r.pending.is_empty());
+            assert!(!r.quitting);
+        });
+    }
+
+    #[gpui::test]
+    fn new_tabs_open_after_the_active_one(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let first = focused(&root, cx);
+        cx.dispatch_action(crate::actions::NewTab);
+        cx.dispatch_action(crate::actions::NewTab);
+        let third = focused(&root, cx);
+        root.update_in(cx, |r, w, cx| {
+            assert_eq!(r.ws.active().tabs.len(), 3);
+            assert_eq!(r.ws.active().active_tab, 2);
+            r.activate_tab(0, w, cx);
+            assert_eq!(r.focused_pane_id(), Some(first));
+            r.new_tab(w, cx);
+            // Inserted right after tab 0.
+            assert_eq!(r.ws.active().active_tab, 1);
+            assert_eq!(r.ws.active().tabs[3].focused, third);
+            // Activating a missing tab does nothing.
+            r.activate_tab(9, w, cx);
+            assert_eq!(r.ws.active().active_tab, 1);
+        });
+        assert_eq!(pane_count(&root, cx), 4);
+    }
+
+    #[gpui::test]
+    fn split_adds_a_focused_pane_and_closing_it_restores_one(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let first = focused(&root, cx);
+        cx.dispatch_action(crate::actions::SplitVertical);
+        let second = focused(&root, cx);
+        assert_ne!(first, second);
+        root.update_in(cx, |r, w, cx| {
+            assert_eq!(r.active_tab().unwrap().panes().len(), 2);
+            let third = r.split(SplitDirection::Horizontal, None, w, cx).expect("room to split");
+            assert_eq!(r.focused_pane_id(), Some(third));
+            assert_eq!(r.pane_workspace(third), Some(r.ws.active().id));
+            r.close_pane(third, w, cx);
+            r.close_pane(second, w, cx);
+            assert_eq!(r.active_tab().unwrap().panes(), vec![first]);
+            assert_eq!(r.focused_pane_id(), Some(first));
+            // Unknown panes are ignored.
+            r.close_pane(PaneId(u64::MAX), w, cx);
+        });
+        assert_eq!(pane_count(&root, cx), 1);
+    }
+
+    #[gpui::test]
+    fn split_is_refused_when_the_pane_is_too_small(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        cx.simulate_resize(gpui::size(px(220.), px(160.)));
+        cx.run_until_parked();
+        let p = focused(&root, cx);
+        let made = root.update_in(cx, |r, w, cx| r.split(SplitDirection::Vertical, None, w, cx));
+        assert!(made.is_none());
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.active_tab().unwrap().panes(), vec![p]);
+            assert!(r.panes[&p].read(cx).shake.is_some(), "refusal shakes the pane");
+        });
+    }
+
+    #[gpui::test]
+    fn closing_the_last_tab_starts_a_fresh_workspace(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let old_pane = focused(&root, cx);
+        let old_ws = root.read_with(cx, |r, _| r.ws.active().id);
+        cx.dispatch_action(crate::actions::CloseTab);
+        root.read_with(cx, |r, _| {
+            assert!(!r.quitting);
+            assert_eq!(r.ws.len(), 1);
+            assert_ne!(r.ws.active().id, old_ws);
+            assert_eq!(r.ws.active().tabs.len(), 1);
+            assert_ne!(r.focused_pane_id(), Some(old_pane));
+            assert!(!r.panes.contains_key(&old_pane));
+            assert!(!r.coop.contains_key(&old_ws));
+        });
+    }
+
+    #[gpui::test]
+    fn closing_the_last_tab_keeps_the_workspace_unless_close_when_empty(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        cfg.workspaces.close_when_empty = false;
+        let (root, cx) = open(cx, cfg);
+        let ws = root.read_with(cx, |r, _| r.ws.active().id);
+        let old = focused(&root, cx);
+        cx.dispatch_action(crate::actions::ClosePane);
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.active().id, ws);
+            assert_eq!(r.ws.active().tabs.len(), 1);
+            assert_ne!(r.focused_pane_id(), Some(old));
+        });
+    }
+
+    #[gpui::test]
+    fn close_other_tabs_and_duplicate(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        cx.dispatch_action(crate::actions::NewTab);
+        cx.dispatch_action(crate::actions::DuplicateTab);
+        let keep = focused(&root, cx);
+        assert_eq!(root.read_with(cx, |r, _| r.ws.active().tabs.len()), 3);
+        assert_eq!(pane_cwd(&root, keep, cx), Some(canon(&crate::test_support::nox_home())));
+        cx.dispatch_action(crate::actions::CloseOtherTabs);
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.active().tabs.len(), 1);
+            assert_eq!(r.focused_pane_id(), Some(keep));
+            assert_eq!(r.panes.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn workspaces_create_switch_reveal_and_close(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let p0 = focused(&root, cx);
+        let p1 = root.update_in(cx, |r, w, cx| {
+            let idx = r.create_workspace(Some("  work ".into()), None, w, cx);
+            assert_eq!(idx, 1);
+            assert_eq!(r.ws.active, 1);
+            assert_eq!(r.ws.active().name, "work");
+            // Unique names.
+            let i2 = r.create_workspace(Some("work".into()), None, w, cx);
+            assert_ne!(r.ws.list[i2].name, "work");
+            r.close_workspace_now(i2, w, cx);
+            r.add_tab(1, PaneSpawn::default(), w, cx)
+        });
+        root.update_in(cx, |r, w, cx| {
+            assert_eq!(r.ws.len(), 2);
+            r.switch_workspace(0, w, cx);
+            assert_eq!(r.focused_pane_id(), Some(p0));
+            r.switch_workspace(7, w, cx);
+            assert_eq!(r.ws.active, 0);
+            r.reveal_pane(p1, w, cx);
+            assert_eq!(r.ws.active, 1);
+            assert_eq!(r.focused_pane_id(), Some(p1));
+            assert!(r.is_looked_at(p1));
+            assert!(!r.is_looked_at(p0));
+            r.window_active = false;
+            assert!(!r.is_looked_at(p1));
+            r.window_active = true;
+        });
+        cx.dispatch_action(crate::actions::PreviousWorkspace);
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active, 0));
+        cx.dispatch_action(crate::actions::NextWorkspace);
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active, 1));
+        cx.dispatch_action(crate::actions::LastWorkspace);
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active, 0));
+        cx.dispatch_action(crate::actions::ActivateWorkspace2);
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active, 1));
+        cx.dispatch_action(crate::actions::CloseWorkspace);
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.len(), 1);
+            assert_eq!(r.focused_pane_id(), Some(p0));
+            assert!(!r.panes.contains_key(&p1));
+            assert_eq!(r.coop.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn tab_rename_commits_trimmed_and_empty_restores_auto(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        cx.dispatch_action(crate::actions::RenameTab);
+        assert!(root.read_with(cx, |r, _| r.rename.is_some()));
+        cx.simulate_input("  build  ");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, cx| {
+            assert!(r.rename.is_none());
+            let t = r.active_tab().unwrap();
+            assert_eq!(t.custom_name.as_deref(), Some("build"));
+            // show_index is on by default.
+            assert_eq!(r.tab_title(t, 0, cx), "1 build");
+            assert_eq!(r.pane_tab_title(t.focused, cx), "1 build");
+            assert_eq!(r.pane_tab_title(PaneId(u64::MAX), cx), "");
+        });
+        // Cancel keeps the name.
+        let id = root.read_with(cx, |r, _| r.active_tab().unwrap().id);
+        root.update_in(cx, |r, w, cx| {
+            r.start_rename(RenameTarget::Tab(id), w, cx);
+            r.rename.as_ref().unwrap().input.update(cx, |i, cx| i.set_text("other".to_string(), cx));
+            r.finish_rename(false, w, cx);
+            assert_eq!(r.active_tab().unwrap().custom_name.as_deref(), Some("build"));
+            r.start_rename(RenameTarget::Tab(id), w, cx);
+            assert_eq!(r.rename.as_ref().unwrap().input.read(cx).text(), "build");
+            r.rename.as_ref().unwrap().input.update(cx, |i, cx| i.set_text("   ".to_string(), cx));
+            r.finish_rename(true, w, cx);
+            assert_eq!(r.active_tab().unwrap().custom_name, None);
+            // Nothing to finish.
+            r.finish_rename(true, w, cx);
+        });
+    }
+
+    #[gpui::test]
+    fn pane_and_workspace_rename_sheets(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let p = focused(&root, cx);
+        cx.dispatch_action(crate::actions::RenamePane);
+        assert_eq!(dialog_title(cx).as_deref(), Some("Rename Pane"));
+        set_dialog_field(cx, 0, " reviewer ");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(dialog_title(cx), None);
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.panes[&p].read(cx).custom_name.as_deref(), Some("reviewer"));
+            assert_eq!(r.pane_name(p, cx), "reviewer");
+        });
+
+        cx.dispatch_action(crate::actions::RenameWorkspace);
+        assert_eq!(dialog_title(cx).as_deref(), Some("Rename Workspace"));
+        set_dialog_field(cx, 0, "api");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active().name, "api"));
+        // An empty workspace name is ignored.
+        cx.dispatch_action(crate::actions::RenameWorkspace);
+        set_dialog_field(cx, 0, "  ");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active().name, "api"));
+        // Escape cancels.
+        cx.dispatch_action(crate::actions::RenamePane);
+        set_dialog_field(cx, 0, "zzz");
+        cx.simulate_keystrokes("escape");
+        assert_eq!(dialog_title(cx), None);
+        root.read_with(cx, |r, cx| assert_eq!(r.panes[&p].read(cx).custom_name.as_deref(), Some("reviewer")));
+    }
+
+    #[gpui::test]
+    fn agent_names_get_suffixes_per_workspace(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let a = focused(&root, cx);
+        let b = root.update_in(cx, |r, w, cx| r.split(SplitDirection::Vertical, None, w, cx).unwrap());
+        let c = root.update_in(cx, |r, w, cx| r.split(SplitDirection::Horizontal, None, w, cx).unwrap());
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.pane_name(a, cx), format!("pane-{a}"));
+            assert_eq!(r.pane_name(PaneId(u64::MAX), cx), PaneId(u64::MAX).to_string());
+        });
+        make_agent(&root, a, "claude", AgentState::Working, cx);
+        make_agent(&root, b, "claude", AgentState::Idle, cx);
+        make_agent(&root, c, "codex", AgentState::NeedsInput, cx);
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.pane_name(a, cx), "claude");
+            assert_eq!(r.pane_name(b, cx), "claude-2");
+            assert_eq!(r.pane_name(c, cx), "codex");
+            // Needs input first, then working, then idle (seen).
+            assert_eq!(r.live_agents(cx), vec![(0, c), (0, a), (0, b)]);
+            assert_eq!(r.waiting_agents(cx), vec![c]);
+            let tab = r.active_tab().unwrap();
+            assert_eq!(r.tab_status(tab, cx), TabStatus::NeedsInput);
+            assert_eq!(r.workspace_status(r.ws.active(), cx), TabStatus::NeedsInput);
+        });
+        root.update_in(cx, |r, _, cx| {
+            r.panes[&b].update(cx, |p, _| p.done_unseen = true);
+            assert_eq!(r.waiting_agents(cx), vec![c, b]);
+            assert_eq!(r.live_agents(cx), vec![(0, c), (0, b), (0, a)]);
+        });
+    }
+
+    #[gpui::test]
+    fn bell_and_finished_commands_mark_unseen_panes(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let a = focused(&root, cx);
+        // Looked at: nothing sticks.
+        emit(&root, a, PaneEvent::Bell, cx);
+        emit(
+            &root,
+            a,
+            PaneEvent::CommandFinished { command: "make".into(), exit: Some(2), duration: Duration::ZERO },
+            cx,
+        );
+        root.read_with(cx, |r, cx| {
+            let p = r.panes[&a].read(cx);
+            assert!(!p.bell_unseen && !p.done_unseen);
+        });
+        root.update(cx, |r, _| r.window_active = false);
+        emit(&root, a, PaneEvent::Bell, cx);
+        emit(
+            &root,
+            a,
+            PaneEvent::CommandFinished {
+                command: "make".into(),
+                exit: Some(2),
+                duration: Duration::from_secs(60),
+            },
+            cx,
+        );
+        emit(&root, a, PaneEvent::Notify { title: Some("t".into()), body: "b".into() }, cx);
+        root.read_with(cx, |r, cx| {
+            let p = r.panes[&a].read(cx);
+            assert!(p.bell_unseen);
+            assert!(p.done_unseen && p.done_failed);
+            assert_eq!(r.tab_status(r.active_tab().unwrap(), cx), TabStatus::Bell);
+        });
+        // Coming back marks it seen.
+        root.update(cx, |r, cx| {
+            r.window_active = true;
+            r.mark_visible_seen(cx);
+        });
+        root.read_with(cx, |r, cx| {
+            let p = r.panes[&a].read(cx);
+            assert!(!p.bell_unseen && !p.done_unseen && !p.done_failed);
+        });
+        emit(&root, a, PaneEvent::UserInput, cx);
+        emit(&root, a, PaneEvent::TitleChanged, cx);
+        assert!(root.read_with(cx, |r, _| r.session_soft_task.is_some()));
+    }
+
+    #[gpui::test]
+    fn exit_closes_the_pane_only_when_clean(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let a = focused(&root, cx);
+        let b = root.update_in(cx, |r, w, cx| r.split(SplitDirection::Vertical, None, w, cx).unwrap());
+        emit(&root, b, PaneEvent::Exited { code: Some(1) }, cx);
+        assert!(root.read_with(cx, |r, _| r.panes.contains_key(&b)));
+        emit(&root, b, PaneEvent::Exited { code: Some(0) }, cx);
+        root.read_with(cx, |r, _| {
+            assert!(!r.panes.contains_key(&b));
+            assert_eq!(r.active_tab().unwrap().panes(), vec![a]);
+        });
+    }
+
+    #[gpui::test]
+    fn pane_events_split_focus_and_maximize(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let a = focused(&root, cx);
+        emit(&root, a, PaneEvent::Split(SplitDirection::Vertical), cx);
+        let b = focused(&root, cx);
+        assert_ne!(a, b);
+        emit(&root, a, PaneEvent::Focused, cx);
+        assert_eq!(focused(&root, cx), a);
+        emit(&root, b, PaneEvent::ToggleMaximize, cx);
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.focused_pane_id(), Some(b));
+            assert_eq!(r.active_tab().unwrap().maximized, Some(b));
+            assert!(cx.global::<UiFlags>().maximized_panes.contains(&b));
+        });
+        // Next pane un-maximizes and moves focus.
+        cx.dispatch_action(crate::actions::NextPane);
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.active_tab().unwrap().maximized, None);
+            assert!(cx.global::<UiFlags>().maximized_panes.is_empty());
+            assert_eq!(r.focused_pane_id(), Some(a));
+        });
+        cx.dispatch_action(crate::actions::ToggleMaximizePane);
+        root.read_with(cx, |r, _| assert_eq!(r.active_tab().unwrap().maximized, Some(a)));
+        cx.dispatch_action(crate::actions::PreviousPane);
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.active_tab().unwrap().maximized, None);
+            assert_eq!(r.focused_pane_id(), Some(b));
+        });
+        // Pane asks to close (nothing running: no sheet).
+        emit(&root, b, PaneEvent::Close, cx);
+        assert_eq!(dialog_title(cx), None);
+        root.read_with(cx, |r, _| assert_eq!(r.active_tab().unwrap().panes(), vec![a]));
+    }
+
+    #[gpui::test]
+    fn agent_turn_end_marks_done_when_not_looked_at(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        cfg.terminal.attention_min_duration = 0;
+        let (root, cx) = open(cx, cfg);
+        let a = focused(&root, cx);
+        detach_session(&root, a, cx);
+        let e = root.read_with(cx, |r, _| r.panes[&a].clone());
+        cx.update(|_, cx| e.update(cx, |p, cx| p.report_status(AgentState::Working, None, None, cx)));
+        cx.run_until_parked();
+        root.update(cx, |r, _| r.window_active = false);
+        cx.update(|_, cx| {
+            e.update(cx, |p, cx| p.report_status(AgentState::Idle, Some("done".into()), None, cx));
+        });
+        cx.run_until_parked();
+        root.read_with(cx, |r, cx| {
+            assert!(r.panes[&a].read(cx).done_unseen);
+            assert_eq!(r.waiting_agents(cx), vec![a]);
+        });
+    }
+
+    #[gpui::test]
+    fn launch_agent_opens_an_agent_tab(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        cfg.agents.defs.clear();
+        cfg.agents
+            .defs
+            .insert("fake".into(), nox_config::AgentDef { command: "true".into(), ..Default::default() });
+        let (root, cx) = open(cx, cfg);
+        root.update_in(cx, |r, w, cx| {
+            r.launch_agent(0, "missing", None, w, cx);
+            assert_eq!(r.ws.active().tabs.len(), 1);
+            r.launch_agent(0, "fake", None, w, cx);
+            assert_eq!(r.ws.active().tabs.len(), 2);
+            let p = r.focused_pane().unwrap();
+            let p = p.read(cx);
+            let a = p.agent.as_ref().expect("agent pane");
+            assert_eq!(a.kind, "fake");
+            assert_eq!(a.launch.as_ref().unwrap().command, "true");
+        });
+    }
+
+    #[gpui::test]
+    fn geometry_follows_the_tabs_position(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let set = |cx: &mut VisualTestContext, f: &dyn Fn(&mut nox_config::Config)| {
+            cx.update(|_, cx| {
+                let mut c = (*Settings::global(cx).config).clone();
+                f(&mut c);
+                cx.set_global(Settings::new(c, nox_mac::Accessibility::default()));
+            });
+        };
+        let top = root.update_in(cx, |r, w, cx| {
+            assert!(r.tab_bar_shown(cx));
+            assert!(!r.sidebar_shown(cx));
+            assert!((r.titlebar_height(cx) - TITLEBAR_TOP_PX).abs() < f32::EPSILON);
+            let min = r.min_pane(w, cx);
+            assert!(min.w > 0. && min.h > 0.);
+            r.layout_area(w, cx)
+        });
+        set(cx, &|c| c.tabs.position = nox_config::TabsPosition::Bottom);
+        let bottom = root.update_in(cx, |r, w, cx| {
+            assert!((r.titlebar_height(cx) - TITLEBAR_SLIM_PX).abs() < f32::EPSILON);
+            r.layout_area(w, cx)
+        });
+        assert!((top.h - (bottom.h + BOTTOM_BAR_PX - (TITLEBAR_TOP_PX - TITLEBAR_SLIM_PX))).abs() < 0.01);
+        set(cx, &|c| {
+            c.tabs.position = nox_config::TabsPosition::Left;
+            c.tabs.sidebar_visible = true;
+            c.tabs.sidebar_width = 9999;
+        });
+        root.update_in(cx, |r, w, cx| {
+            assert!(r.sidebar_shown(cx));
+            assert!(!r.tab_bar_shown(cx));
+            assert!((r.sidebar_width(cx) - 360.).abs() < f32::EPSILON);
+            let left = r.layout_area(w, cx);
+            assert!((left.x - top.x - 361.).abs() < 0.01);
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn new_tab_cwd_prefers_root_or_the_focused_pane(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = quiet_config();
+        cfg.workspaces.new_tab_cwd = nox_config::NewTabCwd::Root;
+        let (root, cx) = open(cx, cfg);
+        let home = crate::test_support::nox_home();
+        root.update_in(cx, |r, w, cx| {
+            assert_eq!(canon(&r.new_cwd(0, cx)), canon(&home));
+            let idx = r.create_workspace(None, Some(dir.path().to_path_buf()), w, cx);
+            assert_eq!(r.ws.list[idx].name, dir_name(dir.path()));
+            // Empty workspace: its root.
+            assert_eq!(r.new_cwd(idx, cx), dir.path());
+            r.add_tab(idx, PaneSpawn { cwd: Some(home.clone()), ..Default::default() }, w, cx);
+            // Root mode: the root even though the pane is elsewhere.
+            assert_eq!(r.new_cwd(idx, cx), dir.path());
+        });
+        cx.update(|_, cx| {
+            let mut c = (*Settings::global(cx).config).clone();
+            c.workspaces.new_tab_cwd = nox_config::NewTabCwd::Inherit;
+            cx.set_global(Settings::new(c, nox_mac::Accessibility::default()));
+        });
+        root.read_with(cx, |r, cx| assert_eq!(canon(&r.new_cwd(1, cx)), canon(&home)));
+    }
+
+    #[gpui::test]
+    fn font_size_steps_apply_to_every_pane(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        cx.dispatch_action(crate::actions::SplitVertical);
+        let base = cx.update(|_, cx| Settings::global(cx).term_font.size);
+        cx.dispatch_action(crate::actions::FontBigger);
+        cx.dispatch_action(crate::actions::FontBigger);
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.font_override, Some(base + 2.));
+            assert!(r.panes.values().all(|p| p.read(cx).font_size_override == Some(base + 2.)));
+        });
+        cx.dispatch_action(crate::actions::FontSmaller);
+        root.read_with(cx, |r, _| assert_eq!(r.font_override, Some(base + 1.)));
+        // New panes inherit the override.
+        cx.dispatch_action(crate::actions::NewTab);
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.focused_pane().unwrap().read(cx).font_size_override, Some(base + 1.));
+        });
+        cx.dispatch_action(crate::actions::FontReset);
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.font_override, None);
+            assert!(r.panes.values().all(|p| p.read(cx).font_size_override.is_none()));
+        });
+    }
+
+    #[gpui::test]
+    fn theme_change_and_session_debounce(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        root.update_in(cx, |r, w, cx| {
+            r.on_theme_changed(w, cx);
+            r.session_task = None;
+            r.session_changed(cx);
+            assert!(r.session_task.is_some());
+            // A second change while pending doesn't restart it.
+            r.session_changed(cx);
+            r.quitting = true;
+        });
+        // The debounced save fires after 1 s (quitting: it writes nothing).
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        assert!(root.read_with(cx, |r, _| r.session_task.is_none()));
+    }
+
+    #[test]
+    fn helpers() {
+        assert_eq!(dir_name(Path::new("/a/b/proj")), "proj");
+        assert_eq!(dir_name(Path::new("/")), "/");
+        assert_eq!(direction_of("left"), Direction::Left);
+        assert_eq!(direction_of("right"), Direction::Right);
+        assert_eq!(direction_of("up"), Direction::Up);
+        assert_eq!(direction_of("down"), Direction::Down);
+        assert_eq!(direction_of("??"), Direction::Down);
+        let b = px_rect(Rect::new(1., 2., 3., 4.));
+        assert_eq!(b.origin, gpui::point(px(1.), px(2.)));
+        assert_eq!(b.size, gpui::size(px(3.), px(4.)));
+        assert!(dirs_home().is_absolute());
+    }
+
+    #[gpui::test]
+    fn default_cwd_falls_back_to_home(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        cfg.shell.working_directory = "/definitely/not/here".into();
+        cx.update(|cx| {
+            crate::test_support::init_app(cx, cfg.clone());
+            assert_eq!(default_cwd(cx), dirs_home());
+            let mut c = cfg.clone();
+            c.shell.working_directory = "  ".into();
+            cx.set_global(Settings::new(c, nox_mac::Accessibility::default()));
+            assert_eq!(default_cwd(cx), dirs_home());
+        });
+    }
+}

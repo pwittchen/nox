@@ -303,6 +303,164 @@ mod tests {
     }
 
     #[test]
+    fn remaining_special_keys() {
+        assert_eq!(enc("backspace", None, CTRL).unwrap(), vec![0x08]);
+        assert_eq!(enc("escape", None, NONE).unwrap(), b"\x1b");
+        assert_eq!(enc("escape", None, ALT).unwrap(), b"\x1b\x1b");
+        assert_eq!(enc("space", Some(" "), NONE).unwrap(), b" ");
+        assert_eq!(enc("space", Some(" "), ALT).unwrap(), b"\x1b ");
+        assert_eq!(enc("space", Some(" "), Mods { ctrl: true, ..ALT }).unwrap(), b"\x1b\x00");
+        assert_eq!(enc("enter", None, ALT).unwrap(), b"\x1b\r");
+        // ⇧⌃↵ is a plain CR (only ⇧↵ without ⌃ sends ESC CR).
+        assert_eq!(enc("enter", None, Mods { ctrl: true, ..SHIFT }).unwrap(), b"\r");
+        assert_eq!(enc("tab", None, NONE).unwrap(), b"\t");
+        // ⌘ with other modifiers, or ⌘ + a non-editing key, is left to the app.
+        assert_eq!(enc("left", None, Mods { alt: true, ..CMD }), None);
+        assert_eq!(enc("backspace", None, Mods { ctrl: true, ..CMD }), None);
+    }
+
+    #[test]
+    fn every_cursor_key() {
+        for (key, c) in
+            [("up", 'A'), ("down", 'B'), ("right", 'C'), ("left", 'D'), ("home", 'H'), ("end", 'F')]
+        {
+            assert_eq!(enc(key, None, NONE).unwrap(), format!("\x1b[{c}").into_bytes(), "{key}");
+            assert_eq!(enc(key, None, CTRL).unwrap(), format!("\x1b[1;5{c}").into_bytes(), "{key}");
+            let app = encode(
+                &KeyInput { key, key_char: None, mods: NONE, alt_is_meta: true },
+                KeyModes { app_cursor: true, app_keypad: false },
+            );
+            assert_eq!(app.unwrap(), format!("\x1bO{c}").into_bytes(), "{key}");
+        }
+        // ⌥↑ / ⌥Home aren't word motions: they get the xterm modifier parameter (3 = Alt).
+        assert_eq!(enc("up", None, ALT).unwrap(), b"\x1b[1;3A");
+        assert_eq!(enc("home", None, ALT).unwrap(), b"\x1b[1;3H");
+        // ⌥⇧← is a modified cursor key, not a word motion.
+        assert_eq!(enc("left", None, Mods { shift: true, ..ALT }).unwrap(), b"\x1b[1;4D");
+        assert_eq!(enc("left", None, Mods { ctrl: true, ..ALT }).unwrap(), b"\x1b[1;7D");
+        // Modified keys ignore application cursor mode.
+        let shift_end = KeyInput { key: "end", key_char: None, mods: SHIFT, alt_is_meta: true };
+        assert_eq!(
+            encode(&shift_end, KeyModes { app_cursor: true, app_keypad: false }).unwrap(),
+            b"\x1b[1;2F"
+        );
+    }
+
+    #[test]
+    fn tilde_keys() {
+        assert_eq!(enc("insert", None, NONE).unwrap(), b"\x1b[2~");
+        assert_eq!(enc("pageup", None, NONE).unwrap(), b"\x1b[5~");
+        assert_eq!(enc("pagedown", None, NONE).unwrap(), b"\x1b[6~");
+        assert_eq!(
+            enc("delete", None, Mods { shift: true, alt: true, ctrl: true, cmd: false }).unwrap(),
+            b"\x1b[3;8~"
+        );
+    }
+
+    #[test]
+    fn every_function_key() {
+        let expected: [&[u8]; 20] = [
+            b"\x1bOP",
+            b"\x1bOQ",
+            b"\x1bOR",
+            b"\x1bOS",
+            b"\x1b[15~",
+            b"\x1b[17~",
+            b"\x1b[18~",
+            b"\x1b[19~",
+            b"\x1b[20~",
+            b"\x1b[21~",
+            b"\x1b[23~",
+            b"\x1b[24~",
+            b"\x1b[25~",
+            b"\x1b[26~",
+            b"\x1b[28~",
+            b"\x1b[29~",
+            b"\x1b[31~",
+            b"\x1b[32~",
+            b"\x1b[33~",
+            b"\x1b[34~",
+        ];
+        for (i, want) in expected.iter().enumerate() {
+            let key = format!("f{}", i + 1);
+            assert_eq!(enc(&key, None, NONE).unwrap(), *want, "{key}");
+        }
+        assert_eq!(enc("f2", None, SHIFT).unwrap(), b"\x1b[1;2Q");
+        assert_eq!(enc("f12", None, ALT).unwrap(), b"\x1b[24;3~");
+        assert_eq!(enc("f21", None, NONE), None);
+        assert_eq!(enc("f0", None, NONE), None);
+    }
+
+    #[test]
+    fn ctrl_symbol_table() {
+        for (key, byte) in [
+            ("@", 0x00),
+            ("2", 0x00),
+            ("3", 0x1b),
+            ("\\", 0x1c),
+            ("4", 0x1c),
+            ("]", 0x1d),
+            ("5", 0x1d),
+            ("^", 0x1e),
+            ("6", 0x1e),
+            ("_", 0x1f),
+            ("-", 0x1f),
+            ("/", 0x1f),
+            ("7", 0x1f),
+            ("8", 0x7f),
+            ("?", 0x7f),
+        ] {
+            assert_eq!(enc(key, Some(key), CTRL).unwrap(), vec![byte], "ctrl+{key}");
+        }
+        // Upper-case letters map like lower-case ones.
+        assert_eq!(enc("C", Some("C"), CTRL).unwrap(), vec![3]);
+        // ⌃⌥ prefixes ESC.
+        assert_eq!(enc("c", Some("c"), Mods { ctrl: true, ..ALT }).unwrap(), b"\x1b\x03");
+        // key_char wins over the key name when it is a single character.
+        assert_eq!(enc("x", Some("a"), CTRL).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn ctrl_without_control_code_sends_the_character() {
+        assert_eq!(enc("1", Some("1"), CTRL).unwrap(), b"1");
+        assert_eq!(enc("1", Some("1"), Mods { ctrl: true, ..ALT }).unwrap(), b"\x1b1");
+        // Multi-character key names without a control code produce nothing.
+        assert_eq!(enc("capslock", None, CTRL), None);
+    }
+
+    #[test]
+    fn meta_and_fallbacks() {
+        // Option as Meta with a named key that has no encoding: nothing.
+        assert_eq!(enc("capslock", None, ALT), None);
+        // No key_char: fall back to the key name, upper-cased with Shift.
+        assert_eq!(enc("q", None, NONE).unwrap(), b"q");
+        assert_eq!(enc("q", None, SHIFT).unwrap(), b"Q");
+        assert_eq!(enc("q", Some(""), NONE).unwrap(), b"q");
+        // Unknown multi-character keys (bare modifiers) produce nothing.
+        assert_eq!(enc("shift", None, SHIFT), None);
+    }
+
+    #[test]
+    fn keypad_application_mode_table() {
+        let app = KeyModes { app_cursor: false, app_keypad: true };
+        for (c, code) in [
+            ('0', 'p'),
+            ('9', 'y'),
+            ('.', 'n'),
+            ('+', 'k'),
+            ('-', 'm'),
+            ('*', 'j'),
+            ('/', 'o'),
+            ('=', 'X'),
+            ('\r', 'M'),
+            ('\n', 'M'),
+        ] {
+            assert_eq!(encode_keypad(c, app), format!("\x1bO{code}").into_bytes(), "{c:?}");
+        }
+        assert_eq!(encode_keypad(',', app), b",");
+    }
+
+    #[test]
     fn keypad() {
         assert_eq!(encode_keypad('1', KeyModes::default()), b"1");
         assert_eq!(encode_keypad('1', KeyModes { app_cursor: false, app_keypad: true }), b"\x1bOq");

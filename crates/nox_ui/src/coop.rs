@@ -770,3 +770,858 @@ impl Root {
 fn wire(m: nox_agents::Message) -> MessageWire {
     MessageWire { id: m.id.0, from: m.from, from_name: m.from_name, text: m.text, ts_ms: m.ts }
 }
+
+#[cfg(test)]
+mod tests {
+    //! `handle_ipc` driven with real `Responder`s: a private `nox_ipc::Server` on a scratch
+    //! socket hands each request to the test thread, which applies it to `Root` and reads the
+    //! response line back from its client end.
+
+    use std::collections::HashMap;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::sync::{Mutex, mpsc};
+
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use nox_config::Config;
+    use nox_ipc::{PROTOCOL_VERSION, Request as WireRequest, Response, Server, Tokens};
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::root::Initial;
+
+    type Captured = (Option<Caller>, Method, Responder);
+
+    struct Capture(Mutex<mpsc::Sender<Captured>>);
+
+    impl Handler for Capture {
+        fn handle(&self, caller: Option<Caller>, method: Method, reply: Responder) {
+            let _ = self.0.lock().unwrap().send((caller, method, reply));
+        }
+    }
+
+    struct Harness<'a> {
+        root: Entity<Root>,
+        cx: &'a mut VisualTestContext,
+        rx: mpsc::Receiver<Captured>,
+        writer: UnixStream,
+        reader: BufReader<UnixStream>,
+        tokens: Tokens,
+        stash: HashMap<u64, Result<Value, IpcError>>,
+        next_id: u64,
+        _dir: tempfile::TempDir,
+    }
+
+    fn base_config() -> Config {
+        let mut c = crate::test_support::config();
+        // Keep native side effects (power assertions, sounds, notifications) out of tests.
+        c.agents.keep_awake = false;
+        c.terminal.attention_sound = false;
+        c.terminal.notifications = false;
+        c
+    }
+
+    fn setup(cx: &mut TestAppContext, tweak: impl FnOnce(&mut Config)) -> Harness<'_> {
+        let mut config = base_config();
+        tweak(&mut config);
+        cx.update(|cx| crate::test_support::init_app(cx, config));
+        let (root, vcx) = cx.add_window_view(|window, cx| Root::new(Initial::Fresh, window, cx));
+        vcx.run_until_parked();
+        let dir = tempfile::Builder::new().prefix("nx").tempdir().unwrap();
+        let path = dir.path().join("s");
+        let (tx, rx) = mpsc::channel();
+        let handle = Server::start(&path, Arc::new(Capture(Mutex::new(tx)))).unwrap();
+        let tokens = handle.tokens().clone();
+        root.update(vcx, |r, _| r.ipc = Some(IpcState { handle, waiters: vec![] }));
+        let writer = UnixStream::connect(&path).unwrap();
+        let reader = BufReader::new(writer.try_clone().unwrap());
+        Harness { root, cx: vcx, rx, writer, reader, tokens, stash: HashMap::new(), next_id: 1, _dir: dir }
+    }
+
+    fn code(r: &Result<Value, IpcError>) -> Option<ErrorCode> {
+        r.as_ref().err().map(|e| e.code)
+    }
+
+    impl Harness<'_> {
+        /// Send `method` as `caller` (token-authenticated) and apply it to `Root`; returns the id.
+        fn send(&mut self, caller: Option<Caller>, method: Method) -> u64 {
+            let id = self.next_id;
+            self.next_id += 1;
+            // Without a caller the server only lets `ls` / `open` through; borrow an `ls`
+            // responder and hand `Root` the real method (what a token-less request would get).
+            let (token, wire) = match caller {
+                Some(c) => (Some(self.tokens.issue(c)), method.clone()),
+                None => (None, Method::Ls { all: false }),
+            };
+            let req = WireRequest { v: PROTOCOL_VERSION, id, token, method: wire };
+            let mut line = serde_json::to_string(&req).unwrap();
+            line.push('\n');
+            self.writer.write_all(line.as_bytes()).unwrap();
+            let (got_caller, _, reply) = self.rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(got_caller, caller);
+            self.root.update_in(self.cx, |r, window, cx| r.handle_ipc(caller, method, reply, window, cx));
+            self.cx.run_until_parked();
+            id
+        }
+
+        fn call(&mut self, caller: Option<Caller>, method: Method) -> Result<Value, IpcError> {
+            let id = self.send(caller, method);
+            self.response(id).expect("no response")
+        }
+
+        fn read_lines(&mut self, timeout: Duration) {
+            self.reader.get_ref().set_read_timeout(Some(timeout)).unwrap();
+            let mut line = String::new();
+            while let Ok(n) = self.reader.read_line(&mut line) {
+                if n == 0 {
+                    break;
+                }
+                let r: Response = serde_json::from_str(&line).unwrap();
+                self.stash.insert(r.id, r.into_result());
+                line.clear();
+                // Anything already written is available at once; don't wait for more.
+                self.reader.get_ref().set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+            }
+        }
+
+        /// The response to `id`, if one was written (responses are written synchronously).
+        fn response(&mut self, id: u64) -> Option<Result<Value, IpcError>> {
+            if !self.stash.contains_key(&id) {
+                self.read_lines(Duration::from_millis(200));
+            }
+            self.stash.remove(&id)
+        }
+
+        fn caller(&mut self, p: PaneId) -> Caller {
+            self.root.read_with(self.cx, |r, _| {
+                let (w, t) = r.ws.find_pane(p).unwrap();
+                Caller { pane_id: p.0, tab_id: r.ws.list[w].tabs[t].id.0, workspace_id: r.ws.list[w].id.0 }
+            })
+        }
+
+        fn first_pane(&mut self) -> PaneId {
+            self.root.read_with(self.cx, |r, _| r.ws.list[0].tabs[0].focused)
+        }
+
+        fn spawn(&mut self, from: PaneId, placement: Placement, name: Option<&str>) -> PaneId {
+            let c = self.caller(from);
+            let v = self
+                .call(
+                    Some(c),
+                    Method::Spawn { placement, name: name.map(str::to_string), cwd: None, command: vec![] },
+                )
+                .unwrap();
+            PaneId(v["pane_id"].as_u64().unwrap())
+        }
+
+        /// A pane standing in for an agent: `sleep` runs in the foreground (so process polling
+        /// doesn't see the shell come back and mark the agent exited), then it reports `state`.
+        fn agent(&mut self, from: PaneId, name: &str, state: AgentStateWire) -> PaneId {
+            let c = self.caller(from);
+            let v = self
+                .call(
+                    Some(c),
+                    Method::Spawn {
+                        placement: Placement::Tab,
+                        name: Some(name.into()),
+                        cwd: None,
+                        command: vec!["sleep".into(), "600".into()],
+                    },
+                )
+                .unwrap();
+            let p = PaneId(v["pane_id"].as_u64().unwrap());
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                self.root.update(self.cx, |r, cx| r.panes[&p].update(cx, crate::pane::Pane::refresh_info));
+                let fg = self.pane(p, crate::pane::Pane::process_display_name);
+                if fg.as_deref() == Some("sleep") {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "sleep never reached the foreground");
+                self.cx.run_until_parked();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            self.status(p, state);
+            p
+        }
+
+        fn status(&mut self, p: PaneId, state: AgentStateWire) {
+            let c = self.caller(p);
+            self.call(Some(c), Method::Status { state, message: None, session: None }).unwrap();
+        }
+
+        fn tick(&mut self) {
+            self.root.update(self.cx, Root::ipc_tick);
+            self.cx.run_until_parked();
+        }
+
+        fn expire_waiters_now(&mut self) {
+            self.root.update(self.cx, |r, _| {
+                for w in &mut r.ipc.as_mut().unwrap().waiters {
+                    w.deadline = Some(Instant::now());
+                }
+            });
+        }
+
+        fn waiter_count(&mut self) -> usize {
+            self.root.read_with(self.cx, |r, _| r.ipc.as_ref().unwrap().waiters.len())
+        }
+
+        fn pane<R>(&mut self, p: PaneId, f: impl FnOnce(&crate::pane::Pane) -> R) -> R {
+            self.root.read_with(self.cx, |r, cx| f(r.panes[&p].read(cx)))
+        }
+
+        fn activity(&mut self, p: PaneId) -> Vec<(ActivityKind, String)> {
+            self.root.read_with(self.cx, |r, _| {
+                let ws = r.pane_workspace(p).unwrap();
+                r.coop[&ws].activity.newest_first().map(|e| (e.kind, e.detail.clone())).collect()
+            })
+        }
+    }
+
+    fn msg(to: &str, text: &str) -> Method {
+        Method::Msg { to: to.into(), text: text.into() }
+    }
+
+    fn inbox(wait: bool, peek: bool, timeout_s: Option<f64>) -> Method {
+        Method::Inbox { wait, from: None, peek, timeout_s }
+    }
+
+    fn claim(paths: &[&str], reason: Option<&str>, wait: bool, timeout_s: Option<f64>) -> Method {
+        Method::Claim {
+            paths: paths.iter().map(|s| (*s).to_string()).collect(),
+            reason: reason.map(str::to_string),
+            wait,
+            timeout_s,
+        }
+    }
+
+    #[gpui::test]
+    fn methods_needing_a_pane_refuse_token_less_callers(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let methods = [
+            Method::Name { name: "x".into() },
+            Method::Status { state: AgentStateWire::Idle, message: None, session: None },
+            Method::Send { pane: "1".into(), text: "x".into(), submit: false },
+            msg("all", "x"),
+            inbox(false, false, None),
+            claim(&["/p/a"], None, false, None),
+            Method::Release { paths: vec![] },
+            Method::Spawn { placement: Placement::Tab, name: None, cwd: None, command: vec![] },
+            Method::Notify { title: "t".into(), body: None },
+        ];
+        for m in methods {
+            let name = m.name();
+            assert_eq!(code(&h.call(None, m)), Some(ErrorCode::Unauthorized), "{name}");
+        }
+        assert_eq!(code(&h.call(None, Method::Claims)), Some(ErrorCode::NotFound));
+    }
+
+    #[gpui::test]
+    fn ls_lists_the_callers_workspace_unless_all(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let ca = h.caller(a);
+        let v = h.call(Some(ca), Method::Ls { all: false }).unwrap();
+        let ls: LsResult = serde_json::from_value(v).unwrap();
+        assert_eq!(ls.workspaces.len(), 1);
+        assert_eq!(ls.workspaces[0].id, ca.workspace_id);
+        assert!(ls.workspaces[0].active);
+        let pane = &ls.workspaces[0].tabs[0].panes[0];
+        assert_eq!(pane.id, a.0);
+        assert!(pane.focused);
+        assert_eq!(pane.agent_state, None);
+
+        // A second workspace (via `open`) only shows up with `all`.
+        let dir = tempfile::tempdir().unwrap();
+        let v = h
+            .call(Some(ca), Method::Open { path: dir.path().to_string_lossy().into(), force_new: false })
+            .unwrap();
+        let ws2 = v["workspace_id"].as_u64().unwrap();
+        assert_ne!(ws2, ca.workspace_id);
+        let ls: LsResult =
+            serde_json::from_value(h.call(Some(ca), Method::Ls { all: false }).unwrap()).unwrap();
+        assert_eq!(ls.workspaces.len(), 1);
+        let ls: LsResult =
+            serde_json::from_value(h.call(Some(ca), Method::Ls { all: true }).unwrap()).unwrap();
+        assert_eq!(ls.workspaces.len(), 2);
+        assert!(ls.workspaces[1].active, "open switches to the new workspace");
+        assert!(ls.workspaces[1].root.is_some());
+
+        // Without a token: every workspace, but no tabs.
+        let ls: LsResult = serde_json::from_value(h.call(None, Method::Ls { all: false }).unwrap()).unwrap();
+        assert_eq!(ls.workspaces.len(), 2);
+        assert!(ls.workspaces.iter().all(|w| w.tabs.is_empty()));
+    }
+
+    #[gpui::test]
+    fn open_requires_a_directory_and_reuses_the_workspace(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let r = h.call(None, Method::Open { path: "/nonexistent/nox-test".into(), force_new: false });
+        assert_eq!(code(&r), Some(ErrorCode::NotFound));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let a = h.call(None, Method::Open { path: path.clone(), force_new: false }).unwrap();
+        let b = h.call(None, Method::Open { path: path.clone(), force_new: false }).unwrap();
+        assert_eq!(a["workspace_id"], b["workspace_id"]);
+        let c = h.call(None, Method::Open { path, force_new: true }).unwrap();
+        assert_ne!(a["workspace_id"], c["workspace_id"]);
+        assert_eq!(h.root.read_with(h.cx, |r, _| r.ws.list.len()), 3);
+    }
+
+    #[gpui::test]
+    fn name_validates_and_rejects_duplicates(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, None);
+        let (ca, cb) = (h.caller(a), h.caller(b));
+        for bad in ["", "   ", "42"] {
+            let r = h.call(Some(ca), Method::Name { name: bad.into() });
+            assert_eq!(code(&r), Some(ErrorCode::Usage), "{bad:?}");
+        }
+        let v = h.call(Some(ca), Method::Name { name: "  backend ".into() }).unwrap();
+        assert_eq!(v, json!({ "name": "backend" }));
+        assert_eq!(h.pane(a, |p| p.custom_name.clone()), Some("backend".into()));
+        // Renaming to one's own name is fine; taking another pane's name is not.
+        assert!(h.call(Some(ca), Method::Name { name: "backend".into() }).is_ok());
+        let r = h.call(Some(cb), Method::Name { name: "backend".into() });
+        assert_eq!(code(&r), Some(ErrorCode::Conflict));
+        assert_eq!(h.pane(b, |p| p.custom_name.clone()), None);
+    }
+
+    #[gpui::test]
+    fn status_makes_the_pane_an_agent_and_logs_activity(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let first = h.first_pane();
+        let a = h.agent(first, "agent", AgentStateWire::Working);
+        let ca = h.caller(a);
+        let v = h
+            .call(
+                Some(ca),
+                Method::Status {
+                    state: AgentStateWire::NeedsInput,
+                    message: Some("approve?".into()),
+                    session: Some("s1".into()),
+                },
+            )
+            .unwrap();
+        assert_eq!(v, json!({ "state": "needs-input" }));
+        assert!(h.pane(a, crate::pane::Pane::is_agent));
+        assert_eq!(h.pane(a, crate::pane::Pane::agent_state), Some(AgentState::NeedsInput));
+        let act = h.activity(a);
+        assert_eq!(act[0], (ActivityKind::Status, "needs-input — approve?".into()));
+        let ls: LsResult =
+            serde_json::from_value(h.call(Some(ca), Method::Ls { all: false }).unwrap()).unwrap();
+        let info = ls.workspaces[0].tabs.iter().flat_map(|t| &t.panes).find(|i| i.id == a.0).unwrap();
+        assert_eq!(info.agent_state.as_deref(), Some("needs-input"));
+        assert_eq!(info.name, "agent");
+    }
+
+    #[gpui::test]
+    fn read_returns_pane_text_or_not_found(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, Some("other"));
+        let ca = h.caller(a);
+        for mode in [ReadMode::Screen, ReadMode::Lines(3), ReadMode::Scrollback] {
+            let v = h.call(Some(ca), Method::Read { pane: b.0.to_string(), mode }).unwrap();
+            assert!(v["text"].is_string(), "{mode:?}");
+        }
+        // By name, too.
+        assert!(h.call(Some(ca), Method::Read { pane: "other".into(), mode: ReadMode::Screen }).is_ok());
+        // `/bin/sh` has no shell integration, so there is no finished command output.
+        let r = h.call(Some(ca), Method::Read { pane: b.0.to_string(), mode: ReadMode::LastOutput });
+        assert_eq!(code(&r), Some(ErrorCode::NotFound));
+        let r = h.call(Some(ca), Method::Read { pane: "nobody".into(), mode: ReadMode::Screen });
+        assert_eq!(code(&r), Some(ErrorCode::NotFound));
+        let r = h.call(Some(ca), Method::Read { pane: "999999".into(), mode: ReadMode::Screen });
+        assert_eq!(code(&r), Some(ErrorCode::NotFound));
+    }
+
+    #[gpui::test]
+    fn targets_in_other_workspaces_are_out_of_scope(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let ca = h.caller(a);
+        let dir = tempfile::tempdir().unwrap();
+        h.call(None, Method::Open { path: dir.path().to_string_lossy().into(), force_new: false }).unwrap();
+        let other = h.root.read_with(h.cx, |r, _| r.ws.list[1].tabs[0].focused);
+        let co = h.caller(other);
+        h.call(Some(co), Method::Name { name: "far".into() }).unwrap();
+        let r = h.call(Some(ca), Method::Read { pane: other.0.to_string(), mode: ReadMode::Screen });
+        assert_eq!(code(&r), Some(ErrorCode::Forbidden));
+        let r = h.call(Some(ca), Method::Read { pane: "far".into(), mode: ReadMode::Screen });
+        assert_eq!(code(&r), Some(ErrorCode::NotFound));
+        // The same name may be used again in another workspace.
+        assert!(h.call(Some(ca), Method::Name { name: "far".into() }).is_ok());
+    }
+
+    #[gpui::test]
+    fn scope_all_reaches_other_workspaces(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |c| c.agents.scope = nox_config::AgentScope::All);
+        let a = h.first_pane();
+        let ca = h.caller(a);
+        let dir = tempfile::tempdir().unwrap();
+        h.call(None, Method::Open { path: dir.path().to_string_lossy().into(), force_new: false }).unwrap();
+        let other = h.root.read_with(h.cx, |r, _| r.ws.list[1].tabs[0].focused);
+        let co = h.caller(other);
+        h.call(Some(co), Method::Name { name: "far".into() }).unwrap();
+        assert!(h.call(Some(ca), Method::Read { pane: other.0.to_string(), mode: ReadMode::Screen }).is_ok());
+        assert!(h.call(Some(ca), Method::Read { pane: "far".into(), mode: ReadMode::Screen }).is_ok());
+        // Default `ls` covers every workspace with scope = all.
+        let ls: LsResult =
+            serde_json::from_value(h.call(Some(ca), Method::Ls { all: false }).unwrap()).unwrap();
+        assert_eq!(ls.workspaces.len(), 2);
+        // A message to a pane in another workspace lands on that workspace's bus.
+        h.call(Some(ca), msg("far", "hi")).unwrap();
+        let v = h.call(Some(co), inbox(false, false, None)).unwrap();
+        assert_eq!(v["messages"][0]["text"], "hi");
+    }
+
+    #[gpui::test]
+    fn send_into_a_shell_needs_opt_in(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        h.spawn(a, Placement::Tab, Some("sh"));
+        let ca = h.caller(a);
+        let r = h.call(Some(ca), Method::Send { pane: "sh".into(), text: "ls".into(), submit: true });
+        assert_eq!(code(&r), Some(ErrorCode::Forbidden));
+        // Agent panes accept sends.
+        let b = h.agent(a, "bot", AgentStateWire::Idle);
+        let v = h
+            .call(Some(ca), Method::Send { pane: "bot".into(), text: "hello".into(), submit: false })
+            .unwrap();
+        assert_eq!(v, json!({ "sent": true }));
+        assert_eq!(h.pane(b, |p| p.from_banner.as_ref().map(|(n, _)| n.clone())), Some(h_name(&mut h, a)));
+        assert_eq!(h.activity(b)[0], (ActivityKind::Send, "hello".into()));
+        assert_eq!(h.waiter_count(), 0);
+    }
+
+    fn h_name(h: &mut Harness<'_>, p: PaneId) -> String {
+        h.root.read_with(h.cx, |r, cx| r.pane_name(p, cx))
+    }
+
+    #[gpui::test]
+    fn send_to_shell_allowed_by_config(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |c| c.agents.allow_send_to_shell = true);
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, None);
+        let ca = h.caller(a);
+        let v = h
+            .call(Some(ca), Method::Send { pane: b.0.to_string(), text: "true".into(), submit: true })
+            .unwrap();
+        assert_eq!(v, json!({ "sent": true }));
+    }
+
+    #[gpui::test]
+    fn send_waits_while_the_user_types_then_times_out(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |c| c.agents.allow_send_to_shell = true);
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, None);
+        let ca = h.caller(a);
+        h.root.update(h.cx, |r, cx| r.panes[&b].update(cx, |p, _| p.last_user_input = Some(Instant::now())));
+        let id = h.send(Some(ca), Method::Send { pane: b.0.to_string(), text: "x".into(), submit: false });
+        assert!(h.response(id).is_none(), "held while the user types");
+        assert_eq!(h.waiter_count(), 1);
+        // A tick before the deadline keeps it held.
+        h.tick();
+        assert!(h.response(id).is_none());
+        h.expire_waiters_now();
+        h.tick();
+        let r = h.response(id).unwrap();
+        let e = r.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Timeout);
+        assert!(e.message.contains("kept typing"), "{}", e.message);
+        assert_eq!(h.waiter_count(), 0);
+    }
+
+    #[gpui::test]
+    fn held_send_goes_through_once_typing_stops(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |c| c.agents.allow_send_to_shell = true);
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, None);
+        let ca = h.caller(a);
+        h.root.update(h.cx, |r, cx| r.panes[&b].update(cx, |p, _| p.last_user_input = Some(Instant::now())));
+        let id = h.send(Some(ca), Method::Send { pane: b.0.to_string(), text: "x".into(), submit: false });
+        assert!(h.response(id).is_none());
+        h.root.update(h.cx, |r, cx| r.panes[&b].update(cx, |p, _| p.last_user_input = None));
+        h.tick();
+        assert_eq!(h.response(id).unwrap().unwrap(), json!({ "sent": true }));
+    }
+
+    #[gpui::test]
+    fn messages_and_inbox(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, Some("bee"));
+        let c = h.spawn(a, Placement::Tab, Some("cee"));
+        let (ca, cb, cc) = (h.caller(a), h.caller(b), h.caller(c));
+
+        let v = h.call(Some(ca), msg("bee", "one")).unwrap();
+        let res: MsgResult = serde_json::from_value(v).unwrap();
+        assert_eq!(res.recipients, vec!["bee".to_string()]);
+        assert_eq!(res.ids.len(), 1);
+        assert_eq!(h.pane(b, |p| p.unread), 1);
+        assert_eq!(h.pane(c, |p| p.unread), 0);
+        assert!(matches!(&h.activity(a)[0], (ActivityKind::Message, d) if d == "→ bee: one"));
+
+        // Peek leaves it unread; a normal read marks it read.
+        let v = h.call(Some(cb), inbox(false, true, None)).unwrap();
+        assert_eq!(v["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(v["messages"][0]["from"], a.0);
+        assert_eq!(h.pane(b, |p| p.unread), 1);
+        let v = h.call(Some(cb), inbox(false, false, None)).unwrap();
+        assert_eq!(v["messages"][0]["text"], "one");
+        assert_eq!(h.pane(b, |p| p.unread), 0);
+        let v = h.call(Some(cb), inbox(false, false, None)).unwrap();
+        assert_eq!(v["messages"], json!([]));
+
+        // `all`: everyone in the workspace but the sender.
+        let res: MsgResult = serde_json::from_value(h.call(Some(ca), msg("all", "hey")).unwrap()).unwrap();
+        let mut rec = res.recipients.clone();
+        rec.sort();
+        assert_eq!(rec, vec!["bee".to_string(), "cee".to_string()]);
+        assert_eq!(h.pane(c, |p| p.unread), 1);
+        assert_eq!(h.pane(a, |p| p.unread), 0);
+
+        // `from` filters by sender; unknown senders / recipients are not found.
+        h.call(Some(cb), msg("cee", "from bee")).unwrap();
+        let v = h
+            .call(
+                Some(cc),
+                Method::Inbox { wait: false, from: Some("bee".into()), peek: false, timeout_s: None },
+            )
+            .unwrap();
+        let texts: Vec<&str> =
+            v["messages"].as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap()).collect();
+        assert_eq!(texts, vec!["from bee"]);
+        let r = h.call(
+            Some(cc),
+            Method::Inbox { wait: false, from: Some("ghost".into()), peek: false, timeout_s: None },
+        );
+        assert_eq!(code(&r), Some(ErrorCode::NotFound));
+        assert_eq!(code(&h.call(Some(ca), msg("ghost", "x"))), Some(ErrorCode::NotFound));
+    }
+
+    #[gpui::test]
+    fn inbox_wait_is_answered_by_the_next_message(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, Some("bee"));
+        let (ca, cb) = (h.caller(a), h.caller(b));
+        let id = h.send(Some(cb), inbox(true, false, None));
+        assert!(h.response(id).is_none());
+        assert_eq!(h.waiter_count(), 1);
+        h.call(Some(ca), msg("bee", "wake up")).unwrap();
+        let v = h.response(id).unwrap().unwrap();
+        assert_eq!(v["messages"][0]["text"], "wake up");
+        assert_eq!(h.waiter_count(), 0);
+        // A wait with messages already queued answers at once.
+        h.call(Some(ca), msg("bee", "queued")).unwrap();
+        let v = h.call(Some(cb), inbox(true, false, None)).unwrap();
+        assert_eq!(v["messages"][0]["text"], "queued");
+    }
+
+    #[gpui::test]
+    fn inbox_wait_times_out(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let ca = h.caller(a);
+        let id = h.send(Some(ca), inbox(true, false, Some(30.0)));
+        h.tick();
+        assert!(h.response(id).is_none(), "deadline not reached yet");
+        h.expire_waiters_now();
+        h.tick();
+        let e = h.response(id).unwrap().unwrap_err();
+        assert_eq!((e.code, e.message.as_str()), (ErrorCode::Timeout, "timed out"));
+    }
+
+    #[gpui::test]
+    fn rate_limit_refuses_message_floods(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, Some("bee"));
+        let ca = h.caller(a);
+        for i in 0..nox_agents::RateLimiter::MAX_EVENTS {
+            assert!(h.call(Some(ca), msg("bee", &format!("m{i}"))).is_ok(), "message {i}");
+        }
+        let r = h.call(Some(ca), msg("bee", "one too many"));
+        assert_eq!(code(&r), Some(ErrorCode::RateLimited));
+        assert_eq!(h.pane(b, |p| p.unread), nox_agents::RateLimiter::MAX_EVENTS);
+        // Other methods aren't limited.
+        assert!(h.call(Some(ca), Method::Claims).is_ok());
+    }
+
+    #[gpui::test]
+    fn wait_for_agent_states(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.agent(a, "agent", AgentStateWire::NeedsInput);
+        let ca = h.caller(a);
+        let wait = |state, timeout_s| Method::Wait { pane: "agent".into(), state, timeout_s };
+
+        let v = h.call(Some(ca), wait(WaitState::NeedsInput, None)).unwrap();
+        assert_eq!(v, json!({ "state": "needs-input" }));
+
+        h.status(b, AgentStateWire::Working);
+        let id = h.send(Some(ca), wait(WaitState::Idle, None));
+        assert!(h.response(id).is_none(), "held while the agent works");
+        h.status(b, AgentStateWire::Idle);
+        h.root.update(h.cx, Root::resolve_waiters);
+        assert_eq!(h.response(id).unwrap().unwrap(), json!({ "state": "idle" }));
+
+        let id = h.send(Some(ca), wait(WaitState::Exited, Some(5.0)));
+        assert!(h.response(id).is_none());
+        h.expire_waiters_now();
+        h.tick();
+        assert_eq!(code(&h.response(id).unwrap()), Some(ErrorCode::Timeout));
+
+        let r =
+            h.call(Some(ca), Method::Wait { pane: "ghost".into(), state: WaitState::Idle, timeout_s: None });
+        assert_eq!(code(&r), Some(ErrorCode::NotFound));
+    }
+
+    #[gpui::test]
+    fn wait_on_a_vanished_pane_reports_exited(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, None);
+        let ca = h.caller(a);
+        let id = h.send(
+            Some(ca),
+            Method::Wait { pane: b.0.to_string(), state: WaitState::NeedsInput, timeout_s: None },
+        );
+        assert!(h.response(id).is_none());
+        h.root.update(h.cx, |r, cx| {
+            r.panes.remove(&b);
+            r.resolve_waiters(cx);
+        });
+        assert_eq!(h.response(id).unwrap().unwrap(), json!({ "state": "exited" }));
+    }
+
+    #[gpui::test]
+    fn claims_conflict_wait_and_release(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, Some("bee"));
+        let (ca, cb) = (h.caller(a), h.caller(b));
+        let a_name = h_name(&mut h, a);
+
+        let v = h.call(Some(ca), claim(&["/proj/src/./a.rs"], Some("refactor"), false, None)).unwrap();
+        assert_eq!(v, json!({ "claimed": ["/proj/src/a.rs"] }));
+        assert_eq!(h.pane(a, |p| p.claims.clone()), vec!["/proj/src/a.rs".to_string()]);
+        assert!(matches!(&h.activity(a)[0], (ActivityKind::Claim, d) if d == "/proj/src/a.rs — refactor"));
+
+        // Overlapping claim (a parent directory) conflicts, with the holder in `data`.
+        let e = h.call(Some(cb), claim(&["/proj/src"], None, false, None)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Conflict);
+        assert!(e.message.contains(&a_name) && e.message.contains("(refactor)"), "{}", e.message);
+        let data: ClaimConflictsData = serde_json::from_value(e.data.unwrap()).unwrap();
+        assert_eq!(data.conflicts[0].holder, a.0);
+        assert_eq!(data.conflicts[0].reason.as_deref(), Some("refactor"));
+
+        let v = h.call(Some(cb), Method::Claims).unwrap();
+        let claims: ClaimsResult = serde_json::from_value(v).unwrap();
+        assert_eq!(claims.claims.len(), 1);
+        assert_eq!(claims.claims[0].holder, a.0);
+        assert_eq!(claims.claims[0].holder_name, a_name);
+
+        // `--wait`: held until the holder releases, then granted.
+        let id = h.send(Some(cb), claim(&["/proj/src"], None, true, None));
+        assert!(h.response(id).is_none());
+        // Releasing nothing (someone else's path) changes nothing.
+        let v = h.call(Some(cb), Method::Release { paths: vec!["/proj/src/a.rs".into()] }).unwrap();
+        assert_eq!(v, json!({ "released": [] }));
+        assert!(h.response(id).is_none());
+        let v = h.call(Some(ca), Method::Release { paths: vec!["/proj/src/a.rs".into()] }).unwrap();
+        assert_eq!(v, json!({ "released": ["/proj/src/a.rs"] }));
+        assert_eq!(h.response(id).unwrap().unwrap(), json!({ "claimed": ["/proj/src"] }));
+        assert!(h.pane(a, |p| p.claims.is_empty()));
+        assert_eq!(h.waiter_count(), 0);
+
+        // An empty release list releases everything the caller holds.
+        h.call(Some(cb), claim(&["/proj/b.rs"], None, false, None)).unwrap();
+        let v = h.call(Some(cb), Method::Release { paths: vec![] }).unwrap();
+        let mut rel: Vec<String> = serde_json::from_value(v["released"].clone()).unwrap();
+        rel.sort();
+        assert_eq!(rel, vec!["/proj/b.rs".to_string(), "/proj/src".to_string()]);
+        assert!(matches!(&h.activity(b)[0], (ActivityKind::Release, _)));
+        let claims: ClaimsResult = serde_json::from_value(h.call(Some(cb), Method::Claims).unwrap()).unwrap();
+        assert!(claims.claims.is_empty());
+    }
+
+    #[gpui::test]
+    fn claim_wait_times_out(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, None);
+        let (ca, cb) = (h.caller(a), h.caller(b));
+        h.call(Some(ca), claim(&["/proj/x"], None, false, None)).unwrap();
+        let id = h.send(Some(cb), claim(&["/proj/x"], None, true, Some(60.0)));
+        assert!(h.response(id).is_none());
+        h.expire_waiters_now();
+        h.tick();
+        assert_eq!(code(&h.response(id).unwrap()), Some(ErrorCode::Timeout));
+        assert_eq!(h.waiter_count(), 0);
+    }
+
+    #[gpui::test]
+    fn tick_expires_stale_claims(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |c| c.agents.claim_ttl = 0);
+        let a = h.first_pane();
+        let ca = h.caller(a);
+        h.call(Some(ca), claim(&["/proj/x"], None, false, None)).unwrap();
+        assert_eq!(h.pane(a, |p| p.claims.len()), 1);
+        h.tick();
+        assert!(h.pane(a, |p| p.claims.is_empty()));
+        let claims: ClaimsResult = serde_json::from_value(h.call(Some(ca), Method::Claims).unwrap()).unwrap();
+        assert!(claims.claims.is_empty());
+    }
+
+    #[gpui::test]
+    fn spawn_tab_keeps_the_active_tab(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let ca = h.caller(a);
+        let first = h.spawn(a, Placement::Tab, None);
+        let v = h
+            .call(
+                Some(ca),
+                Method::Spawn {
+                    placement: Placement::Tab,
+                    name: Some("worker".into()),
+                    cwd: None,
+                    command: vec!["echo".into(), "hi there".into()],
+                },
+            )
+            .unwrap();
+        let second = PaneId(v["pane_id"].as_u64().unwrap());
+        h.root.read_with(h.cx, |r, cx| {
+            let w = &r.ws.list[0];
+            // Inserted right after the caller's tab, and focus stays with the user.
+            let order: Vec<PaneId> = w.tabs.iter().map(|t| t.focused).collect();
+            assert_eq!(order, vec![a, second, first]);
+            assert_eq!(w.active_tab, 0);
+            assert_eq!(r.pane_name(second, cx), "worker");
+            assert!(r.panes.contains_key(&second));
+        });
+        let act = h.activity(a);
+        assert_eq!(act[0], (ActivityKind::Spawn, "worker echo 'hi there'".into()));
+    }
+
+    #[gpui::test]
+    fn spawn_splits_the_callers_pane(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let ca = h.caller(a);
+        for placement in [Placement::SplitRight, Placement::SplitBelow] {
+            let r = h.call(Some(ca), Method::Spawn { placement, name: None, cwd: None, command: vec![] });
+            match r {
+                Ok(v) => {
+                    let p = PaneId(v["pane_id"].as_u64().unwrap());
+                    h.root.read_with(h.cx, |r, _| {
+                        let t = &r.ws.list[0].tabs[0];
+                        assert!(t.panes().contains(&p), "{placement:?}");
+                        assert_eq!(t.focused, a, "the split doesn't take focus");
+                    });
+                }
+                Err(e) => assert_eq!(e.code, ErrorCode::Conflict, "{placement:?}: {}", e.message),
+            }
+        }
+        // Keep splitting until there's no room: refused with `conflict`, nothing added.
+        let mut refused = false;
+        for _ in 0..64 {
+            let r = h.call(
+                Some(ca),
+                Method::Spawn { placement: Placement::SplitRight, name: None, cwd: None, command: vec![] },
+            );
+            if let Err(e) = r {
+                assert_eq!(e.code, ErrorCode::Conflict);
+                refused = true;
+                break;
+            }
+        }
+        assert!(refused, "splits never ran out of room");
+    }
+
+    #[gpui::test]
+    fn notify_answers_ok(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let a = h.first_pane();
+        let b = h.spawn(a, Placement::Tab, None);
+        // Looked at (no attention) and in a background tab (attention; sound and
+        // notifications are off in the test config).
+        for p in [a, b] {
+            let c = h.caller(p);
+            let v =
+                h.call(Some(c), Method::Notify { title: "done".into(), body: Some("ok".into()) }).unwrap();
+            assert_eq!(v, json!({}));
+        }
+    }
+
+    #[gpui::test]
+    fn deliver_type_pastes_messages_into_idle_agents(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |c| c.agents.deliver = nox_config::Deliver::Type);
+        let a = h.first_pane();
+        let b = h.agent(a, "bee", AgentStateWire::Idle);
+        let c = h.agent(a, "cee", AgentStateWire::Working);
+        let ca = h.caller(a);
+        h.call(Some(ca), msg("all", "ping")).unwrap();
+        // The idle agent got it typed in (and marked read); the busy one keeps it queued.
+        let unread = |h: &mut Harness<'_>, p: PaneId| {
+            h.root.read_with(h.cx, |r, _| r.coop[&r.pane_workspace(p).unwrap()].bus.unread_count(p.0))
+        };
+        assert_eq!(unread(&mut h, b), 0);
+        assert_eq!(h.pane(b, |p| p.from_banner.as_ref().map(|(n, _)| n.clone())), Some(h_name(&mut h, a)));
+        assert_eq!(unread(&mut h, c), 1);
+        assert!(h.pane(c, |p| p.from_banner.is_none()));
+    }
+
+    #[gpui::test]
+    fn bridge_refuses_when_the_app_is_gone(cx: &mut TestAppContext) {
+        let mut h = setup(cx, |_| {});
+        let (tx, rx) = async_channel::unbounded::<Request>();
+        drop(rx);
+        let bridge = Bridge { tx };
+        // Borrow a responder from the capture server.
+        let id = h.next_id;
+        h.next_id += 1;
+        let req = WireRequest { v: PROTOCOL_VERSION, id, token: None, method: Method::Ls { all: false } };
+        h.writer.write_all(format!("{}\n", serde_json::to_string(&req).unwrap()).as_bytes()).unwrap();
+        let (caller, method, reply) = h.rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        bridge.handle(caller, method, reply);
+        let e = h.response(id).unwrap().unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+    }
+
+    #[gpui::test]
+    fn start_ipc_serves_the_control_socket(cx: &mut TestAppContext) {
+        // The only test that binds the default socket (`$NOX_HOME/nox.sock`, per process).
+        let mut config = base_config();
+        config.agents.cooperation = true;
+        cx.update(|cx| crate::test_support::init_app(cx, config));
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(Initial::Fresh, window, cx));
+        cx.run_until_parked();
+        let (path, token) = root.read_with(cx, |r, _| {
+            let ipc = r.ipc.as_ref().expect("cooperation on: socket started");
+            let p = r.ws.list[0].tabs[0].focused;
+            let caller =
+                Caller { pane_id: p.0, tab_id: r.ws.list[0].tabs[0].id.0, workspace_id: r.ws.list[0].id.0 };
+            (ipc.handle.socket_path().to_path_buf(), ipc.handle.tokens().issue(caller))
+        });
+        let client = std::thread::spawn(move || {
+            let mut c = nox_ipc::Client::connect(&path, Some(token)).unwrap();
+            c.call(Method::Name { name: "via-socket".into() }, Some(Duration::from_secs(10)))
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !client.is_finished() && Instant::now() < deadline {
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(client.join().unwrap().unwrap(), json!({ "name": "via-socket" }));
+        // The once-a-second tick runs on the (fake) clock.
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        root.read_with(cx, |r, cx| assert_eq!(r.pane_name(r.ws.list[0].tabs[0].focused, cx), "via-socket"));
+    }
+}

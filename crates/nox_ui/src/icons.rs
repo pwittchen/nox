@@ -95,3 +95,100 @@ pub fn icon_element(icon: &Icon, size: f32, base: Hsla, cx: &App) -> AnyElement 
     let color = icon_color(&icon, base);
     svg().path(icon_path(&icon)).size(px(size)).flex_none().text_color(color).into_any_element()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nox_agents::ProcessInfo;
+    use nox_config::AgentDef;
+
+    fn config_with_agent() -> Config {
+        let mut c = Config::default();
+        c.agents.defs.insert(
+            "myagent".into(),
+            AgentDef {
+                command: "/opt/bin/myagent-cli --fast".into(),
+                resume: None,
+                resume_last: None,
+                match_: vec!["ma".into()],
+                icon: Some("claude".into()),
+            },
+        );
+        c.icons.insert("htop".into(), "codex".into());
+        c
+    }
+
+    #[test]
+    fn registry_from_config_maps_agents_and_user_icons() {
+        let r = IconRegistry::from_config(&config_with_agent());
+        assert!(r.enabled);
+        let icon =
+            |exe: &str| r.table.icon_for(Some(&ProcessInfo::new(exe, Vec::<String>::new())), None, "zsh");
+        // The agent's name, its `match` executables and its command's basename all match.
+        assert_eq!(icon("myagent"), Icon::Builtin("claude"));
+        assert_eq!(icon("ma"), Icon::Builtin("claude"));
+        assert_eq!(icon("myagent-cli"), Icon::Builtin("claude"));
+        // `[icons]` entries.
+        assert_eq!(icon("htop"), Icon::Builtin("codex"));
+        // The login shell is the plain terminal icon.
+        assert_eq!(icon("zsh"), Icon::TERMINAL);
+
+        let mut c = Config::default();
+        c.tabs.icons = false;
+        assert!(!IconRegistry::from_config(&c).enabled);
+    }
+
+    #[test]
+    fn custom_icons() {
+        let r = IconRegistry::from_config(&Config::default());
+        assert_eq!(r.custom_icon("claude"), Icon::Builtin("claude"));
+        assert_eq!(r.custom_icon("not-an-icon"), Icon::TERMINAL);
+        assert_eq!(r.custom_icon("/tmp/x.svg"), Icon::Custom(PathBuf::from("/tmp/x.svg")));
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        assert_eq!(r.custom_icon("~/i/x.svg"), Icon::Custom(home.join("i/x.svg")));
+    }
+
+    #[test]
+    fn tilde_expansion() {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        assert_eq!(expand_tilde("~/a/b"), home.join("a/b"));
+        assert_eq!(expand_tilde("/abs"), PathBuf::from("/abs"));
+        assert_eq!(expand_tilde("~user/x"), PathBuf::from("~user/x"));
+    }
+
+    #[test]
+    fn paths_for_icons() {
+        assert_eq!(icon_path(&Icon::Builtin("claude")), "icons/process/claude.svg");
+        assert_eq!(icon_path(&Icon::Custom(PathBuf::from("/x/y.svg"))), "/x/y.svg");
+        // Every built-in icon has its SVG compiled in.
+        for name in nox_agents::builtin_icon_names() {
+            let p = icon_path(&Icon::Builtin(name));
+            assert!(gpui::AssetSource::load(&crate::assets::Assets, &p).unwrap().is_some(), "{p}");
+        }
+    }
+
+    #[test]
+    fn brand_tint_is_muted_and_bounded() {
+        let base = gpui::hsla(0., 0., 0.9, 0.7);
+        let c = icon_color(&Icon::Builtin("claude"), base);
+        assert_ne!(c, base);
+        assert!(c.s <= 0.6);
+        assert!((0.35..=0.75).contains(&c.l));
+        assert!((c.a - 0.7).abs() < 1e-6, "keeps the base alpha");
+        // No tint: the base color as is.
+        assert_eq!(icon_color(&Icon::TERMINAL, base), base);
+        assert_eq!(icon_color(&Icon::Custom(PathBuf::from("/a.svg")), base), base);
+    }
+
+    #[gpui::test]
+    fn icon_element_respects_disabled_icons(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            // Without a registry (and with one that's enabled) it builds.
+            let _ = icon_element(&Icon::Builtin("claude"), 14., gpui::white(), cx);
+            let mut c = Config::default();
+            c.tabs.icons = false;
+            cx.set_global(IconRegistry::from_config(&c));
+            let _ = icon_element(&Icon::Builtin("claude"), 14., gpui::white(), cx);
+        });
+    }
+}

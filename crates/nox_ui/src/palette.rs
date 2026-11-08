@@ -469,3 +469,265 @@ impl Render for Palette {
             )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use gpui::{Modifiers, TestAppContext, VisualTestContext, point};
+
+    use super::*;
+
+    type Log = Rc<RefCell<Vec<String>>>;
+
+    struct Host(Entity<Palette>);
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(div().w(px(PALETTE_WIDTH)).child(self.0.clone()))
+        }
+    }
+
+    fn item(label: &str, log: &Log) -> PaletteItem {
+        let (l1, l2) = (log.clone(), log.clone());
+        let (s1, s2) = (label.to_string(), label.to_string());
+        PaletteItem::new(label.to_string())
+            .on_select(move |_, _| l1.borrow_mut().push(format!("select {s1}")))
+            .on_highlight(move |_, _| l2.borrow_mut().push(format!("highlight {s2}")))
+    }
+
+    fn open(
+        cx: &mut TestAppContext,
+        source: impl Fn(usize, &Log) -> Vec<PaletteItem> + 'static,
+        opts: impl FnOnce(&Log) -> PaletteOptions,
+    ) -> (Entity<Palette>, &mut VisualTestContext, Log) {
+        crate::test_support::init(cx);
+        cx.update(bind_keys);
+        let log: Log = Rc::default();
+        let l = log.clone();
+        let src: Source = Rc::new(move |tab, _| source(tab, &l));
+        let opts = opts(&log);
+        let (host, cx) =
+            cx.add_window_view(|window, cx| Host(cx.new(|cx| Palette::new(src, opts, window, cx))));
+        let palette = host.read_with(cx, |h, _| h.0.clone());
+        let l = log.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&palette, move |_, ev: &PaletteEvent, _| match ev {
+                PaletteEvent::Dismissed => l.borrow_mut().push("dismissed".into()),
+            })
+            .detach();
+        });
+        cx.run_until_parked();
+        (palette, cx, log)
+    }
+
+    fn shown(p: &Entity<Palette>, cx: &mut VisualTestContext) -> Vec<String> {
+        p.read_with(cx, |p, _| p.filtered.iter().map(|&i| p.items[i].label.to_string()).collect())
+    }
+
+    fn selected(p: &Entity<Palette>, cx: &mut VisualTestContext) -> String {
+        p.read_with(cx, |p, _| p.items[p.filtered[p.selected]].label.to_string())
+    }
+
+    fn commands(_: usize, log: &Log) -> Vec<PaletteItem> {
+        vec![
+            item("New Tab", log).hint("⌘T"),
+            item("Close Tab", log).hint("⌘⇧W").detail("current"),
+            item("Split Vertically", log).icon("icons/ui/plus.svg", None),
+            item("Toggle Sidebar", log).keywords("panel hide").dot(Some(gpui::red())),
+        ]
+    }
+
+    #[gpui::test]
+    fn fuzzy_filter_ranks_matches(cx: &mut TestAppContext) {
+        let (p, cx, _) = open(cx, commands, |_| PaletteOptions::default());
+        assert_eq!(shown(&p, cx), ["New Tab", "Close Tab", "Split Vertically", "Toggle Sidebar"]);
+        cx.simulate_input("tab");
+        assert_eq!(shown(&p, cx), ["New Tab", "Close Tab"]);
+        assert_eq!(selected(&p, cx), "New Tab");
+        // Hidden keywords and the detail match too.
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("panel");
+        assert_eq!(shown(&p, cx), ["Toggle Sidebar"]);
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("current");
+        assert_eq!(shown(&p, cx), ["Close Tab"]);
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("zzzz");
+        assert!(shown(&p, cx).is_empty());
+        // Enter with no match does nothing.
+        cx.simulate_keystrokes("enter");
+        cx.simulate_keystrokes("cmd-a backspace");
+        assert_eq!(shown(&p, cx).len(), 4);
+    }
+
+    #[gpui::test]
+    fn arrows_wrap_and_enter_runs(cx: &mut TestAppContext) {
+        let (p, cx, log) = open(cx, commands, |_| PaletteOptions::default());
+        log.borrow_mut().clear();
+        cx.simulate_keystrokes("down");
+        assert_eq!(selected(&p, cx), "Close Tab");
+        cx.simulate_keystrokes("ctrl-n down");
+        assert_eq!(selected(&p, cx), "Toggle Sidebar");
+        cx.simulate_keystrokes("down");
+        assert_eq!(selected(&p, cx), "New Tab", "wraps to the top");
+        cx.simulate_keystrokes("up");
+        assert_eq!(selected(&p, cx), "Toggle Sidebar", "wraps to the bottom");
+        cx.simulate_keystrokes("ctrl-p");
+        assert_eq!(selected(&p, cx), "Split Vertically");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            *log.borrow(),
+            [
+                "highlight Close Tab",
+                "highlight Split Vertically",
+                "highlight Toggle Sidebar",
+                "highlight New Tab",
+                "highlight Toggle Sidebar",
+                "highlight Split Vertically",
+                // The event is delivered after the handler ran.
+                "select Split Vertically",
+                "dismissed",
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn typing_highlights_the_new_top_match(cx: &mut TestAppContext) {
+        let (_, cx, log) = open(cx, commands, |_| PaletteOptions::default());
+        log.borrow_mut().clear();
+        cx.simulate_input("split");
+        // Every keystroke highlights the top match; the last one is the only match.
+        assert_eq!(log.borrow().len(), 5, "{:?}", log.borrow());
+        assert_eq!(log.borrow().last().map(String::as_str), Some("highlight Split Vertically"));
+    }
+
+    #[gpui::test]
+    fn escape_cancels(cx: &mut TestAppContext) {
+        let (_, cx, log) = open(cx, commands, |log| {
+            let l = log.clone();
+            PaletteOptions {
+                on_cancel: Some(Rc::new(move |_, _| l.borrow_mut().push("cancel".into()))),
+                ..Default::default()
+            }
+        });
+        cx.simulate_keystrokes("escape");
+        assert_eq!(*log.borrow(), ["cancel", "dismissed"]);
+    }
+
+    #[gpui::test]
+    fn click_outside_dismisses(cx: &mut TestAppContext) {
+        let (_, cx, log) = open(cx, commands, |_| PaletteOptions::default());
+        cx.simulate_click(point(px(PALETTE_WIDTH + 100.), px(700.)), Modifiers::none());
+        assert_eq!(*log.borrow(), ["dismissed"]);
+    }
+
+    #[gpui::test]
+    fn clicking_a_row_runs_it(cx: &mut TestAppContext) {
+        let (p, cx, log) = open(cx, commands, |_| PaletteOptions::default());
+        p.update_in(cx, |p, window, cx| p.run_index(2, window, cx));
+        assert_eq!(*log.borrow(), ["select Split Vertically", "dismissed"]);
+    }
+
+    #[gpui::test]
+    fn headers_are_skipped_and_hidden_while_filtering(cx: &mut TestAppContext) {
+        let (p, cx, log) = open(
+            cx,
+            |_, log| {
+                vec![
+                    PaletteItem::header("Workspaces"),
+                    item("alpha", log),
+                    PaletteItem::header("Tabs"),
+                    item("beta", log),
+                    PaletteItem::new("gamma (no action)"),
+                ]
+            },
+            |_| PaletteOptions::default(),
+        );
+        assert_eq!(selected(&p, cx), "alpha", "the first selectable row");
+        cx.simulate_keystrokes("down");
+        assert_eq!(selected(&p, cx), "beta");
+        cx.simulate_keystrokes("down down");
+        assert_eq!(selected(&p, cx), "alpha");
+        cx.simulate_keystrokes("up");
+        assert_eq!(selected(&p, cx), "gamma (no action)");
+        // A row without an action doesn't run or close.
+        log.borrow_mut().clear();
+        cx.simulate_keystrokes("enter");
+        assert!(log.borrow().is_empty());
+        cx.simulate_input("a");
+        assert!(!shown(&p, cx).iter().any(|l| l == "Workspaces" || l == "Tabs"));
+    }
+
+    #[gpui::test]
+    fn keep_order_preselect_and_initial_query(cx: &mut TestAppContext) {
+        let source = |_, log: &Log| vec![item("xa", log), item("abc", log), item("a", log)];
+        let (p, cx, _) = open(cx, source, |_| PaletteOptions {
+            keep_order: true,
+            initial_query: "a".into(),
+            preselect: Some(2),
+            placeholder: "Pick".into(),
+            footer: "footer".into(),
+            ..Default::default()
+        });
+        assert_eq!(p.read_with(cx, |p, cx| p.input.read(cx).text().to_string()), "a");
+        assert_eq!(shown(&p, cx), ["xa", "abc", "a"], "source order kept");
+        assert_eq!(selected(&p, cx), "a", "preselected");
+    }
+
+    #[gpui::test]
+    fn preselect_of_a_hidden_item_is_ignored(cx: &mut TestAppContext) {
+        let source = |_, log: &Log| vec![item("one", log), item("two", log)];
+        let (p, cx, _) = open(cx, source, |_| PaletteOptions {
+            initial_query: "one".into(),
+            preselect: Some(1),
+            ..Default::default()
+        });
+        assert_eq!(selected(&p, cx), "one");
+    }
+
+    #[gpui::test]
+    fn tabs_switch_the_source(cx: &mut TestAppContext) {
+        let (p, cx, _) = open(
+            cx,
+            |tab, log| vec![item(&format!("tab {tab} item"), log)],
+            |_| PaletteOptions {
+                tabs: vec!["All".into(), "Agents".into(), "Shells".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(shown(&p, cx), ["tab 0 item"]);
+        cx.simulate_keystrokes("tab");
+        assert_eq!(shown(&p, cx), ["tab 1 item"]);
+        cx.simulate_keystrokes("tab tab");
+        assert_eq!(shown(&p, cx), ["tab 0 item"], "wraps");
+        cx.simulate_keystrokes("shift-tab");
+        assert_eq!(shown(&p, cx), ["tab 2 item"]);
+        p.update(cx, Palette::reload);
+        assert_eq!(shown(&p, cx), ["tab 2 item"]);
+    }
+
+    #[gpui::test]
+    fn tab_does_nothing_without_tabs(cx: &mut TestAppContext) {
+        let (p, cx, _) =
+            open(cx, |tab, log| vec![item(&format!("t{tab}"), log)], |_| PaletteOptions::default());
+        cx.simulate_keystrokes("tab shift-tab");
+        assert_eq!(shown(&p, cx), ["t0"]);
+        p.read_with(cx, |p, _| assert_eq!(p.tab, 0));
+    }
+
+    #[gpui::test]
+    fn long_lists_scroll(cx: &mut TestAppContext) {
+        let (p, cx, _) = open(
+            cx,
+            |_, log| (0..40).map(|i| item(&format!("item {i:02}"), log)).collect(),
+            |_| PaletteOptions::default(),
+        );
+        for _ in 0..30 {
+            cx.simulate_keystrokes("down");
+        }
+        assert_eq!(selected(&p, cx), "item 30");
+        // Hovering rows re-renders them without changing the selection.
+        cx.simulate_mouse_move(point(px(10.), px(100.)), None, Modifiers::none());
+        assert_eq!(selected(&p, cx), "item 30");
+    }
+}

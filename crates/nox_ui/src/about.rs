@@ -168,3 +168,65 @@ impl Render for AboutView {
             .child(details(&theme))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui::TestAppContext;
+
+    use super::*;
+
+    fn about_window(cx: &TestAppContext) -> Option<WindowHandle<AboutView>> {
+        cx.read(|cx| cx.try_global::<AboutWindow>().and_then(|w| w.0))
+    }
+
+    #[test]
+    fn links_show_without_scheme() {
+        assert_eq!(strip_scheme("https://wittchen.io"), "wittchen.io");
+        assert_eq!(strip_scheme("http://example.com/x"), "example.com/x");
+        assert_eq!(strip_scheme("github.com/a/b"), "github.com/a/b");
+        assert!(REPOSITORY.starts_with("https://"));
+    }
+
+    #[gpui::test]
+    fn one_about_window(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.update(open_about_window);
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+        let first = about_window(cx).unwrap();
+        // A second "About nox" brings the same window forward.
+        cx.update(open_about_window);
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(about_window(cx).unwrap().window_id(), first.window_id());
+        // The theme changing re-renders it.
+        cx.update(|cx| {
+            let state = cx.global::<crate::theme::ThemeState>().clone();
+            crate::theme::apply(cx, &state, gpui::WindowAppearance::Light);
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn escape_closes(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.update(open_about_window);
+        cx.run_until_parked();
+        let w = about_window(cx).unwrap();
+        // Other keys don't.
+        cx.simulate_keystrokes(w.into(), "a shift-escape");
+        assert_eq!(cx.windows().len(), 1);
+        cx.simulate_keystrokes(w.into(), "escape");
+        cx.run_until_parked();
+        assert!(cx.windows().is_empty());
+        // Reopening after close makes a new one.
+        cx.update(open_about_window);
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+        let w2 = about_window(cx).unwrap();
+        assert_ne!(w2.window_id(), w.window_id());
+        cx.simulate_keystrokes(w2.into(), "cmd-w");
+        cx.run_until_parked();
+        assert!(cx.windows().is_empty());
+    }
+}

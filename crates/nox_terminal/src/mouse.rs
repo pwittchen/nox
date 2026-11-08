@@ -141,6 +141,74 @@ mod tests {
     }
 
     #[test]
+    fn button_codes_and_modifiers() {
+        let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        let m = MouseMods::default();
+        let code = |b, mods| {
+            let out = encode(mode, b, MouseAction::Press, mods, 0, 0).unwrap();
+            let s = String::from_utf8(out).unwrap();
+            s.trim_start_matches("\x1b[<").split(';').next().unwrap().parse::<u32>().unwrap()
+        };
+        assert_eq!(code(MouseButton::Middle, m), 1);
+        assert_eq!(code(MouseButton::Right, m), 2);
+        assert_eq!(code(MouseButton::WheelDown, m), 65);
+        assert_eq!(code(MouseButton::WheelLeft, m), 66);
+        assert_eq!(code(MouseButton::WheelRight, m), 67);
+        assert_eq!(code(MouseButton::Left, MouseMods { shift: true, ..m }), 4);
+        assert_eq!(code(MouseButton::Left, MouseMods { alt: true, ..m }), 8);
+        assert_eq!(code(MouseButton::Right, MouseMods { shift: true, alt: true, ctrl: true }), 30);
+        // Wheel "releases" are reported with M in SGR, never m.
+        assert_eq!(
+            encode(mode, MouseButton::WheelDown, MouseAction::Release, m, 2, 3).unwrap(),
+            b"\x1b[<65;3;4M"
+        );
+    }
+
+    #[test]
+    fn reporting_modes() {
+        assert!(!reporting(TermMode::empty()));
+        assert!(!reporting(TermMode::SGR_MOUSE));
+        assert!(reporting(TermMode::MOUSE_REPORT_CLICK));
+        assert!(reporting(TermMode::MOUSE_DRAG));
+        assert!(reporting(TermMode::MOUSE_MOTION));
+        // Click-only tracking reports no motion at all.
+        let click = TermMode::MOUSE_REPORT_CLICK;
+        let m = MouseMods::default();
+        assert!(encode(click, MouseButton::None, MouseAction::Motion, m, 0, 0).is_none());
+    }
+
+    #[test]
+    fn legacy_limits_and_utf8() {
+        let m = MouseMods::default();
+        let legacy = TermMode::MOUSE_REPORT_CLICK;
+        // Legacy wheel releases aren't reported.
+        assert!(encode(legacy, MouseButton::WheelUp, MouseAction::Release, m, 0, 0).is_none());
+        assert_eq!(
+            encode(legacy, MouseButton::WheelUp, MouseAction::Press, m, 0, 0).unwrap(),
+            b"\x1b[M\x60\x21\x21"
+        );
+        // Right release keeps the modifier bits but becomes button 3.
+        let shift = MouseMods { shift: true, ..m };
+        assert_eq!(
+            encode(legacy, MouseButton::Right, MouseAction::Release, shift, 0, 0).unwrap(),
+            b"\x1b[M\x27\x21\x21"
+        );
+        // X10 coordinates stop at 223.
+        assert_eq!(encode(legacy, MouseButton::Left, MouseAction::Press, m, 222, 222).unwrap()[4], 255);
+        assert!(encode(legacy, MouseButton::Left, MouseAction::Press, m, 223, 0).is_none());
+        assert!(encode(legacy, MouseButton::Left, MouseAction::Press, m, 0, 223).is_none());
+        // UTF-8 mode encodes large coordinates as UTF-8 characters.
+        let utf8 = TermMode::MOUSE_REPORT_CLICK | TermMode::UTF8_MOUSE;
+        let out = encode(utf8, MouseButton::Left, MouseAction::Press, m, 300, 1).unwrap();
+        let mut want = b"\x1b[M\x20".to_vec();
+        want.extend("\u{14d}".as_bytes()); // 32 + 1 + 300 = 333
+        want.push(b'"');
+        assert_eq!(out, want);
+        // ...but not ones that would be surrogate code points.
+        assert!(encode(utf8, MouseButton::Left, MouseAction::Press, m, 0xD800, 0).is_none());
+    }
+
+    #[test]
     fn legacy_encoding() {
         let mode = TermMode::MOUSE_REPORT_CLICK;
         let m = MouseMods { ctrl: true, ..Default::default() };

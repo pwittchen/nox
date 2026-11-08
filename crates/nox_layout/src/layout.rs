@@ -825,6 +825,31 @@ mod tests {
     }
 
     #[test]
+    fn trivial_accessors_and_degenerate_geometry() {
+        let l = Layout::new(p(1));
+        assert_eq!(l, leaf(1));
+        assert!(!l.is_empty());
+        assert_eq!(l.len(), 1);
+        let root = SplitPath::root();
+        assert!(root.is_root() && root.is_empty());
+        let child = root.child(Branch::Second);
+        assert!(!child.is_root() && !child.is_empty());
+        assert_eq!(child.len(), 1);
+        // A leaf has no ratio and no divider to drag.
+        assert_eq!(l.ratio_at(&root), None);
+        let area = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert_eq!(l.ratio_for_drag(&root, Point::new(10.0, 10.0), area, 4.0), None);
+        // No room at all: the middle, or the ratio clamped to 0..1.
+        let s = split(V, 0.3, leaf(1), leaf(2));
+        assert_eq!(
+            s.ratio_for_drag(&root, Point::new(1.0, 1.0), Rect::new(0.0, 0.0, 2.0, 2.0), 4.0),
+            Some(0.5)
+        );
+        assert_eq!(clamp_ratio(1.7, 3.0, 4.0, 10.0, 10.0), 1.0);
+        assert_eq!(clamp_ratio(f32::NAN, 3.0, 4.0, 10.0, 10.0), 0.5);
+    }
+
+    #[test]
     fn panes_in_tree_order() {
         assert_eq!(grid().panes(), vec![p(1), p(2), p(3), p(4)]);
         assert_eq!(grid().len(), 4);

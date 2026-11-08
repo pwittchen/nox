@@ -275,6 +275,114 @@ mod tests {
     }
 
     #[test]
+    fn render_each_method() {
+        use nox_ipc::{ReadMode, WaitState};
+        use serde_json::json;
+        let read = Method::Read { pane: "x".into(), mode: ReadMode::default() };
+        assert_eq!(render(&read, &json!({"text": ""})), "");
+        assert_eq!(render(&read, &json!({"text": "a\n"})), "a\n");
+        let msg = Method::Msg { to: "all".into(), text: "t".into() };
+        assert_eq!(render(&msg, &json!({"ids": [1, 2], "recipients": ["a", "b"]})), "sent to a, b\n");
+        assert_eq!(render(&msg, &json!({"ids": [], "recipients": []})), "");
+        assert_eq!(render(&msg, &json!("garbage")), "");
+        let wait = Method::Wait { pane: "x".into(), state: WaitState::Idle, timeout_s: None };
+        assert_eq!(render(&wait, &json!({"state": "needs-input"})), "needs-input\n");
+        let claims = Method::Claims;
+        assert_eq!(
+            render(&claims, &json!({"claims": [{"path": "a", "holder": 1, "holder_name": "n"}]})),
+            "a  n\n"
+        );
+        let spawn =
+            Method::Spawn { placement: nox_ipc::Placement::Tab, name: None, cwd: None, command: vec![] };
+        assert_eq!(render(&spawn, &json!({"pane_id": 12})), "12\n");
+        let open = Method::Open { path: "/x".into(), force_new: false };
+        assert_eq!(render(&open, &json!({"workspace_id": 4})), "4\n");
+        let inbox = Method::Inbox { wait: false, from: None, peek: false, timeout_s: None };
+        assert_eq!(render(&inbox, &json!({"messages": []})), "");
+        let ls = Method::Ls { all: false };
+        assert_eq!(render(&ls, &json!({"workspaces": []})), "");
+        for m in [
+            Method::Status { state: nox_ipc::AgentStateWire::Idle, message: None, session: None },
+            Method::Send { pane: "x".into(), text: "t".into(), submit: false },
+            Method::Claim { paths: vec![], reason: None, wait: false, timeout_s: None },
+            Method::Release { paths: vec![] },
+            Method::Notify { title: "t".into(), body: None },
+        ] {
+            assert_eq!(render(&m, &json!({"anything": 1})), "", "{m:?}");
+        }
+    }
+
+    #[test]
+    fn unexpected_results_are_pretty_printed() {
+        use nox_ipc::{ReadMode, WaitState};
+        use serde_json::json;
+        let odd = json!({"unexpected": true});
+        let pretty_odd = "{\n  \"unexpected\": true\n}\n";
+        for m in [
+            Method::Ls { all: false },
+            Method::Read { pane: "x".into(), mode: ReadMode::default() },
+            Method::Inbox { wait: false, from: None, peek: false, timeout_s: None },
+            Method::Wait { pane: "x".into(), state: WaitState::Idle, timeout_s: None },
+            Method::Claims,
+            Method::Spawn { placement: nox_ipc::Placement::Tab, name: None, cwd: None, command: vec![] },
+            Method::Open { path: "/x".into(), force_new: false },
+        ] {
+            assert_eq!(render(&m, &odd), pretty_odd, "{m:?}");
+            // Null and empty objects print nothing.
+            assert_eq!(render(&m, &json!(null)), "", "{m:?}");
+        }
+        assert_eq!(render(&Method::Claims, &json!({})), "");
+    }
+
+    #[test]
+    fn ago_buckets() {
+        assert_eq!(ago(0, 59_999), "59s ago");
+        assert_eq!(ago(0, 60_000), "1m ago");
+        assert_eq!(ago(0, 3_599_999), "59m ago");
+        assert_eq!(ago(0, 3_600_000), "1h ago");
+        assert_eq!(ago(0, 86_399_999), "23h ago");
+        assert_eq!(ago(0, 86_400_000 * 3), "3d ago");
+        // Clock skew: a message from the future is "0s ago".
+        assert_eq!(ago(10_000, 0), "0s ago");
+        assert!(now_ms() > 1_600_000_000_000);
+    }
+
+    #[test]
+    fn home_is_shortened_only_on_a_path_boundary() {
+        let Some(home) = std::env::var("HOME").ok().filter(|h| !h.is_empty() && h != "/") else {
+            return;
+        };
+        assert_eq!(home_short(&home), "~");
+        assert_eq!(home_short(&format!("{home}/src")), "~/src");
+        assert_eq!(home_short(&format!("{home}x/src")), format!("{home}x/src"));
+        assert_eq!(home_short("/elsewhere"), "/elsewhere");
+    }
+
+    #[test]
+    fn plain_and_conflict_errors() {
+        assert_eq!(
+            render_error(&IpcError::new(ErrorCode::NotFound, "no pane named x")),
+            "nox: no pane named x\n"
+        );
+        // Conflict without parsable data: just the message.
+        let e = IpcError::new(ErrorCode::Conflict, "held").with_data(serde_json::json!({"other": 1}));
+        assert_eq!(render_error(&e), "nox: held\n");
+        // An empty reason is not printed.
+        let e = IpcError::new(ErrorCode::Conflict, "held").with_data(
+            serde_json::to_value(ClaimConflictsData {
+                conflicts: vec![ClaimConflictWire {
+                    path: "a".into(),
+                    holder: 1,
+                    holder_name: "b".into(),
+                    reason: Some(String::new()),
+                }],
+            })
+            .unwrap(),
+        );
+        assert_eq!(render_error(&e), "nox: held\n  a held by b (1)\n");
+    }
+
+    #[test]
     fn silent_methods() {
         assert_eq!(render(&Method::Name { name: "x".into() }, &serde_json::json!({})), "");
         assert_eq!(

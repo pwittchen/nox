@@ -466,3 +466,213 @@ pub fn render_overlay(window: &Window, cx: &App) -> Option<AnyElement> {
             .into_any_element(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use gpui::{TestAppContext, VisualTestContext};
+
+    use super::*;
+
+    type Log = Rc<RefCell<Vec<String>>>;
+
+    /// A window with something focused that renders the sheet overlay, like `Root`.
+    struct Host {
+        focus: FocusHandle,
+    }
+    impl Render for Host {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().track_focus(&self.focus).children(render_overlay(window, cx))
+        }
+    }
+
+    fn host(cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
+        crate::test_support::init(cx);
+        cx.update(bind_keys);
+        let (host, cx) = cx.add_window_view(|_, cx| Host { focus: cx.focus_handle() });
+        host.update_in(cx, |h, window, _| window.focus(&h.focus));
+        (host, cx)
+    }
+
+    fn show(cx: &mut VisualTestContext, build: impl FnOnce() -> DialogBuilder) {
+        let b = build();
+        cx.update(|window, cx| b.show(window, cx));
+        cx.run_until_parked();
+    }
+
+    fn view(cx: &mut VisualTestContext) -> Option<Entity<DialogView>> {
+        cx.read(|cx| cx.try_global::<ActiveDialog>().and_then(|d| d.0.as_ref().map(|(v, _)| v.clone())))
+    }
+
+    fn is_open_here(cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| is_open(window, cx))
+    }
+
+    fn host_focused(host: &Entity<Host>, cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| host.read(cx).focus.is_focused(window))
+    }
+
+    fn recorder(log: &Log, name: &'static str) -> impl Fn(DialogValues, &mut Window, &mut App) + 'static {
+        let log = log.clone();
+        move |v, _, _| log.borrow_mut().push(format!("{name} {:?} {:?}", v.fields, v.checks))
+    }
+
+    #[gpui::test]
+    fn confirm_runs_on_enter(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let log: Log = Rc::default();
+        let l = log.clone();
+        cx.update(|window, cx| {
+            confirm(window, cx, "Close tab?", "A process is running.", "Close", move |_, _| {
+                l.borrow_mut().push("closed".into());
+            });
+        });
+        cx.run_until_parked();
+        assert!(is_open_here(cx));
+        let v = view(cx).unwrap();
+        v.read_with(cx, |v, _| {
+            assert_eq!(v.title.as_ref(), "Close tab?");
+            assert_eq!(v.message.as_ref().map(AsRef::as_ref), Some("A process is running."));
+            let labels: Vec<_> = v.buttons.iter().map(|b| b.label.to_string()).collect();
+            assert_eq!(labels, ["Cancel", "Close"]);
+            assert_eq!(v.default_button, 1);
+            assert_eq!(v.focused_button, 1);
+        });
+        cx.simulate_keystrokes("enter");
+        assert_eq!(*log.borrow(), ["closed"]);
+        assert!(!is_open_here(cx));
+        assert!(host_focused(&host, cx), "focus goes back to where it was");
+    }
+
+    #[gpui::test]
+    fn escape_cancels_without_running_anything(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let log: Log = Rc::default();
+        let l = log.clone();
+        cx.update(|window, cx| {
+            confirm(window, cx, "Quit?", "", "Quit", move |_, _| l.borrow_mut().push("quit".into()));
+        });
+        cx.run_until_parked();
+        assert!(!host_focused(&host, cx), "the sheet takes focus");
+        cx.simulate_keystrokes("escape");
+        assert!(log.borrow().is_empty());
+        assert!(view(cx).is_none());
+        assert!(host_focused(&host, cx));
+    }
+
+    #[gpui::test]
+    fn tab_cycles_buttons_and_enter_presses_the_focused_one(cx: &mut TestAppContext) {
+        let (_, cx) = host(cx);
+        let log: Log = Rc::default();
+        let l = log.clone();
+        show(cx, || {
+            DialogBuilder::new("Resume agents?")
+                .detail("claude\ncodex")
+                .cancel("Not Now")
+                .button("Some", recorder(&l, "some"))
+                .button("All", recorder(&l, "all"))
+                .default_last()
+        });
+        let v = view(cx).unwrap();
+        cx.simulate_keystrokes("tab");
+        assert_eq!(v.read_with(cx, |v, _| v.focused_button), 0, "wraps to the first");
+        cx.simulate_keystrokes("tab");
+        assert_eq!(v.read_with(cx, |v, _| v.focused_button), 1);
+        cx.simulate_keystrokes("shift-tab shift-tab");
+        assert_eq!(v.read_with(cx, |v, _| v.focused_button), 2);
+        cx.simulate_keystrokes("shift-tab enter");
+        assert_eq!(*log.borrow(), ["some [] []"]);
+        assert!(view(cx).is_none());
+    }
+
+    #[gpui::test]
+    fn fields_and_checks_are_passed_to_the_button(cx: &mut TestAppContext) {
+        let (_, cx) = host(cx);
+        let log: Log = Rc::default();
+        let l = log.clone();
+        show(cx, || {
+            DialogBuilder::new("New Workspace")
+                .field("Name", "untitled", "name")
+                .field("Folder", "", "~/src")
+                .check("Open a tab", Some("in the folder".into()), true)
+                .check("Start an agent", None, false)
+                .cancel("Cancel")
+                .button("Create", recorder(&l, "create"))
+                .default_last()
+        });
+        let v = view(cx).unwrap();
+        // The first field has focus with its text selected: typing replaces it.
+        cx.simulate_input("api");
+        v.update(cx, |v, cx| {
+            v.checks[1].on = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        assert_eq!(*log.borrow(), [r#"create ["api", ""] [true, true]"#]);
+    }
+
+    #[gpui::test]
+    fn escape_in_a_field_cancels(cx: &mut TestAppContext) {
+        let (_, cx) = host(cx);
+        let log: Log = Rc::default();
+        let l = log.clone();
+        show(cx, || DialogBuilder::new("Rename").field("Name", "x", "").button("OK", recorder(&l, "ok")));
+        cx.simulate_keystrokes("escape");
+        assert!(view(cx).is_none());
+        assert!(log.borrow().is_empty());
+    }
+
+    #[gpui::test]
+    fn tab_then_enter_from_a_field_presses_the_focused_button(cx: &mut TestAppContext) {
+        let (_, cx) = host(cx);
+        let log: Log = Rc::default();
+        let l = log.clone();
+        show(cx, || {
+            DialogBuilder::new("Rename")
+                .field("Name", "x", "")
+                .cancel("Cancel")
+                .button("OK", recorder(&l, "ok"))
+                .default_last()
+        });
+        // In a field, enter is the default button; on the buttons row the focused one.
+        cx.simulate_keystrokes("tab enter");
+        assert!(log.borrow().is_empty(), "Cancel was focused: {:?}", log.borrow());
+        assert!(view(cx).is_none());
+    }
+
+    #[gpui::test]
+    fn a_sheet_only_shows_in_its_window(cx: &mut TestAppContext) {
+        let (_, vcx) = host(cx);
+        show(vcx, || DialogBuilder::new("Mine").cancel("OK"));
+        let other = cx.add_empty_window();
+        other.update(|window, cx| {
+            assert!(!is_open(window, cx));
+            assert!(render_overlay(window, cx).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn extra_content_renders_and_buttonless_sheets_stay_put(cx: &mut TestAppContext) {
+        let (_, cx) = host(cx);
+        let rendered: Log = Rc::default();
+        show(cx, || DialogBuilder::new("Info").message("Nothing to press"));
+        let v = view(cx).unwrap();
+        let r = rendered.clone();
+        v.update(cx, |v, cx| {
+            v.extra = Some(Rc::new(move |_, _| {
+                r.borrow_mut().push("extra".into());
+                div().child("extra").into_any_element()
+            }));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(!rendered.borrow().is_empty());
+        // Tab with no buttons does nothing; enter presses nothing but closes.
+        cx.simulate_keystrokes("tab shift-tab");
+        assert!(view(cx).is_some());
+        cx.simulate_keystrokes("enter");
+        assert!(view(cx).is_none());
+    }
+}

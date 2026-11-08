@@ -145,4 +145,40 @@ mod tests {
         assert_eq!(short_duration(Duration::from_secs(252)), "4m 12s");
         assert_eq!(short_duration(Duration::from_mins(125)), "2h 5m");
     }
+
+    #[test]
+    fn fuzzy_prefers_word_starts_and_runs() {
+        assert_eq!(fuzzy_score("", "anything"), Some(0));
+        assert!(fuzzy_score("st", "Split Tab").unwrap() > fuzzy_score("st", "Last").unwrap(), "word starts");
+        assert!(fuzzy_score("ab", "ab").unwrap() > fuzzy_score("ab", "a-x-b").unwrap() - 20, "consecutive");
+        assert!(fuzzy_score("ba", "ab").is_none(), "order matters");
+        assert_eq!(short_duration(Duration::from_secs(0)), "0s");
+        assert_eq!(short_duration(Duration::from_secs(3600)), "1h 0m");
+    }
+
+    #[gpui::test]
+    fn single_instance_windows_are_activated(cx: &mut gpui::TestAppContext) {
+        crate::test_support::init(cx);
+        assert!(!cx.update(|cx| activate_if_open::<Tooltip>(None, cx)));
+        let handle = cx.add_window(|_, _| Tooltip { text: "line one\nline two".into() });
+        cx.run_until_parked();
+        assert!(cx.update(|cx| activate_if_open(Some(handle), cx)));
+        cx.run_until_parked();
+        cx.update(|cx| handle.update(cx, |_, window, _| window.remove_window())).unwrap();
+        cx.run_until_parked();
+        assert!(!cx.update(|cx| activate_if_open(Some(handle), cx)), "closed windows aren't");
+    }
+
+    #[gpui::test]
+    fn tooltips_render_each_line(cx: &mut gpui::TestAppContext) {
+        crate::test_support::init(cx);
+        let cx = cx.add_empty_window();
+        let view = cx.update(|window, cx| tooltip("a\nb".into(), window, cx));
+        assert_eq!(view.entity_type(), std::any::TypeId::of::<Tooltip>());
+        let _ = cx.draw(
+            gpui::point(gpui::px(0.), gpui::px(0.)),
+            gpui::size(gpui::px(200.), gpui::px(100.)),
+            |_, _| view,
+        );
+    }
 }

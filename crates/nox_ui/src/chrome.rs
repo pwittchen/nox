@@ -887,3 +887,257 @@ fn render_card(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) -> 
         .children(children)
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point};
+    use nox_config::{SidebarWorkspaces, TabsPosition};
+
+    use super::*;
+    use crate::root::{DIVIDER_HIT_PX, DIVIDER_PX, Initial, RenameTarget};
+
+    fn root_with(
+        cx: &mut TestAppContext,
+        f: impl FnOnce(&mut nox_config::Config),
+    ) -> (Entity<Root>, &mut VisualTestContext) {
+        let mut config = crate::test_support::config();
+        f(&mut config);
+        cx.update(|cx| crate::test_support::init_app(cx, config));
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(Initial::Fresh, window, cx));
+        cx.run_until_parked();
+        (root, cx)
+    }
+
+    /// Two workspaces (the second colored, with two tabs) and a split in the first.
+    fn populate(root: &Entity<Root>, cx: &mut VisualTestContext) {
+        root.update_in(cx, |r, window, cx| {
+            r.new_tab(window, cx);
+            r.split(SplitDirection::Vertical, None, window, cx).expect("room to split");
+            let w = r.create_workspace(Some("second".into()), None, window, cx);
+            r.ws.list[w].color = Some("cyan".into());
+            r.ensure_started(w, window, cx);
+            r.new_tab(window, cx);
+            r.switch_workspace(0, window, cx);
+        });
+        cx.run_until_parked();
+    }
+
+    fn redraw(root: &Entity<Root>, cx: &mut VisualTestContext) {
+        root.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+
+    fn divider(root: &Entity<Root>, cx: &mut VisualTestContext) -> (nox_layout::Divider, Rect) {
+        cx.update(|window, cx| {
+            let r = root.read(cx);
+            let area = r.layout_area(window, cx);
+            let d = r.active_tab().unwrap().layout.dividers(area, DIVIDER_PX).remove(0);
+            (d, area)
+        })
+    }
+
+    fn first_pane_width(root: &Entity<Root>, cx: &mut VisualTestContext) -> f32 {
+        cx.update(|window, cx| {
+            let r = root.read(cx);
+            let area = r.layout_area(window, cx);
+            r.active_tab().unwrap().visible_rects(area, DIVIDER_PX)[0].1.w
+        })
+    }
+
+    fn center(r: Rect) -> gpui::Point<gpui::Pixels> {
+        point(px(r.x + r.w / 2.), px(r.y + r.h / 2.))
+    }
+
+    #[gpui::test]
+    fn tabs_on_top(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |_| {});
+        populate(&root, cx);
+        root.read_with(cx, |r, cx| {
+            assert!(r.tab_bar_shown(cx));
+            assert!(!r.sidebar_shown(cx));
+            assert_eq!(r.ws.list.len(), 2);
+            assert_eq!(r.ws.active().tabs.len(), 2);
+        });
+        // Inactive window: finished tabs keep their dots; a zoomed pane shows its marker.
+        root.update_in(cx, |r, window, cx| {
+            r.window_active = false;
+            window.dispatch_action(Box::new(crate::actions::ToggleMaximizePane), cx);
+        });
+        cx.run_until_parked();
+        assert!(root.read_with(cx, |r, _| r.active_tab().unwrap().maximized.is_some()));
+        // Renaming the active tab puts an input in its pill.
+        root.update_in(cx, |r, window, cx| {
+            let id = r.active_tab().unwrap().id;
+            r.start_rename(RenameTarget::Tab(id), window, cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_input("renamed");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| {
+            assert!(r.rename.is_none());
+            assert_eq!(r.active_tab().unwrap().custom_name.as_deref(), Some("renamed"));
+        });
+    }
+
+    #[gpui::test]
+    fn tabs_on_the_bottom(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |c| c.tabs.position = TabsPosition::Bottom);
+        populate(&root, cx);
+        cx.update(|window, cx| {
+            let r = root.read(cx);
+            assert_eq!(r.titlebar_height(cx), crate::root::TITLEBAR_SLIM_PX);
+            let area = r.layout_area(window, cx);
+            let vp = window.viewport_size();
+            assert!(area.y + area.h < f32::from(vp.height) - crate::root::BOTTOM_BAR_PX + 1.);
+        });
+        // The sidebar can replace the tab strip at the bottom too.
+        cx.update(|_, cx| {
+            let mut c = (*Settings::global(cx).config).clone();
+            c.tabs.sidebar_replaces_tabs = true;
+            crate::config_io::apply(cx, c, &[]);
+        });
+        redraw(&root, cx);
+        root.read_with(cx, |r, cx| {
+            assert!(r.sidebar_shown(cx));
+            assert!(!r.tab_bar_shown(cx));
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_with_all_workspaces(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |c| {
+            c.tabs.position = TabsPosition::Left;
+            c.tabs.sidebar_workspaces = SidebarWorkspaces::All;
+        });
+        populate(&root, cx);
+        root.read_with(cx, |r, cx| {
+            assert!(r.sidebar_shown(cx));
+            assert!(!r.tab_bar_shown(cx));
+        });
+        root.update_in(cx, |r, window, cx| {
+            let id = r.active_tab().unwrap().id;
+            r.start_rename(RenameTarget::Tab(id), window, cx);
+        });
+        redraw(&root, cx);
+        cx.simulate_keystrokes("escape");
+        assert!(root.read_with(cx, |r, _| r.rename.is_none()));
+    }
+
+    #[gpui::test]
+    fn sidebar_with_the_active_workspace(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |c| {
+            c.tabs.position = TabsPosition::Left;
+            c.tabs.sidebar_workspaces = SidebarWorkspaces::Active;
+            c.tabs.sidebar_agents = false;
+            c.ui.show_git_branch = false;
+        });
+        populate(&root, cx);
+        root.update_in(cx, |r, window, cx| r.switch_workspace(1, window, cx));
+        redraw(&root, cx);
+        // Hidden sidebar in left mode: no tabs anywhere but the card.
+        cx.update(|_, cx| {
+            let mut c = (*Settings::global(cx).config).clone();
+            c.tabs.sidebar_visible = false;
+            crate::config_io::apply(cx, c, &[]);
+        });
+        redraw(&root, cx);
+        root.read_with(cx, |r, cx| {
+            assert!(!r.sidebar_shown(cx));
+            assert!(!r.tab_bar_shown(cx));
+        });
+    }
+
+    #[gpui::test]
+    fn overlays_render_over_the_card(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |_| {});
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(crate::actions::CommandPalette), cx);
+            crate::toast::show(cx, "a notice");
+        });
+        cx.run_until_parked();
+        assert!(root.read_with(cx, |r, _| r.palette.is_some()));
+        cx.simulate_keystrokes("escape");
+        assert!(root.read_with(cx, |r, _| r.palette.is_none()));
+        cx.update(|window, cx| crate::dialog::confirm(window, cx, "Sure?", "", "OK", |_, _| {}));
+        cx.run_until_parked();
+        assert!(cx.update(|window, cx| crate::dialog::is_open(window, cx)));
+    }
+
+    #[gpui::test]
+    fn dragging_a_divider_resizes_and_double_click_equalizes(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |_| {});
+        root.update_in(cx, |r, window, cx| {
+            r.split(SplitDirection::Vertical, None, window, cx).unwrap();
+        });
+        cx.run_until_parked();
+        let (d, area) = divider(&root, cx);
+        assert_eq!(d.dir, SplitDirection::Vertical);
+        let w0 = first_pane_width(&root, cx);
+        let hit = d.hit_rect(DIVIDER_HIT_PX);
+
+        cx.simulate_mouse_down(center(hit), MouseButton::Left, Modifiers::none());
+        assert_eq!(root.read_with(cx, |r, _| r.drag_divider.clone()), Some(d.path.clone()));
+        let target = point(px(area.x + area.w * 0.3), px(area.y + 50.));
+        cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::none());
+        let w1 = first_pane_width(&root, cx);
+        assert!(w1 < w0 - 50., "{w1} < {w0}");
+        cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
+        assert!(root.read_with(cx, |r, _| r.drag_divider.is_none()));
+
+        // A move without the button held ends a drag that lost its mouse up.
+        root.update(cx, |r, _| r.drag_divider = Some(d.path.clone()));
+        cx.simulate_mouse_move(target, None, Modifiers::none());
+        assert!(root.read_with(cx, |r, _| r.drag_divider.is_none()));
+
+        let (d, _) = divider(&root, cx);
+        cx.simulate_event(gpui::MouseDownEvent {
+            button: MouseButton::Left,
+            position: center(d.hit_rect(DIVIDER_HIT_PX)),
+            modifiers: Modifiers::none(),
+            click_count: 2,
+            first_mouse: false,
+        });
+        let w2 = first_pane_width(&root, cx);
+        assert!((w2 - w0).abs() <= 1., "equalized back: {w2} vs {w0}");
+    }
+
+    #[gpui::test]
+    fn dragging_the_sidebar_edge_writes_its_width(cx: &mut TestAppContext) {
+        let _g = crate::config_io::tests::fresh_config();
+        let (root, cx) = root_with(cx, |c| c.tabs.position = TabsPosition::Left);
+        let width = root.read_with(cx, Root::sidebar_width);
+        let y = 300.;
+        cx.simulate_mouse_down(point(px(width), px(y)), MouseButton::Left, Modifiers::none());
+        assert!(root.read_with(cx, |r, _| r.drag_sidebar));
+        cx.simulate_mouse_move(point(px(250.4), px(y)), Some(MouseButton::Left), Modifiers::none());
+        assert!(crate::config_io::tests::config_text().contains("sidebar_width = 250"));
+        assert!((root.read_with(cx, Root::sidebar_width) - 250.).abs() < f32::EPSILON);
+        // Clamped to 160–360.
+        cx.simulate_mouse_move(point(px(900.), px(y)), Some(MouseButton::Left), Modifiers::none());
+        assert!((root.read_with(cx, Root::sidebar_width) - 360.).abs() < f32::EPSILON);
+        cx.simulate_mouse_up(point(px(900.), px(y)), MouseButton::Left, Modifiers::none());
+        assert!(!root.read_with(cx, |r, _| r.drag_sidebar));
+        // Released elsewhere: a move without the button stops the drag.
+        root.update(cx, |r, _| r.drag_sidebar = true);
+        cx.simulate_mouse_move(point(px(200.), px(y)), None, Modifiers::none());
+        assert!(!root.read_with(cx, |r, _| r.drag_sidebar));
+    }
+
+    #[gpui::test]
+    fn dragged_tab_preview(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        let (d, cx) = cx.add_window_view(|_, _| DraggedTab { ws: 0, tab: TabId(1), label: "zsh".into() });
+        d.read_with(cx, |d, _| assert_eq!(d.label.as_ref(), "zsh"));
+    }
+
+    #[gpui::test]
+    fn status_dots_follow_the_status(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.read(|cx| {
+            let theme = Theme::global(cx);
+            assert_eq!(status_dot(theme, TabStatus::None), None);
+            assert!(status_dot(theme, TabStatus::NeedsInput).is_some());
+            assert_ne!(status_dot(theme, TabStatus::Done), status_dot(theme, TabStatus::Failed));
+        });
+    }
+}

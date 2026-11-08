@@ -357,3 +357,394 @@ fn paths_follow_nox_home() {
     assert_eq!(run_dir(), std::path::PathBuf::from("/tmp/nox-test-home/run"));
     unsafe { std::env::remove_var("NOX_HOME") };
 }
+
+fn notice_for<'a>(notices: &'a [Notice], key: &str) -> &'a str {
+    notices
+        .iter()
+        .find(|n| n.key == key)
+        .map_or_else(|| panic!("no notice for {key}: {notices:?}"), |n| n.message.as_str())
+}
+
+#[test]
+fn wrong_types_name_what_was_found() {
+    let src = r#"
+[ui]
+theme = 3
+font_family = 1.5
+window_padding = "6"
+
+[font]
+size = true
+weight = 2024-01-01
+
+[terminal]
+padding = 4
+word_separators = []
+
+[shell]
+args = "-l"
+env = "x"
+
+[agents]
+keep_awake = { a = 1 }
+"#;
+    let (c, n) = load_from_str(src).unwrap();
+    assert_eq!(notice_for(&n, "ui.theme"), "expected a string, found an integer; using the default");
+    assert_eq!(notice_for(&n, "ui.font_family"), "expected a string, found a float; using the default");
+    assert_eq!(notice_for(&n, "ui.window_padding"), "expected an integer, found a string; using the default");
+    assert_eq!(notice_for(&n, "font.size"), "expected a number, found a boolean; using the default");
+    assert_eq!(notice_for(&n, "font.weight"), "expected a string, found a datetime; using the default");
+    assert_eq!(
+        notice_for(&n, "terminal.padding"),
+        "expected an array of two integers, found an integer; using the default"
+    );
+    assert_eq!(
+        notice_for(&n, "terminal.word_separators"),
+        "expected a string, found an array; using the default"
+    );
+    assert_eq!(
+        notice_for(&n, "shell.args"),
+        "expected an array of strings, found a string; using the default"
+    );
+    assert_eq!(notice_for(&n, "shell.env"), "expected a table, found a string; using the default");
+    assert_eq!(
+        notice_for(&n, "agents.keep_awake"),
+        "expected true or false, found a table; using the default"
+    );
+    let d = Config::default();
+    assert_eq!((c.ui.theme, c.font.size, c.shell.args), (d.ui.theme, d.font.size, d.shell.args));
+}
+
+#[test]
+fn malformed_lists_pairs_and_maps() {
+    let src = r#"
+[terminal]
+padding = [1, "2"]
+scroll_multiplier = 2
+
+[shell]
+args = ["-l", 1]
+env = { GOOD = "1", BAD = 2 }
+
+[workspaces]
+new_tab_cwd = 7
+
+[icons]
+vim = "neovim"
+"my.tool" = 1
+"#;
+    let (c, n) = load_from_str(src).unwrap();
+    assert_eq!(notice_for(&n, "terminal.padding"), "expected two integers; using the default");
+    assert_eq!(notice_for(&n, "shell.args"), "expected an array of strings; using the default");
+    assert_eq!(notice_for(&n, "shell.env.BAD"), "expected a string, found an integer; ignored");
+    assert_eq!(
+        notice_for(&n, "workspaces.new_tab_cwd"),
+        "expected a string, found an integer; using the default"
+    );
+    // The [icons] notice has no leading dot.
+    assert_eq!(notice_for(&n, "icons.my.tool"), "expected a string, found an integer; ignored");
+    let d = Config::default();
+    assert_eq!(c.terminal.padding, d.terminal.padding);
+    assert_eq!(c.shell.args, d.shell.args);
+    assert_eq!(c.shell.env.get("GOOD").map(String::as_str), Some("1"));
+    assert!(!c.shell.env.contains_key("BAD"));
+    assert_eq!(c.icons.get("vim").map(String::as_str), Some("neovim"));
+    // Integers are accepted for float settings.
+    assert_eq!(c.terminal.scroll_multiplier, 2.0);
+}
+
+#[test]
+fn icons_of_wrong_type() {
+    let (c, n) = load_from_str("icons = 5\n").unwrap();
+    assert_eq!(notice_for(&n, "icons"), "expected a table, found an integer; using the default");
+    assert_eq!(c.icons, Config::default().icons);
+}
+
+#[test]
+fn padding_values_out_of_range() {
+    let (c, n) = load_from_str("[terminal]\npadding = [1, 100000]\n").unwrap();
+    assert!(notice_for(&n, "terminal.padding").contains("out of range"), "{n:?}");
+    assert_eq!(c.terminal.padding, Config::default().terminal.padding);
+    let (c, n) = load_from_str("[terminal]\npadding = [3, 4]\n").unwrap();
+    assert!(n.is_empty(), "{n:?}");
+    assert_eq!(c.terminal.padding, [3, 4]);
+}
+
+#[test]
+fn non_finite_floats_are_rejected() {
+    let (c, n) = load_from_str("[font]\nsize = nan\nline_height = inf\n").unwrap();
+    assert!(notice_for(&n, "font.size").contains("out of range"));
+    assert!(notice_for(&n, "font.line_height").contains("out of range"));
+    assert_eq!(c.font.size, Config::default().font.size);
+}
+
+#[test]
+fn agent_definitions() {
+    let src = r#"
+[agents.claude]
+command = ""
+icon = "robot"
+
+[agents.empty]
+command = "  "
+
+[agents.typed]
+command = 1
+
+[agents.aider]
+command = "aider"
+match = ["aider", "aider-chat"]
+resume_last = "aider --restore"
+extra = true
+"#;
+    let (c, n) = load_from_str(src).unwrap();
+    // A known agent with an empty command keeps its default command but takes other keys.
+    let claude = &c.agents.defs["claude"];
+    assert_eq!(claude.command, Config::default().agents.defs["claude"].command);
+    assert_eq!(claude.icon.as_deref(), Some("robot"));
+    // Unknown agents need a non-empty string command.
+    assert_eq!(notice_for(&n, "agents.empty.command"), "must not be empty; agent ignored");
+    assert!(!c.agents.defs.contains_key("empty"));
+    assert!(!c.agents.defs.contains_key("typed"));
+    assert!(n.iter().any(|x| x.key == "agents.typed.command" && x.message.contains("found an integer")));
+    assert!(
+        n.iter().any(|x| x.key == "agents.typed.command" && x.message == "must not be empty; agent ignored")
+    );
+    let aider = &c.agents.defs["aider"];
+    assert_eq!(aider.command, "aider");
+    assert_eq!(aider.match_, vec!["aider", "aider-chat"]);
+    assert_eq!(aider.resume_last.as_deref(), Some("aider --restore"));
+    assert_eq!(notice_for(&n, "agents.aider.extra"), "unknown key; ignored");
+}
+
+#[test]
+fn key_bindings() {
+    let src = r#"
+[keys]
+new_tab = "cmd+t"
+clear = { send = "\u000c" }
+bad_table = { send = 1 }
+two_keys = { send = "a", other = "b" }
+number = 5
+"#;
+    let (c, n) = load_from_str(src).unwrap();
+    assert_eq!(c.keys.get("new_tab"), Some(&KeyBinding::Shortcut("cmd+t".into())));
+    assert_eq!(c.keys.get("clear"), Some(&KeyBinding::Send { send: "\u{c}".into() }));
+    for k in ["keys.bad_table", "keys.two_keys", "keys.number"] {
+        assert_eq!(notice_for(&n, k), "expected a shortcut string or { send = \"…\" }; ignored");
+    }
+    let (_, n) = load_from_str("keys = [1]\n").unwrap();
+    assert_eq!(notice_for(&n, "keys"), "expected a table, found an array; using defaults");
+}
+
+#[test]
+fn unknown_top_level_keys_and_notice_display() {
+    let (_, n) = load_from_str("colour = \"red\"\n[ui]\nmode = \"dark\"\n").unwrap();
+    assert_eq!(n.len(), 1);
+    assert_eq!(n[0].to_string(), "colour: unknown key; ignored");
+    let e = load_from_str("[ui]\nmode = \n").unwrap_err();
+    assert!(e.to_string().starts_with("line 2: "), "{e}");
+    let e = ParseError { line: None, message: "boom".into() };
+    assert_eq!(e.to_string(), "boom");
+}
+
+#[test]
+fn load_from_path_cases() {
+    let dir = tempfile::tempdir().unwrap();
+    // Missing file: defaults, no notices.
+    let (c, n) = load_from_path(&dir.path().join("none.toml")).unwrap();
+    assert_eq!(c, Config::default());
+    assert!(n.is_empty());
+    // A directory can't be read.
+    let e = load_from_path(dir.path()).unwrap_err();
+    assert_eq!(e.line, None);
+    assert!(e.message.starts_with("cannot read "), "{}", e.message);
+    let p = dir.path().join("config.toml");
+    std::fs::write(&p, "[tabs]\nposition = \"bottom\"\n").unwrap();
+    assert_eq!(load_from_path(&p).unwrap().0.tabs.position, TabsPosition::Bottom);
+}
+
+macro_rules! check_enum {
+    ($($t:ty),+ $(,)?) => {$(
+        for name in <$t as ConfigEnum>::NAMES {
+            let v = <$t as ConfigEnum>::parse(name).unwrap();
+            assert_eq!(v.as_str(), *name);
+            assert_eq!(v.to_string(), *name);
+            assert_eq!(toml::Value::try_from(v).unwrap(), toml::Value::String((*name).to_string()));
+        }
+        assert!(<$t as ConfigEnum>::parse("no-such-value").is_none());
+        let d = <$t>::default();
+        assert!(<$t as ConfigEnum>::NAMES.contains(&d.as_str()), "{}", stringify!($t));
+    )+};
+}
+
+#[test]
+fn config_enums_round_trip() {
+    check_enum!(
+        TabsPosition,
+        Mode,
+        TabTitle,
+        SidebarWorkspaces,
+        NewTabCwd,
+        WorktreeOpens,
+        AgentRestore,
+        AgentScope,
+        Deliver,
+        SizeAppliesTo,
+        CursorStyle,
+        OptionAsMeta,
+        Bell,
+        CloseOnExit,
+        Osc52,
+        GraphemeWidth,
+    );
+}
+
+#[test]
+fn section_labels_follow_spec() {
+    let labels: Vec<&str> = Section::ALL.iter().map(|s| s.label()).collect();
+    assert_eq!(
+        labels,
+        vec![
+            "General",
+            "Appearance",
+            "Tabs",
+            "Font",
+            "Terminal",
+            "Shell",
+            "Workspaces",
+            "Agents",
+            "Icons",
+            "Keys"
+        ]
+    );
+}
+
+#[test]
+fn get_value_of_root_and_missing_keys() {
+    let c = Config::default();
+    let root = get_value(&c, "").unwrap();
+    assert!(root.as_table().unwrap().contains_key("terminal"));
+    assert_eq!(get_value(&c, "terminal.nope"), None);
+    assert_eq!(get_value(&c, "terminal.scrollback.deeper"), None);
+    assert!(find_setting("terminal.scrollback").is_some());
+    assert!(find_setting("terminal.nope").is_none());
+}
+
+#[test]
+fn config_writer_wraps_the_free_functions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let w = ConfigWriter::new(&path);
+    assert_eq!(w.path(), path);
+    w.set("tabs.position", "left").unwrap();
+    w.set_at(&["icons", "my.tool"], "robot").unwrap();
+    w.set("ui.theme", "nord").unwrap();
+    let (c, _) = load_from_path(&path).unwrap();
+    assert_eq!(c.tabs.position, TabsPosition::Left);
+    assert_eq!(c.icons.get("my.tool").map(String::as_str), Some("robot"));
+    w.remove("tabs.position").unwrap();
+    w.remove_at(&["icons", "my.tool"]).unwrap();
+    let (c, _) = load_from_path(&path).unwrap();
+    assert_eq!(c.tabs.position, TabsPosition::Top);
+    assert!(!c.icons.contains_key("my.tool"));
+    assert_eq!(c.ui.theme, "nord");
+}
+
+#[test]
+fn write_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    assert!(matches!(set_value(&path, "ui..theme", "x"), Err(WriteError::InvalidKey(k)) if k == "ui..theme"));
+    assert!(matches!(set_value_at(&path, &[], "x"), Err(WriteError::InvalidKey(k)) if k.is_empty()));
+    assert!(matches!(remove_value(&path, ".x"), Err(WriteError::InvalidKey(_))));
+    // Nothing was written by the failed calls.
+    assert!(!path.exists());
+    // A directory in place of the file is an I/O error.
+    let e = set_value(dir.path(), "ui.theme", "x").unwrap_err();
+    assert!(matches!(e, WriteError::Io(_)), "{e}");
+    assert_eq!(WriteError::NotATable("ui.theme".into()).to_string(), "\"ui.theme\" is not a table");
+}
+
+#[test]
+fn removing_missing_keys_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = "# mine\n[ui]\ntheme = \"nord\"\n";
+    std::fs::write(&path, original).unwrap();
+    remove_values_at(&path, &[&["ui", "mode"], &["tabs", "position"], &["ui", "theme", "deeper"], &[]])
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn removing_the_last_key_keeps_its_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    // Last key of the last table: the comment moves to the end of the file.
+    std::fs::write(&path, "[ui]\n# keep me\ntheme = \"nord\"\n").unwrap();
+    remove_value(&path, "ui.theme").unwrap();
+    let out = std::fs::read_to_string(&path).unwrap();
+    assert!(out.contains("# keep me"), "{out}");
+    assert!(!out.contains("nord"), "{out}");
+    // Last key of a table followed by another table: the comment goes before that table.
+    std::fs::write(&path, "[ui]\n# about theme\ntheme = \"nord\"\n\n[tabs]\nposition = \"left\"\n").unwrap();
+    remove_value(&path, "ui.theme").unwrap();
+    let out = std::fs::read_to_string(&path).unwrap();
+    let comment = out.find("# about theme").expect("comment kept");
+    assert!(comment < out.find("[tabs]").unwrap(), "{out}");
+    assert_eq!(load_from_path(&path).unwrap().0.tabs.position, TabsPosition::Left);
+}
+
+#[test]
+fn atomic_write_keeps_permissions_and_creates_dirs() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sub/dir/config.toml");
+    atomic_write(&path, b"a = 1\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    atomic_write(&path, b"a = 2\n").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "a = 2\n");
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+    assert!(is_self_write(&path, b"a = 2\n"));
+    assert!(!is_self_write(&path, b"a = 1\n"));
+}
+
+#[test]
+fn ensure_default_file_creates_parents_and_reports_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a/b/config.toml");
+    assert!(ensure_default_file(&path).unwrap());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG_TOML);
+    // A parent that is a file can't be created.
+    let file = dir.path().join("file");
+    std::fs::write(&file, "x").unwrap();
+    assert!(ensure_default_file(&file.join("config.toml")).is_err());
+}
+
+#[test]
+fn watch_needs_a_parent_directory() {
+    let e = watch(std::path::Path::new("config.toml"), |_| {}).unwrap_err();
+    assert!(matches!(e, WatchError::NoParent(_)), "{e}");
+    assert_eq!(e.to_string(), "config path config.toml has no parent directory");
+    let dir = tempfile::tempdir().unwrap();
+    let handle = watch(&dir.path().join("config.toml"), |_| {}).unwrap();
+    assert_eq!(format!("{handle:?}"), "WatchHandle");
+}
+
+#[test]
+fn watcher_reports_invalid_utf8_and_ignores_other_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let (tx, rx) = mpsc::channel();
+    let _handle = watch(&path, move |r| {
+        let _ = tx.send(r.map(|(c, _)| c.ui.theme));
+    })
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::write(dir.path().join("other.toml"), "x = 1\n").unwrap();
+    assert!(rx.recv_timeout(Duration::from_millis(600)).is_err(), "other files are ignored");
+    std::fs::write(&path, b"\xff\xfe").unwrap();
+    let got = rx.recv_timeout(Duration::from_secs(5)).expect("change");
+    assert_eq!(got.unwrap_err().message, "config file is not valid UTF-8");
+}

@@ -476,6 +476,106 @@ mod tests {
     }
 
     #[test]
+    fn recipients_on_the_wire() {
+        let r = |v: serde_json::Value| serde_json::from_value::<Recipient>(v);
+        assert_eq!(r(serde_json::json!(4)).unwrap(), Recipient::Pane(4));
+        assert_eq!(r(serde_json::json!("4")).unwrap(), Recipient::Pane(4));
+        assert_eq!(r(serde_json::json!("all")).unwrap(), Recipient::All);
+        let e = r(serde_json::json!("backend")).unwrap_err();
+        assert!(e.to_string().contains("invalid recipient \"backend\""), "{e}");
+        assert!(r(serde_json::json!(true)).is_err());
+        assert_eq!(serde_json::to_value(Recipient::Pane(4)).unwrap(), serde_json::json!(4));
+        assert_eq!(serde_json::to_value(Recipient::All).unwrap(), serde_json::json!("all"));
+    }
+
+    #[test]
+    fn empty_bus_and_log() {
+        let mut bus = MessageBus::new();
+        assert!(bus.is_empty());
+        bus.post(&PaneRef::new(1, "a"), Recipient::Pane(2), "x", t(0));
+        assert!(!bus.is_empty());
+        let mut log = ActivityLog::default();
+        assert!(log.is_empty());
+        for i in 0..=ActivityLog::DEFAULT_CAP {
+            log.record(ActivityKind::Claim, "a", format!("{i}"), t(0));
+        }
+        assert_eq!(log.len(), ActivityLog::DEFAULT_CAP);
+        assert_eq!(log.newest_first().last().unwrap().detail, "1");
+        // A zero cap still keeps the newest entry.
+        let mut tiny = ActivityLog::new(0);
+        tiny.record(ActivityKind::Send, "a", "x", t(0));
+        tiny.record(ActivityKind::Send, "a", "y", t(0));
+        assert_eq!(tiny.newest_first().map(|e| e.detail.as_str()).collect::<Vec<_>>(), ["y"]);
+    }
+
+    #[test]
+    fn load_skips_blank_lines_and_keeps_the_newest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("messages.jsonl");
+        let mut src = String::from("\n   \n");
+        for i in 1..=(MAX_MESSAGES as u64 + 5) {
+            let m = Message {
+                id: MessageId(i),
+                from: 1,
+                from_name: "a".into(),
+                to: Recipient::Pane(2),
+                text: format!("m{i}"),
+                ts: 0,
+                read_by: vec![],
+            };
+            src.push_str(&serde_json::to_string(&m).unwrap());
+            src.push('\n');
+        }
+        std::fs::write(&path, src).unwrap();
+        let mut bus = MessageBus::load(&path).unwrap();
+        assert_eq!(bus.len(), MAX_MESSAGES);
+        assert_eq!(bus.messages().next().unwrap().text, "m6");
+        let id = bus.post(&PaneRef::new(1, "a"), Recipient::Pane(2), "next", t(0));
+        assert_eq!(id, MessageId(MAX_MESSAGES as u64 + 6));
+    }
+
+    #[test]
+    fn unreadable_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(MessageBus::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn persistence_failures_keep_memory_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        let mut bus = MessageBus::load(&ws.join("messages.jsonl")).unwrap();
+        // The workspace "directory" became a file: appends fail, the bus still works in memory.
+        std::fs::write(&ws, "x").unwrap();
+        bus.post(&PaneRef::new(1, "a"), Recipient::Pane(2), "kept", t(0));
+        assert_eq!(bus.inbox(2, None, false)[0].text, "kept");
+        assert_eq!(bus.unread_count(2), 0);
+    }
+
+    #[test]
+    fn failed_compaction_falls_back_to_appending() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir(&ws).unwrap();
+        let path = ws.join("messages.jsonl");
+        let mut bus = MessageBus::load(&path).unwrap();
+        let from = PaneRef::new(1, "a");
+        for i in 0..2 * MAX_MESSAGES as u64 {
+            bus.post(&from, Recipient::Pane(2), format!("m{i}"), t(i));
+        }
+        let before = std::fs::read_to_string(&path).unwrap().lines().count();
+        assert_eq!(before, 2 * MAX_MESSAGES);
+        // A read-only directory: no temp file for the compaction, but the file itself is writable.
+        std::fs::set_permissions(&ws, std::fs::Permissions::from_mode(0o500)).unwrap();
+        bus.post(&from, Recipient::Pane(2), "late", t(0));
+        std::fs::set_permissions(&ws, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(raw.lines().count(), before + 1);
+        assert!(raw.lines().last().unwrap().contains("\"late\""));
+    }
+
+    #[test]
     fn activity_log_is_bounded_newest_first() {
         let mut log = ActivityLog::new(3);
         for i in 0..5 {

@@ -221,3 +221,64 @@ fn name_validation() {
     assert!(!is_valid_theme_name("a.b"));
     assert!(!is_valid_theme_name(""));
 }
+
+#[test]
+fn unusable_user_only_themes_fall_back_to_nox() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    // Syntax error and no bundled theme of that name.
+    std::fs::write(p.join("broken.toml"), "[dark\n").unwrap();
+    let (t, n) = load_theme("broken", p);
+    assert_eq!(t, builtin_nox());
+    assert_eq!(n.len(), 2, "{n:?}");
+    assert!(n[0].starts_with("theme \"broken\" (") && n[0].contains("line 1"), "{n:?}");
+    assert_eq!(n[1], "theme \"broken\": using nox");
+    // Not UTF-8: can't be read.
+    std::fs::write(p.join("binary.toml"), b"\xff\xfe").unwrap();
+    let (t, n) = load_theme("binary", p);
+    assert_eq!(t, builtin_nox());
+    assert!(n[0].starts_with("theme \"binary\": cannot read "), "{n:?}");
+    assert_eq!(n.last().unwrap(), "theme \"binary\": using nox");
+}
+
+#[test]
+fn structural_problems_are_notices() {
+    let src = r#"
+light = 5
+[dark]
+bg-elevated = "nope"
+ansi = 3
+"#;
+    let (t, n) = parse_theme("odd", src).unwrap();
+    assert!(n.contains(&"theme \"odd\": [light] must be a table; ignored".to_string()), "{n:?}");
+    assert!(n.contains(&"theme \"odd\": [dark] ansi must be a table; ignored".to_string()), "{n:?}");
+    assert!(
+        n.iter().any(|m| m.starts_with("theme \"odd\": [dark] bg-elevated = \"nope\" is not a")),
+        "{n:?}"
+    );
+    assert!(t.light.is_none());
+    let d = t.variant(true);
+    assert_eq!(d.bg_elevated, nox_dark().bg_elevated);
+    assert_eq!(d.ansi, nox_dark().ansi);
+    // A valid bg-elevated is taken as is; an invalid bg doesn't derive one.
+    let (t, _) = parse_theme("e", "[dark]\nbg = \"bad\"\nbg-elevated = \"#010101\"\n").unwrap();
+    assert_eq!(t.variant(true).bg_elevated.to_hex(), "#010101");
+    assert_eq!(t.variant(true).bg, nox_dark().bg);
+}
+
+#[test]
+fn available_names_skip_reserved_invalid_and_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    for f in ["zeta.toml", "alpha.toml", "dark.toml", "bad name.toml", "gruvbox.toml", "notes.txt"] {
+        std::fs::write(p.join(f), "[dark]\n").unwrap();
+    }
+    let names = available_theme_names(p);
+    assert_eq!(names[0], "nox");
+    let bundled = bundled_theme_names().len();
+    assert_eq!(names.len(), 1 + bundled + 2, "{names:?}");
+    assert_eq!(&names[names.len() - 2..], ["alpha", "zeta"]);
+    assert_eq!(names.iter().filter(|n| *n == "gruvbox").count(), 1);
+    // A missing directory: just the built-in and bundled ones.
+    assert_eq!(available_theme_names(&p.join("missing")).len(), 1 + bundled);
+}

@@ -670,3 +670,371 @@ pub fn open_config_file(root: &mut Root, window: &mut Window, cx: &mut Context<R
 
 #[allow(dead_code)]
 fn _unused(_: AgentLaunch, _: Tab) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::root::tests::{canon, dialog_title, open, pane_cwd, quiet_config, set_dialog_field};
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+
+    fn fake_agent_config() -> nox_config::Config {
+        let mut cfg = quiet_config();
+        cfg.agents.defs.clear();
+        cfg.agents
+            .defs
+            .insert("fake".into(), nox_config::AgentDef { command: "true".into(), ..Default::default() });
+        cfg
+    }
+
+    fn write_project(dir: &Path, toml: &str) {
+        std::fs::create_dir_all(dir.join(".nox")).unwrap();
+        std::fs::write(ProjectFile::path(dir), toml).unwrap();
+    }
+
+    fn open_folder(root: &Entity<Root>, path: &Path, force: bool, cx: &mut VisualTestContext) -> WorkspaceId {
+        let id = root.update_in(cx, |r, w, cx| r.open_folder(path.to_path_buf(), force, w, cx));
+        cx.run_until_parked();
+        id
+    }
+
+    #[test]
+    fn line_diff_marks_added_and_removed_lines() {
+        assert_eq!(line_diff("a\nb\nc", "a\nc\nd"), "  a\n- b\n  c\n+ d");
+        assert_eq!(line_diff("", "x"), "+ x");
+        assert_eq!(line_diff("x", ""), "- x");
+        assert_eq!(line_diff("same", "same"), "  same");
+    }
+
+    #[gpui::test]
+    fn create_workspace_names_from_folder_or_default(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, cx) = open(cx, quiet_config());
+        root.update_in(cx, |r, w, cx| {
+            let a = r.create_workspace(None, Some(dir.path().to_path_buf()), w, cx);
+            assert_eq!(r.ws.list[a].name, dir_name(dir.path()));
+            let b = r.create_workspace(None, Some(dir.path().to_path_buf()), w, cx);
+            assert_ne!(r.ws.list[b].name, r.ws.list[a].name, "names stay unique");
+            let c = r.create_workspace(Some("   ".into()), None, w, cx);
+            assert!(!r.ws.list[c].name.trim().is_empty());
+            assert_eq!(r.ws.active, c);
+            assert!(r.coop.contains_key(&r.ws.list[c].id));
+        });
+    }
+
+    #[gpui::test]
+    fn open_folder_reuses_a_workspace_with_that_root(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, cx) = open(cx, quiet_config());
+        let id = open_folder(&root, dir.path(), false, cx);
+        let p = root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.len(), 2);
+            assert_eq!(r.ws.active().id, id);
+            assert_eq!(r.ws.active().root.as_deref(), Some(canon(dir.path()).as_path()));
+            assert_eq!(r.ws.active().tabs.len(), 1);
+            r.focused_pane_id().unwrap()
+        });
+        assert_eq!(pane_cwd(&root, p, cx), Some(canon(dir.path())));
+        root.update_in(cx, |r, w, cx| r.switch_workspace(0, w, cx));
+        assert_eq!(open_folder(&root, dir.path(), false, cx), id);
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.len(), 2);
+            assert_eq!(r.ws.active().id, id);
+        });
+        // ⌥: always a new workspace.
+        assert_ne!(open_folder(&root, dir.path(), true, cx), id);
+        assert_eq!(root.read_with(cx, |r, _| r.ws.len()), 3);
+    }
+
+    #[gpui::test]
+    fn project_file_without_commands_opens_its_tabs(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        write_project(
+            dir.path(),
+            r#"
+name = "Proj"
+color = "green"
+env = { FOO = "bar" }
+[[tabs]]
+title = "editor"
+[[tabs]]
+title = "split"
+layout = "horizontal"
+panes = [{}, {}, {}]
+"#,
+        );
+        let (root, cx) = open(cx, quiet_config());
+        open_folder(&root, dir.path(), false, cx);
+        assert_eq!(dialog_title(cx), None, "nothing to trust");
+        root.read_with(cx, |r, _| {
+            let w = r.ws.active();
+            assert_eq!(w.name, "Proj");
+            assert_eq!(w.color.as_deref(), Some("green"));
+            assert_eq!(w.env.get("FOO").map(String::as_str), Some("bar"));
+            assert_eq!(w.tabs.len(), 2);
+            assert_eq!(w.active_tab, 0);
+            assert_eq!(w.tabs[0].custom_name.as_deref(), Some("editor"));
+            assert_eq!(w.tabs[1].custom_name.as_deref(), Some("split"));
+            assert_eq!(w.tabs[1].panes().len(), 3);
+            // The first pane keeps focus.
+            assert_eq!(w.tabs[1].focused, w.tabs[1].panes()[0]);
+            assert_eq!(r.panes.len(), 1 + 4);
+        });
+    }
+
+    #[gpui::test]
+    fn project_commands_wait_for_trust(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        write_project(
+            dir.path(),
+            r#"
+[[tabs]]
+command = "true one"
+[[tabs]]
+panes = [{ command = "true two" }, {}]
+"#,
+        );
+        let (root, cx) = open(cx, quiet_config());
+        open_folder(&root, dir.path(), false, cx);
+        assert_eq!(dialog_title(cx).as_deref(), Some("Trust this project file?"));
+        let detail = cx.update(|_, cx| {
+            let v = cx.global::<crate::dialog::ActiveDialog>().0.as_ref().unwrap().0.clone();
+            v.read(cx).detail.clone()
+        });
+        assert_eq!(detail.as_deref(), Some("true one\ntrue two"));
+        // Tabs are open with plain shells already.
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.active().tabs.len(), 2);
+            assert_eq!(r.ws.active().tabs[1].panes().len(), 2);
+        });
+        cx.simulate_keystrokes("enter");
+        assert_eq!(dialog_title(cx), None);
+        let file = ProjectFile::path(&canon(dir.path()));
+        let (_, hash) = ProjectFile::load(&canon(dir.path())).unwrap().unwrap();
+        assert!(TrustStore::load(&trust_path()).unwrap().is_trusted(&file, &hash));
+        // Trusted now: opening again asks nothing.
+        open_folder(&root, dir.path(), true, cx);
+        assert_eq!(dialog_title(cx), None);
+    }
+
+    #[gpui::test]
+    fn broken_project_file_still_opens_the_folder(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        write_project(dir.path(), "tabs = 3");
+        let (root, cx) = open(cx, quiet_config());
+        open_folder(&root, dir.path(), false, cx);
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.len(), 2);
+            assert_eq!(r.ws.active().tabs.len(), 1);
+            assert_eq!(r.ws.active().name, dir_name(dir.path()));
+        });
+    }
+
+    #[gpui::test]
+    fn new_workspace_sheet_creates_named_or_folder_workspaces(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, cx) = open(cx, quiet_config());
+        cx.dispatch_action(crate::actions::NewWorkspace);
+        assert_eq!(dialog_title(cx).as_deref(), Some("New Workspace"));
+        set_dialog_field(cx, 0, "notes");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.len(), 2);
+            assert_eq!(r.ws.active().name, "notes");
+            assert_eq!(r.ws.active().root, None);
+            assert_eq!(r.ws.active().tabs.len(), 1);
+        });
+        // Only a folder: opened as a workspace named after it.
+        cx.dispatch_action(crate::actions::NewWorkspace);
+        set_dialog_field(cx, 1, &dir.path().to_string_lossy());
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.len(), 3);
+            assert_eq!(r.ws.active().name, dir_name(dir.path()));
+            assert_eq!(r.ws.active().root.as_deref(), Some(canon(dir.path()).as_path()));
+        });
+        // Name and a folder that doesn't exist: the folder is ignored.
+        cx.dispatch_action(crate::actions::NewWorkspace);
+        set_dialog_field(cx, 0, "named");
+        set_dialog_field(cx, 1, "/definitely/not/there");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.len(), 4);
+            assert_eq!(r.ws.active().name, "named");
+            assert_eq!(r.ws.active().root, None);
+        });
+    }
+
+    #[gpui::test]
+    fn moving_tabs_between_workspaces(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let (t0, t1, p1) = root.update_in(cx, |r, w, cx| {
+            r.new_tab(w, cx);
+            let t0 = r.ws.list[0].tabs[0].id;
+            let t1 = r.ws.list[0].tabs[1].id;
+            let p1 = r.ws.list[0].tabs[1].focused;
+            let idx = r.create_workspace(Some("dest".into()), None, w, cx);
+            r.add_tab(idx, PaneSpawn::default(), w, cx);
+            (t0, t1, p1)
+        });
+        root.update_in(cx, |r, w, cx| {
+            // No-ops.
+            r.move_tab_to_workspace(0, t1, 0, w, cx);
+            r.move_tab_to_workspace(0, t1, 9, w, cx);
+            assert_eq!(r.ws.list[0].tabs.len(), 2);
+            r.move_tab_to_workspace(0, t1, 1, w, cx);
+            assert_eq!(r.ws.list[0].tabs.len(), 1);
+            assert_eq!(r.ws.list[1].tabs.len(), 2);
+            // The pane keeps running.
+            assert!(r.panes.contains_key(&p1));
+            assert_eq!(r.pane_workspace(p1), Some(r.ws.list[1].id));
+            // Reorder inside the destination by drop.
+            let d = DraggedTab { ws: 1, tab: t1, label: "x".into() };
+            r.drop_tab(&d, 1, 0, w, cx);
+            assert_eq!(r.ws.list[1].tabs[0].id, t1);
+            // Dropping the last tab of workspace 0 elsewhere closes it (close_when_empty).
+            let d = DraggedTab { ws: 0, tab: t0, label: "y".into() };
+            r.drop_tab(&d, 1, 0, w, cx);
+            assert_eq!(r.ws.len(), 1);
+            assert_eq!(r.ws.list[0].name, "dest");
+            assert_eq!(r.ws.list[0].tabs.len(), 3);
+        });
+    }
+
+    #[gpui::test]
+    fn moving_the_last_tab_keeps_the_source_when_configured(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        cfg.workspaces.close_when_empty = false;
+        let (root, cx) = open(cx, cfg);
+        root.update_in(cx, |r, w, cx| {
+            let t0 = r.ws.list[0].tabs[0].id;
+            let idx = r.create_workspace(Some("dest".into()), None, w, cx);
+            r.add_tab(idx, PaneSpawn::default(), w, cx);
+            r.move_tab_to_workspace(0, t0, 1, w, cx);
+            assert_eq!(r.ws.len(), 2);
+            assert_eq!(r.ws.list[0].tabs.len(), 1, "a fresh tab replaces the moved one");
+            assert_ne!(r.ws.list[0].tabs[0].id, t0);
+            assert_eq!(r.ws.list[1].tabs.len(), 2);
+        });
+    }
+
+    #[gpui::test]
+    fn agent_in_worktree_needs_a_root(cx: &mut TestAppContext) {
+        let (_root, cx) = open(cx, fake_agent_config());
+        cx.dispatch_action(crate::actions::NewAgentInWorktree);
+        assert_eq!(dialog_title(cx), None);
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    #[gpui::test]
+    fn agent_in_worktree_creates_the_worktree_and_offers_removal(cx: &mut TestAppContext) {
+        let repo = tempfile::tempdir().unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-q"]);
+        std::fs::write(repo.path().join("f"), "x").unwrap();
+        git(repo.path(), &["add", "f"]);
+        git(repo.path(), &["commit", "-q", "-m", "init"]);
+        let mut cfg = fake_agent_config();
+        cfg.workspaces.worktree_dir = wt.path().to_string_lossy().into_owned();
+        let (root, cx) = open(cx, cfg);
+        open_folder(&root, repo.path(), false, cx);
+
+        cx.dispatch_action(crate::actions::NewAgentInWorktree);
+        assert_eq!(dialog_title(cx).as_deref(), Some("New Agent in Worktree"));
+        // No branch: nothing happens.
+        cx.simulate_keystrokes("enter");
+        assert_eq!(root.read_with(cx, |r, _| r.ws.active().tabs.len()), 1);
+
+        cx.dispatch_action(crate::actions::NewAgentInWorktree);
+        set_dialog_field(cx, 0, "feat/x");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let path = wt.path().join(format!("{}-feat-x", dir_name(repo.path())));
+        assert!(path.is_dir(), "worktree created");
+        let (tab, kind) = root.read_with(cx, |r, cx| {
+            let w = r.ws.active();
+            assert_eq!(w.tabs.len(), 2);
+            let p = r.focused_pane().unwrap();
+            (w.active().unwrap().id, p.read(cx).agent.as_ref().map(|a| a.kind.clone()))
+        });
+        assert_eq!(kind.as_deref(), Some("fake"));
+
+        // Closing the agent's tab offers to remove the clean worktree.
+        root.update_in(cx, |r, w, cx| {
+            let a = r.ws.active;
+            r.close_tab_now(a, tab, w, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(dialog_title(cx).as_deref(), Some("Remove the worktree?"));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!path.exists(), "worktree removed");
+
+        // A failing `git worktree add` shows its output.
+        cx.dispatch_action(crate::actions::NewAgentInWorktree);
+        set_dialog_field(cx, 0, "feat/x");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(dialog_title(cx).as_deref(), Some("git worktree add failed"));
+    }
+
+    #[gpui::test]
+    fn icon_picker_sets_and_clears_a_custom_icon(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let name = nox_agents::builtin_icon_names()[0];
+        let p = root.update_in(cx, |r, w, cx| {
+            let p = r.focused_pane_id().unwrap();
+            set_icon_picker(r, None, Some(p), w, cx);
+            assert!(r.palette.is_some());
+            p
+        });
+        cx.simulate_input(name);
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, cx| {
+            assert!(r.palette.is_none());
+            assert_eq!(r.panes[&p].read(cx).custom_icon.as_deref(), Some(name));
+        });
+        root.update_in(cx, |r, w, cx| {
+            let t = r.active_tab().unwrap().id;
+            set_icon_picker(r, Some(t), None, w, cx);
+        });
+        cx.simulate_input("Automatic");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, cx| assert_eq!(r.panes[&p].read(cx).custom_icon, None));
+        // No target: no picker.
+        root.update_in(cx, |r, w, cx| {
+            set_icon_picker(r, None, None, w, cx);
+            assert!(r.palette.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn copy_mcp_setup_puts_the_command_on_the_clipboard(cx: &mut TestAppContext) {
+        let (_root, cx) = open(cx, quiet_config());
+        cx.dispatch_action(crate::actions::CopyMcpSetupCommand);
+        cx.simulate_input("claude");
+        cx.simulate_keystrokes("enter");
+        let text = cx.read_from_clipboard().and_then(|c| c.text());
+        assert_eq!(text.as_deref(), Some("claude mcp add nox -- nox mcp"));
+    }
+
+    #[gpui::test]
+    fn install_cli_without_the_tool_shows_no_sheet(cx: &mut TestAppContext) {
+        let (_root, cx) = open(cx, quiet_config());
+        if crate::root::cli_bin_dir().is_none() {
+            cx.dispatch_action(crate::actions::InstallCommandLineTool);
+            assert_eq!(dialog_title(cx), None);
+        }
+    }
+}

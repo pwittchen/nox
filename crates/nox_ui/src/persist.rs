@@ -353,3 +353,360 @@ pub fn save(root: &mut Root, cx: &mut Context<Root>) {
         log::error!("saving session: {e}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::root::Initial;
+    use crate::root::tests::{canon, dialog_title, make_agent, open, pane_cwd, quiet_config};
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use nox_agents::AgentState;
+    use nox_layout::SplitDirection;
+
+    /// Tests that write `$NOX_HOME/session.toml` take this lock (tests share one `NOX_HOME`).
+    static SESSION_FILE: Mutex<()> = Mutex::new(());
+
+    fn fake_agents(cfg: &mut nox_config::Config) {
+        cfg.agents.defs.clear();
+        cfg.agents.defs.insert(
+            "fake".into(),
+            nox_config::AgentDef {
+                command: "true".into(),
+                resume: Some("true --resume {session}".into()),
+                ..Default::default()
+            },
+        );
+        cfg.agents.defs.insert(
+            "plain".into(),
+            nox_config::AgentDef { command: "true plain".into(), ..Default::default() },
+        );
+        cfg.agents.defs.insert(
+            "last".into(),
+            nox_config::AgentDef {
+                command: "true last".into(),
+                resume_last: Some("true --continue".into()),
+                ..Default::default()
+            },
+        );
+    }
+
+    fn agent(kind: &str, cwd: &Path, session: Option<&str>, resume: bool) -> AgentSnapshot {
+        AgentSnapshot {
+            kind: kind.into(),
+            name: kind.into(),
+            start_cwd: cwd.to_path_buf(),
+            command: format!("{kind} --orig"),
+            session_id: session.map(str::to_string),
+            resume_on_restore: resume,
+        }
+    }
+
+    fn restore_into(cx: &mut VisualTestContext, file: SessionFile) -> (Entity<Root>, &mut VisualTestContext) {
+        let restored = Workspaces::restore(file, |p: &Path| p.is_dir()).expect("restorable");
+        let plan = RestorePlan { restored };
+        let (root, cx) =
+            cx.add_window_view(|window, cx| Root::new(Initial::Restored(Box::new(plan)), window, cx));
+        cx.run_until_parked();
+        (root, cx)
+    }
+
+    #[test]
+    fn resume_plan_per_agent_definition() {
+        let mut cfg = quiet_config();
+        fake_agents(&mut cfg);
+        let dir = PathBuf::from("/tmp");
+        let agents = vec![
+            (PaneId(1), agent("fake", &dir, Some("abc"), true)),
+            (PaneId(2), agent("fake", &dir, Some("abc"), false)),
+            (PaneId(3), agent("plain", &dir, None, true)),
+            (PaneId(4), agent("last", &dir, None, true)),
+            (PaneId(5), agent("last", &dir, None, true)),
+        ];
+        let plan = plan_resume(&cfg, &agents);
+        assert!(!plan.contains_key(&PaneId(2)), "not marked for resume");
+        assert!(
+            matches!(&plan[&PaneId(1)], ResumeAction::Run(c) if c.starts_with("true --resume") && c.contains("abc"))
+        );
+        assert_eq!(plan[&PaneId(3)], ResumeAction::TypeOnly("plain --orig".into()));
+        assert_eq!(plan[&PaneId(4)], ResumeAction::Run("true --continue".into()));
+        // The same directory twice: resume_last would open one conversation twice.
+        assert_eq!(plan[&PaneId(5)], ResumeAction::SessionUnknown);
+
+        assert!(matches!(startup_for(&ResumeAction::Run("x".into())), Some(Startup::Run(c)) if c == "x"));
+        assert!(
+            matches!(startup_for(&ResumeAction::TypeOnly("y".into())), Some(Startup::Type(c)) if c == "y")
+        );
+        assert!(startup_for(&ResumeAction::SessionUnknown).is_none());
+        assert_eq!(agent_defs(&cfg)["last"].resume_last.as_deref(), Some("true --continue"));
+    }
+
+    #[gpui::test]
+    fn snapshot_restores_workspaces_tabs_names_and_dirs(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, cx) = open(cx, quiet_config());
+        let (left, other) = root.update_in(cx, |r, w, cx| {
+            let left = r.focused_pane_id().unwrap();
+            r.ws.active_mut().active_mut().unwrap().custom_name = Some("build".into());
+            r.panes[&left].update(cx, |p, _| p.custom_name = Some("left".into()));
+            r.split(SplitDirection::Vertical, None, w, cx).unwrap();
+            let idx = r.create_workspace(Some("api".into()), Some(dir.path().to_path_buf()), w, cx);
+            r.ws.list[idx].color = Some("blue".into());
+            let other = r.add_tab(
+                idx,
+                PaneSpawn { cwd: Some(dir.path().to_path_buf()), ..Default::default() },
+                w,
+                cx,
+            );
+            r.switch_workspace(0, w, cx);
+            (left, other)
+        });
+        let file = root.read_with(cx, snapshot);
+        assert_eq!(file.active_workspace, 0);
+        assert_eq!(file.workspaces.len(), 2);
+        let ws0 = &file.workspaces[0];
+        assert_eq!(ws0.tabs[0].custom_name.as_deref(), Some("build"));
+        assert_eq!(ws0.tabs[0].panes.len(), 2);
+        let home = crate::test_support::nox_home();
+        assert_eq!(ws0.tabs[0].panes[&left].custom_name.as_deref(), Some("left"));
+        assert_eq!(ws0.tabs[0].panes[&left].cwd.as_deref().map(canon), Some(canon(&home)));
+        let ws1 = &file.workspaces[1];
+        assert_eq!((ws1.name.as_str(), ws1.color.as_deref()), ("api", Some("blue")));
+        assert_eq!(ws1.root.as_deref(), Some(dir.path()));
+        assert_eq!(ws1.tabs[0].panes[&other].cwd.as_deref().map(canon), Some(canon(dir.path())));
+        // TOML round trip.
+        let back = SessionFile::from_toml(&file.to_toml().unwrap()).unwrap();
+        assert_eq!(back, file);
+
+        let (r2, cx) = restore_into(cx, back);
+        r2.read_with(cx, |r, cx| {
+            assert_eq!(r.ws.len(), 2);
+            assert_eq!(r.ws.active, 0);
+            assert_eq!(r.ws.list[1].name, "api");
+            assert_eq!(r.ws.list[1].color.as_deref(), Some("blue"));
+            let tab = r.active_tab().unwrap();
+            assert_eq!(tab.custom_name.as_deref(), Some("build"));
+            assert_eq!(tab.panes().len(), 2);
+            let names: Vec<Option<String>> =
+                tab.panes().iter().map(|p| r.panes[p].read(cx).custom_name.clone()).collect();
+            assert!(names.contains(&Some("left".into())));
+            // Lazy restore: the background workspace waits.
+            assert_eq!(r.panes.len(), 2);
+            assert_eq!(r.pending.len(), 1);
+            assert!(r.coop.contains_key(&r.ws.list[1].id));
+        });
+        // A pending pane still snapshots with its saved directory.
+        let again = r2.read_with(cx, snapshot);
+        let p = again.workspaces[1].tabs[0].panes.values().next().unwrap();
+        assert_eq!(p.cwd.as_deref().map(canon), Some(canon(dir.path())));
+        let p = r2.update_in(cx, |r, w, cx| {
+            r.switch_workspace(1, w, cx);
+            assert!(r.pending.is_empty());
+            assert_eq!(r.panes.len(), 3);
+            r.focused_pane_id().unwrap()
+        });
+        assert_eq!(pane_cwd(&r2, p, cx), Some(canon(dir.path())));
+    }
+
+    #[gpui::test]
+    fn missing_dirs_fall_back_and_eager_restore_starts_everything(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        cfg.workspaces.lazy_restore = false;
+        let (root, cx) = open(cx, cfg);
+        root.update_in(cx, |r, w, cx| {
+            let idx = r.create_workspace(Some("gone".into()), None, w, cx);
+            r.add_tab(idx, PaneSpawn::default(), w, cx);
+            r.switch_workspace(0, w, cx);
+        });
+        let mut file = root.read_with(cx, snapshot);
+        file.workspaces[1].root = Some("/definitely/not/a/dir".into());
+        for p in file.workspaces[0].tabs[0].panes.values_mut() {
+            p.cwd = Some("/definitely/not/a/dir/either".into());
+        }
+        let (r2, cx) = restore_into(cx, file);
+        let p = r2.read_with(cx, |r, _| {
+            assert!(r.pending.is_empty(), "lazy_restore = false starts all workspaces");
+            assert_eq!(r.panes.len(), 2);
+            assert!(r.ws.list[1].root_missing);
+            r.focused_pane_id().unwrap()
+        });
+        assert_eq!(pane_cwd(&r2, p, cx), Some(canon(&crate::test_support::nox_home())));
+    }
+
+    /// One agent pane (`fake`, session `sess-1`) in a background workspace.
+    fn agent_session(cx: &mut VisualTestContext, root: &Entity<Root>) -> SessionFile {
+        let pane = root.update_in(cx, |r, w, cx| {
+            let idx = r.create_workspace(Some("agents".into()), None, w, cx);
+            let p = r.add_tab(idx, PaneSpawn::default(), w, cx);
+            r.switch_workspace(0, w, cx);
+            p
+        });
+        make_agent(root, pane, "fake", AgentState::Working, cx);
+        root.update(cx, |r, cx| r.panes[&pane].update(cx, |p, _| p.resume_on_restore = true));
+        let file = root.read_with(cx, snapshot);
+        let a = file.workspaces[1].tabs[0].panes[&pane].agent.clone().expect("agent saved");
+        assert_eq!(a.kind, "fake");
+        assert_eq!(a.session_id.as_deref(), Some("sess-1"));
+        assert!(a.resume_on_restore);
+        file
+    }
+
+    #[gpui::test]
+    fn resume_mode_starts_agents_even_in_lazy_workspaces(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        fake_agents(&mut cfg);
+        let (root, cx) = open(cx, cfg);
+        let file = agent_session(cx, &root);
+        let (r2, cx) = restore_into(cx, file);
+        r2.read_with(cx, |r, cx| {
+            assert!(r.pending.is_empty(), "the agent's workspace is started");
+            assert_eq!(r.saved_agents.len(), 1);
+            let (p, _) = r.saved_agents.iter().next().unwrap();
+            let e = r.panes[p].read(cx);
+            let launch = e.agent.as_ref().unwrap().launch.clone().unwrap();
+            assert!(launch.resumed);
+            assert_eq!(launch.kind, "fake");
+            assert!(launch.command.contains("sess-1"));
+            assert_eq!(dialog_title_app(cx), None);
+        });
+    }
+
+    #[gpui::test]
+    fn exited_agents_are_not_saved(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let p = root.read_with(cx, |r, _| r.focused_pane_id().unwrap());
+        make_agent(&root, p, "fake", AgentState::Idle, cx);
+        let saved = root.read_with(cx, |r, cx| snapshot(r, cx).workspaces[0].tabs[0].panes[&p].agent.clone());
+        let saved = saved.expect("live agent saved");
+        assert_eq!(
+            (saved.kind.as_str(), saved.name.as_str(), saved.command.as_str()),
+            ("fake", "fake", "fake")
+        );
+        root.update(cx, |r, cx| {
+            r.panes[&p].update(cx, |e, _| {
+                e.agent.as_mut().unwrap().tracker.on_exit(std::time::Instant::now());
+            });
+        });
+        let saved = root.read_with(cx, |r, cx| snapshot(r, cx).workspaces[0].tabs[0].panes[&p].agent.clone());
+        assert!(saved.is_none());
+    }
+
+    fn dialog_title_app(cx: &gpui::App) -> Option<String> {
+        cx.try_global::<crate::dialog::ActiveDialog>()
+            .and_then(|d| d.0.as_ref().map(|(v, _)| v.read(cx).title.to_string()))
+    }
+
+    #[gpui::test]
+    fn ask_mode_shows_the_resume_sheet(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        fake_agents(&mut cfg);
+        cfg.agents.restore = nox_config::AgentRestore::Ask;
+        let (root, cx) = open(cx, cfg);
+        let file = agent_session(cx, &root);
+        let (r2, cx) = restore_into(cx, file);
+        assert_eq!(dialog_title(cx).as_deref(), Some("Resume agents?"));
+        let checks = cx.update(|_, cx| {
+            let v = cx.global::<crate::dialog::ActiveDialog>().0.as_ref().unwrap().0.clone();
+            v.read(cx).checks.iter().map(|c| (c.label.to_string(), c.on)).collect::<Vec<_>>()
+        });
+        assert_eq!(checks, vec![("fake".to_string(), true)]);
+        r2.read_with(cx, |r, cx| {
+            // Not started yet: lazy, and nothing runs without the user's answer.
+            assert_eq!(r.pending.len(), 1);
+            assert!(r.panes.values().all(|p| p.read(cx).agent.is_none()));
+        });
+        cx.simulate_keystrokes("enter");
+        assert_eq!(dialog_title(cx), None);
+        // Resuming starts the workspace it lives in.
+        r2.read_with(cx, |r, _| assert!(r.pending.is_empty()));
+    }
+
+    #[gpui::test]
+    fn off_mode_keeps_agents_for_resume_all(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        fake_agents(&mut cfg);
+        cfg.agents.restore = nox_config::AgentRestore::Off;
+        let (root, cx) = open(cx, cfg);
+        // Nothing saved yet.
+        root.update_in(cx, Root::resume_all_agents);
+        let file = agent_session(cx, &root);
+        let (r2, cx) = restore_into(cx, file);
+        assert_eq!(dialog_title(cx), None);
+        r2.update_in(cx, |r, w, cx| {
+            assert_eq!(r.saved_agents.len(), 1);
+            assert_eq!(r.pending.len(), 1);
+            // Pending + saved agent: the snapshot keeps the saved agent.
+            let f = snapshot(r, cx);
+            assert!(f.workspaces[1].tabs[0].panes.values().next().unwrap().agent.is_some());
+            r.resume_all_agents(w, cx);
+            assert!(r.pending.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn unknown_sessions_are_listed_unchecked(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        fake_agents(&mut cfg);
+        let (root, cx) = open(cx, cfg);
+        let mut file = root.read_with(cx, snapshot);
+        let home = crate::test_support::nox_home();
+        // Two `last` agents in one directory without session ids.
+        let tab = file.workspaces[0].tabs[0].clone();
+        let mut tab2 = tab.clone();
+        let (old, snap) = tab.panes.iter().next().map(|(k, v)| (*k, v.clone())).unwrap();
+        let mut s = snap.clone();
+        s.agent = Some(agent("last", &home, None, true));
+        file.workspaces[0].tabs[0].panes.insert(old, s.clone());
+        tab2.panes.insert(old, s);
+        file.workspaces[0].tabs.push(tab2);
+        let (_r2, cx) = restore_into(cx, file);
+        assert_eq!(dialog_title(cx).as_deref(), Some("Resume agents?"));
+        let checks = cx.update(|_, cx| {
+            let v = cx.global::<crate::dialog::ActiveDialog>().0.as_ref().unwrap().0.clone();
+            v.read(cx)
+                .checks
+                .iter()
+                .map(|c| (c.on, c.detail.as_ref().map(ToString::to_string)))
+                .collect::<Vec<_>>()
+        });
+        // Only the second `last` agent is listed. (It shows checked and without "session
+        // unknown": the sheet re-plans the subset alone, see the report.)
+        assert_eq!(checks.len(), 1);
+        // "Start Shells" (cancel).
+        cx.simulate_keystrokes("escape");
+        assert_eq!(dialog_title(cx), None);
+    }
+
+    #[gpui::test]
+    fn session_file_save_load_and_quit(cx: &mut TestAppContext) {
+        let _guard = SESSION_FILE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cfg = quiet_config();
+        cfg.app.quit_when_last_tab_closed = true;
+        let (root, cx) = open(cx, cfg);
+        let path = session_path();
+        let _ = std::fs::remove_file(&path);
+        assert!(load_plan().is_none(), "no file");
+        std::fs::write(&path, "not = [valid").unwrap();
+        assert!(load_plan().is_none(), "unparsable file");
+
+        root.update(cx, |r, cx| {
+            r.ws.active_mut().name = "saved-ws".into();
+            r.save_session_now(cx);
+        });
+        let plan = load_plan().expect("saved session");
+        assert_eq!(plan.restored.workspaces.list[0].name, "saved-ws");
+        assert_eq!(plan.restored.panes.len(), 1);
+
+        // Closing the last tab quits: the session is saved once (empty) and later saves are off.
+        cx.dispatch_action(crate::actions::CloseTab);
+        root.update(cx, |r, cx| {
+            assert!(r.quitting);
+            assert!(r.panes.is_empty());
+            assert_eq!(r.ws.len(), 1);
+            r.save_session_now(cx);
+        });
+        assert!(load_plan().is_none(), "an empty session restores nothing");
+        let _ = std::fs::remove_file(&path);
+    }
+}

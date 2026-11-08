@@ -7,6 +7,10 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use crate::theme::Theme;
 
 pub fn apply(window: &Window, theme: &Theme) {
+    // GPUI's test windows have no native handle (asking for one panics).
+    if cfg!(test) {
+        return;
+    }
     let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
     if let RawWindowHandle::AppKit(h) = handle.as_raw() {
         let c: gpui::Rgba = theme.bg.into();

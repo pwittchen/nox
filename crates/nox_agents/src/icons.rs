@@ -903,6 +903,70 @@ mod tests {
     }
 
     #[test]
+    fn interpreter_targets() {
+        let sn = |exe: &str, args: &[&str]| {
+            script_name(exe, &args.iter().map(|a| (*a).to_string()).collect::<Vec<_>>())
+        };
+        let cases: &[(&str, &[&str], Option<&str>)] = &[
+            ("node", &["--", "x.js"], Some("x")),
+            ("node", &["--import", "tsx", "--"], None),
+            ("node", &["-r", "ts-node/register", "app.ts"], Some("app")),
+            ("bun", &["x", "cowsay"], Some("cowsay")),
+            ("bun", &["script.ts"], Some("script")),
+            ("pnpm", &["dlx", "cowsay@1.2"], Some("cowsay")),
+            ("yarn", &["install"], None),
+            ("uv", &["run", "--with", "rich", "tool.py"], Some("tool")),
+            ("uv", &["tool", "run", "--from", "x", "ruff"], Some("ruff")),
+            ("uv", &["sync"], None),
+            ("pipx", &["run", "--spec", "black==23", "black"], Some("black")),
+            ("pipx", &["list"], None),
+            ("python3", &["-X", "dev", "-u", "app.py"], Some("app")),
+            ("python", &["-c", "print(1)"], None),
+            ("python", &["-m", "pkg.sub"], Some("pkg")),
+            ("python", &["-u"], None),
+            ("ruby", &["-S", "rake"], Some("rake")),
+            ("ruby", &["-e", "p 1"], None),
+            ("ruby", &["-I", "lib", "-w", "x.rb"], Some("x")),
+            ("ruby", &[], None),
+            ("java", &["-version"], None),
+            ("java", &["-jar"], None),
+            ("npx", &["@scope/pkg"], Some("pkg")),
+            ("npx", &["-p", "foo", "bar@latest"], Some("bar")),
+            ("npx", &["/"], None),
+            ("perl", &["x.pl"], None),
+            ("gh", &[], None),
+        ];
+        for (exe, args, want) in cases {
+            assert_eq!(sn(exe, args).as_deref(), *want, "{exe} {args:?}");
+        }
+    }
+
+    #[test]
+    fn user_icons_for_kinds_scripts_and_paths() {
+        let home = dirs::home_dir().unwrap_or_default();
+        let user = BTreeMap::from([
+            ("claude".to_string(), "~/icons/c.svg".to_string()),
+            ("tool".to_string(), "t.svg".to_string()),
+            ("server".to_string(), "rust".to_string()),
+            ("noext".to_string(), "plainword".to_string()),
+        ]);
+        let t = IconTable::new(&user, &[]);
+        // A user icon for an agent kind wins over the built-in one.
+        assert_eq!(t.icon_for_kind("claude"), Icon::Custom(home.join("icons/c.svg")));
+        assert_eq!(icon(&t, Some(&p("claude", &[])), None), Icon::Custom(home.join("icons/c.svg")));
+        // A bare file name is looked up in ~/.nox/icons.
+        assert_eq!(icon(&t, Some(&p("tool", &[])), None), Icon::Custom(home.join(".nox/icons/t.svg")));
+        // A user icon for the interpreted script.
+        assert_eq!(icon(&t, Some(&p("node", &["server.js"])), None), Icon::Builtin("rust"));
+        // Words that are neither built-in names nor SVG paths are ignored.
+        assert_eq!(icon(&t, Some(&p("noext", &[])), None), Icon::TERMINAL);
+        // Kinds without a built-in agent icon: a built-in icon of that name, else "agent".
+        assert_eq!(t.icon_for_kind("python"), Icon::Builtin("python"));
+        assert_eq!(t.icon_for_kind("weird"), Icon::Builtin("agent"));
+        assert_eq!(builtin_icon_svg("no-such-icon"), None);
+    }
+
+    #[test]
     fn agent_kinds() {
         let t = table();
         for (exe, kind) in [

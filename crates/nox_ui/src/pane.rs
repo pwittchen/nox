@@ -2151,3 +2151,1562 @@ pub fn status_color(theme: &Theme, status: TabStatus) -> Option<Hsla> {
         TabStatus::NeedsInput | TabStatus::Bell => Some(theme.ansi(4)),
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui::{TestAppContext, VisualTestContext, size};
+    use nox_terminal::alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+    use super::*;
+
+    // ---- harness --------------------------------------------------------------------------
+
+    /// Test config whose "shell" is `/bin/sh -c script` (no rc files, no integration).
+    pub(crate) fn config_running(script: &str) -> nox_config::Config {
+        let mut c = crate::test_support::config();
+        c.shell.args = vec!["-c".into(), script.into()];
+        c.shell.integration = false;
+        c.terminal.smooth_scroll_duration = 0;
+        c
+    }
+
+    /// A child that prints nothing and never exits on its own (content is fed to the `Term`
+    /// directly, so the reader thread never races the test).
+    pub(crate) fn silent() -> nox_config::Config {
+        config_running("exec cat >/dev/null")
+    }
+
+    /// Creating PTYs concurrently is racy on macOS (`libc::openpty` uses the static `ptsname`
+    /// buffer and sets `CLOEXEC` non-atomically), and tests run in parallel threads: spawn one
+    /// session at a time.
+    pub(crate) fn spawn_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Open a 640×360 window whose root is one focused pane.
+    pub(crate) fn open(
+        cx: &mut TestAppContext,
+        config: nox_config::Config,
+        spawn: PaneSpawn,
+    ) -> (Entity<Pane>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            crate::test_support::init_app(cx, config);
+            cx.set_global(crate::root::UiFlags::default());
+        });
+        let guard = spawn_lock();
+        let (pane, cx) = cx.add_window_view(|window, cx| Pane::new(PaneId(1), spawn, window, cx));
+        drop(guard);
+        cx.simulate_resize(size(px(640.), px(360.)));
+        pane.update_in(cx, |p, window, cx| {
+            window.activate_window();
+            window.focus(&p.focus_handle);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        (pane, cx)
+    }
+
+    /// Feed bytes straight into the pane's `Term` (as if the program printed them).
+    pub(crate) fn feed(pane: &Entity<Pane>, cx: &mut VisualTestContext, bytes: &[u8]) {
+        pane.update(cx, |p, cx| {
+            let s = p.session.as_ref().expect("session");
+            let mut term = s.term().lock();
+            let mut parser: Processor<StdSyncHandler> = Processor::new();
+            parser.advance(&mut *term, bytes);
+            drop(term);
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
+    /// Poll `f` (running the executor in between) for up to 5 s.
+    pub(crate) fn wait_until(cx: &mut VisualTestContext, mut f: impl FnMut(&mut VisualTestContext) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if f(cx) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "condition not met within 5 s");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub(crate) fn screen(pane: &Entity<Pane>, cx: &mut VisualTestContext) -> String {
+        pane.read_with(cx, |p, _| p.session.as_ref().map(TerminalSession::screen_text).unwrap_or_default())
+    }
+
+    pub(crate) fn geom(pane: &Entity<Pane>, cx: &mut VisualTestContext) -> GridGeom {
+        pane.read_with(cx, |p, _| p.geom.clone().expect("pane was laid out"))
+    }
+
+    /// Window position of the middle of the left half of cell (`col`, viewport `row`).
+    pub(crate) fn cell(
+        pane: &Entity<Pane>,
+        cx: &mut VisualTestContext,
+        col: usize,
+        row: usize,
+    ) -> Point<Pixels> {
+        let g = geom(pane, cx);
+        point(g.origin.x + g.cell_w * (col as f32 + 0.25), g.origin.y + g.cell_h * (row as f32 + 0.5))
+    }
+
+    /// Like [`cell`], but in the right half of the cell (a drag ending there includes it).
+    pub(crate) fn cell_r(
+        pane: &Entity<Pane>,
+        cx: &mut VisualTestContext,
+        col: usize,
+        row: usize,
+    ) -> Point<Pixels> {
+        let g = geom(pane, cx);
+        point(g.origin.x + g.cell_w * (col as f32 + 0.75), g.origin.y + g.cell_h * (row as f32 + 0.5))
+    }
+
+    fn record(pane: &Entity<Pane>, cx: &mut VisualTestContext) -> Rc<RefCell<Vec<PaneEvent>>> {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let l = log.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(pane, move |_, ev: &PaneEvent, _| l.borrow_mut().push(ev.clone())).detach();
+        });
+        log
+    }
+
+    /// A pane whose child records every byte it receives (raw mode, no echo) into a file.
+    struct Capture {
+        _dir: tempfile::TempDir,
+        file: PathBuf,
+    }
+
+    impl Capture {
+        fn new() -> (Self, nox_config::Config) {
+            Self::with_prelude("")
+        }
+
+        /// `prelude` is printed (by `printf`) before `READY`, e.g. mode-setting sequences.
+        fn with_prelude(prelude: &str) -> (Self, nox_config::Config) {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("in.bin");
+            let script = format!("stty raw -echo; printf '{prelude}READY'; exec cat > '{}'", file.display());
+            (Self { _dir: dir, file }, config_running(&script))
+        }
+
+        fn ready(pane: &Entity<Pane>, cx: &mut VisualTestContext) {
+            assert_eq!(pane.read_with(cx, |p, _| p.spawn_error.clone()), None);
+            wait_until(cx, |cx| screen(pane, cx).contains("READY"));
+        }
+
+        fn bytes(&self) -> Vec<u8> {
+            std::fs::read(&self.file).unwrap_or_default()
+        }
+
+        fn expect(&self, cx: &mut VisualTestContext, want: &[u8]) {
+            wait_until(cx, |_| self.bytes().len() >= want.len());
+            assert_eq!(
+                self.bytes(),
+                want,
+                "bytes sent to the PTY: {:?}",
+                String::from_utf8_lossy(&self.bytes())
+            );
+        }
+    }
+
+    // ---- pure helpers ---------------------------------------------------------------------
+
+    #[test]
+    fn shell_escape_quotes_only_when_needed() {
+        assert_eq!(shell_escape("/usr/local/bin/x-1.2_3+4,5:6@7%"), "/usr/local/bin/x-1.2_3+4,5:6@7%");
+        assert_eq!(shell_escape("/tmp/my file"), "'/tmp/my file'");
+        assert_eq!(shell_escape("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn regex_escape_makes_queries_literal() {
+        assert_eq!(regex_escape("a.b*c"), r"a\.b\*c");
+        assert_eq!(regex_escape("(x|y)[z]{1}^$"), r"\(x\|y\)\[z\]\{1\}\^\$");
+        assert_eq!(regex_escape("plain"), "plain");
+        let mut re = RegexSearch::new(&regex_escape("1+1")).unwrap();
+        let _ = &mut re;
+    }
+
+    #[test]
+    fn mouse_buttons_map_to_reports() {
+        assert_eq!(button_of(MouseButton::Left), mouse::MouseButton::Left);
+        assert_eq!(button_of(MouseButton::Middle), mouse::MouseButton::Middle);
+        assert_eq!(button_of(MouseButton::Right), mouse::MouseButton::Right);
+        assert_eq!(
+            button_of(MouseButton::Navigate(gpui::NavigationDirection::Back)),
+            mouse::MouseButton::Left
+        );
+    }
+
+    #[test]
+    fn spawn_options_follow_config() {
+        let mut cfg = nox_config::Config::default();
+        cfg.shell.program = "  ".into();
+        cfg.shell.args = vec!["-l".into()];
+        cfg.shell.env.insert("A".into(), "config".into());
+        cfg.shell.env.insert("B".into(), "config".into());
+        cfg.shell.integration = false;
+        cfg.terminal.scrollback = 1234;
+        cfg.terminal.osc52 = nox_config::Osc52::ReadWrite;
+        cfg.terminal.cursor_style = nox_config::CursorStyle::Bar;
+        cfg.terminal.cursor_blink = true;
+        let spawn = PaneSpawn {
+            cwd: Some("/tmp".into()),
+            env: HashMap::from([("B".to_string(), "spawn".to_string())]),
+            ..PaneSpawn::default()
+        };
+        let o = spawn_options(&cfg, &spawn);
+        assert_eq!(o.program, None, "blank program = login shell");
+        assert_eq!(o.args, vec!["-l".to_string()]);
+        assert_eq!(o.cwd, Some(PathBuf::from("/tmp")));
+        assert_eq!(o.env.get("A").map(String::as_str), Some("config"));
+        assert_eq!(o.env.get("B").map(String::as_str), Some("spawn"), "pane env wins");
+        assert_eq!(o.scrollback, 1234);
+        assert!(matches!(o.osc52, nox_terminal::ClipboardPolicy::ReadWrite));
+        assert!(o.integration_dir.is_none());
+        assert!(matches!(o.cursor.shape, nox_terminal::session::CursorKind::Bar));
+        assert!(o.cursor.blinking);
+
+        cfg.shell.program = "/bin/zsh".into();
+        cfg.shell.integration = true;
+        cfg.terminal.osc52 = nox_config::Osc52::Off;
+        let o = spawn_options(&cfg, &PaneSpawn::default());
+        assert_eq!(o.program.as_deref(), Some("/bin/zsh"));
+        assert!(o.integration_dir.is_some());
+        assert!(matches!(o.osc52, nox_terminal::ClipboardPolicy::Off));
+        cfg.terminal.osc52 = nox_config::Osc52::Write;
+        assert!(matches!(
+            spawn_options(&cfg, &PaneSpawn::default()).osc52,
+            nox_terminal::ClipboardPolicy::Write
+        ));
+    }
+
+    #[test]
+    fn cursor_style_maps_shapes() {
+        use nox_terminal::session::CursorKind;
+        let mut cfg = nox_config::Config::default();
+        for (style, kind) in [
+            (nox_config::CursorStyle::Block, CursorKind::Block),
+            (nox_config::CursorStyle::Bar, CursorKind::Bar),
+            (nox_config::CursorStyle::Underline, CursorKind::Underline),
+        ] {
+            cfg.terminal.cursor_style = style;
+            assert_eq!(std::mem::discriminant(&cursor_style(&cfg).shape), std::mem::discriminant(&kind));
+        }
+        assert!(!cursor_style(&cfg).blinking, "blink is off by default");
+    }
+
+    #[gpui::test]
+    fn query_colors_and_status_colors_come_from_the_theme(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            let colors = query_colors(theme);
+            assert_eq!(colors.len(), nox_terminal::session::COLOR_COUNT);
+            let to8 = |c: f32| (c * 255.).round() as u8;
+            let fg = colors[256];
+            assert_eq!(
+                (fg.r, fg.g, fg.b),
+                (to8(theme.raw.text.r), to8(theme.raw.text.g), to8(theme.raw.text.b))
+            );
+            let bg = colors[257];
+            assert_eq!((bg.r, bg.g, bg.b), (to8(theme.raw.bg.r), to8(theme.raw.bg.g), to8(theme.raw.bg.b)));
+            let red = colors[1];
+            let p = theme.palette_rgb[1];
+            assert_eq!((red.r, red.g, red.b), (to8(p.r), to8(p.g), to8(p.b)));
+
+            assert_eq!(status_color(theme, TabStatus::None), None);
+            assert_eq!(status_color(theme, TabStatus::Done), Some(theme.ansi(2)));
+            assert_eq!(status_color(theme, TabStatus::Failed), Some(theme.ansi(1)));
+            assert_eq!(status_color(theme, TabStatus::Running), Some(theme.ansi(3)));
+            assert_eq!(status_color(theme, TabStatus::NeedsInput), Some(theme.ansi(4)));
+            assert_eq!(status_color(theme, TabStatus::Bell), Some(theme.ansi(4)));
+        });
+    }
+
+    // ---- identity and status --------------------------------------------------------------
+
+    #[gpui::test]
+    fn title_prefers_name_then_osc_then_process_then_user_host(cx: &mut TestAppContext) {
+        use nox_config::TabTitle;
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        pane.update(cx, |p, _| {
+            p.cwd = std::env::var_os("HOME").map(PathBuf::from);
+            p.process = Some(ProcessInfo { exe: "sh".into(), args: vec![] });
+            p.process_is_shell = true;
+            assert_eq!(p.cwd_display(), "~");
+            assert_eq!(p.title(TabTitle::Auto), format!("{}:~", nox_terminal::process::user_at_host()));
+            assert_eq!(p.title(TabTitle::Process), "sh", "the shell itself in process mode");
+
+            p.process = Some(ProcessInfo { exe: "vim".into(), args: vec!["a.txt".into()] });
+            p.process_is_shell = false;
+            assert_eq!(p.title(TabTitle::Auto), "vim");
+            p.process = Some(ProcessInfo {
+                exe: "ssh".into(),
+                args: vec!["-p".into(), "22".into(), "-A".into(), "box".into()],
+            });
+            assert_eq!(p.process_display_name().as_deref(), Some("ssh box"));
+
+            p.osc_title = Some("   ".into());
+            assert_eq!(p.title(TabTitle::Auto), "ssh box", "blank OSC titles are ignored");
+            p.osc_title = Some("vim: notes".into());
+            assert_eq!(p.title(TabTitle::Auto), "vim: notes");
+            assert_eq!(p.title(TabTitle::Cwd), "~");
+            assert_eq!(p.title(TabTitle::Process), "ssh box");
+
+            p.custom_name = Some("logs".into());
+            assert_eq!(p.title(TabTitle::Auto), "logs");
+            assert_eq!(p.title(TabTitle::Cwd), "logs");
+
+            p.custom_name = None;
+            p.cwd = None;
+            assert_eq!(p.cwd_display(), "~");
+            p.cwd = Some("/definitely/not/home".into());
+            assert_eq!(p.title(TabTitle::Cwd), "/definitely/not/home");
+            p.process = None;
+            assert_eq!(p.title(TabTitle::Process), "shell");
+        });
+    }
+
+    #[gpui::test]
+    fn status_priority_and_mark_seen(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        pane.update(cx, |p, _| {
+            assert_eq!(p.status(), TabStatus::None);
+            p.done_unseen = true;
+            assert_eq!(p.status(), TabStatus::Done);
+            p.done_failed = true;
+            assert_eq!(p.status(), TabStatus::Failed);
+            p.running_since = Some(Instant::now());
+            assert_eq!(p.status(), TabStatus::Running, "running beats done");
+            p.bell_unseen = true;
+            assert_eq!(p.status(), TabStatus::Bell, "bell beats everything");
+            p.mark_seen();
+            assert!(!p.done_unseen && !p.done_failed && !p.bell_unseen);
+            assert_eq!(p.status(), TabStatus::Running);
+            p.running_since = None;
+            assert_eq!(p.status(), TabStatus::None);
+            assert!(!p.is_busy(), "cat runs as the shell process itself");
+            assert!(p.agent_state().is_none() && !p.is_agent());
+        });
+    }
+
+    #[gpui::test]
+    fn agent_reports_drive_status(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let events = record(&pane, cx);
+        pane.update(cx, |p, cx| {
+            p.report_status(AgentState::Working, Some("compiling".into()), Some("s1".into()), cx);
+            assert_eq!(p.agent.as_ref().unwrap().kind, "agent", "unknown process: generic agent");
+            assert!(p.is_agent());
+            assert_eq!(p.status(), TabStatus::Running);
+            p.report_status(AgentState::NeedsInput, None, None, cx);
+            assert_eq!(p.agent_state(), Some(AgentState::NeedsInput));
+            assert_eq!(p.status(), TabStatus::NeedsInput);
+            p.report_status(AgentState::Idle, None, None, cx);
+            assert_eq!(p.status(), TabStatus::None);
+            p.done_unseen = true;
+            assert_eq!(p.status(), TabStatus::Done, "an agent's finished turn shows done");
+            p.process = Some(ProcessInfo { exe: "vim".into(), args: vec![] });
+            p.process_is_shell = false;
+            assert_eq!(p.process_display_name().as_deref(), Some("agent"), "the agent kind names the pane");
+        });
+        cx.run_until_parked();
+        let n = events.borrow().iter().filter(|e| matches!(e, PaneEvent::AgentChanged { .. })).count();
+        assert_eq!(n, 3);
+    }
+
+    #[gpui::test]
+    fn session_events_update_the_pane(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let events = record(&pane, cx);
+        let dir = tempfile::tempdir().unwrap();
+        pane.update(cx, |p, cx| {
+            p.handle_event(TerminalEvent::Title("htop".into()), cx);
+            assert_eq!(p.osc_title.as_deref(), Some("htop"));
+            p.handle_event(TerminalEvent::ResetTitle, cx);
+            assert_eq!(p.osc_title, None);
+
+            p.handle_event(TerminalEvent::Osc(OscEvent::Cwd(dir.path().to_path_buf())), cx);
+            assert!(p.shell_integration, "OSC 7 means shell integration");
+            assert_eq!(p.cwd.as_deref(), Some(dir.path()));
+
+            p.handle_event(TerminalEvent::Osc(OscEvent::PromptStart), cx);
+            p.handle_event(TerminalEvent::Osc(OscEvent::CommandStart), cx);
+            assert!(p.running_since.is_some());
+            assert_eq!(p.status(), TabStatus::Running);
+            p.handle_event(TerminalEvent::Osc(OscEvent::CommandEnd(Some(2))), cx);
+            assert!(p.running_since.is_none());
+            // A CommandEnd without a start reports nothing.
+            p.handle_event(TerminalEvent::Osc(OscEvent::CommandEnd(Some(0))), cx);
+
+            p.handle_event(
+                TerminalEvent::Osc(OscEvent::Notify { title: Some("t".into()), body: "b".into() }),
+                cx,
+            );
+            p.handle_event(TerminalEvent::ClipboardStore("from osc 52".into()), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(cx.read_from_clipboard().and_then(|c| c.text()).as_deref(), Some("from osc 52"));
+        let ev = events.borrow();
+        let finished: Vec<_> = ev
+            .iter()
+            .filter_map(|e| match e {
+                PaneEvent::CommandFinished { exit, .. } => Some(*exit),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finished, vec![Some(2)]);
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, PaneEvent::Notify { title: Some(t), body } if t == "t" && body == "b"))
+        );
+        assert!(ev.iter().filter(|e| matches!(e, PaneEvent::TitleChanged)).count() >= 4);
+    }
+
+    #[gpui::test]
+    fn visual_bell_flashes_briefly(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let events = record(&pane, cx);
+        pane.update(cx, |p, cx| p.handle_event(TerminalEvent::Bell, cx));
+        assert!(pane.read_with(cx, |p, _| p.bell_flash.is_some()));
+        cx.run_until_parked();
+        assert!(events.borrow().iter().any(|e| matches!(e, PaneEvent::Bell)));
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        assert!(pane.read_with(cx, |p, _| p.bell_flash.is_none()), "flash ends after ~150 ms");
+    }
+
+    #[gpui::test]
+    fn no_bell_does_not_flash(cx: &mut TestAppContext) {
+        let mut cfg = silent();
+        cfg.terminal.bell = nox_config::Bell::None;
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        let events = record(&pane, cx);
+        pane.update(cx, |p, cx| p.handle_event(TerminalEvent::Bell, cx));
+        cx.run_until_parked();
+        assert!(pane.read_with(cx, |p, _| p.bell_flash.is_none()));
+        assert!(events.borrow().iter().any(|e| matches!(e, PaneEvent::Bell)), "the tab is still marked");
+    }
+
+    #[gpui::test]
+    fn clipboard_load_answers_with_the_clipboard(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        cx.write_to_clipboard(ClipboardItem::new_string("secret".into()));
+        // Nothing observable but the reply to the PTY; this must just not misbehave.
+        pane.update(cx, |p, cx| p.handle_event(TerminalEvent::ClipboardLoad, cx));
+        cx.run_until_parked();
+    }
+
+    // ---- real shell -----------------------------------------------------------------------
+
+    #[gpui::test]
+    fn shell_output_reaches_the_screen(cx: &mut TestAppContext) {
+        let (pane, cx) =
+            open(cx, config_running("printf 'hello from sh'; exec cat >/dev/null"), PaneSpawn::default());
+        wait_until(cx, |cx| screen(&pane, cx).contains("hello from sh"));
+        pane.read_with(cx, |p, _| {
+            assert!(p.spawn_error.is_none());
+            assert!(p.exited.is_none());
+            let g = p.geom.clone().unwrap();
+            let size = p.session.as_ref().unwrap().size();
+            assert_eq!(
+                (usize::from(size.cols), usize::from(size.rows)),
+                (g.cols, g.rows),
+                "Term follows the layout"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn startup_command_runs_in_the_shell(cx: &mut TestAppContext) {
+        let spawn = PaneSpawn {
+            startup: Some(Startup::Run("echo started-$((40+2))".into())),
+            name: Some("job".into()),
+            ..PaneSpawn::default()
+        };
+        let (pane, cx) = open(cx, config_running("exec /bin/sh"), spawn);
+        wait_until(cx, |cx| screen(&pane, cx).contains("started-42"));
+        assert_eq!(pane.read_with(cx, |p, _| p.title(nox_config::TabTitle::Auto)), "job");
+    }
+
+    #[gpui::test]
+    fn exit_is_reported_and_restart_respawns(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, config_running("exit 3"), PaneSpawn::default());
+        let events = record(&pane, cx);
+        wait_until(cx, |cx| pane.read_with(cx, |p, _| p.exited.is_some()));
+        assert_eq!(pane.read_with(cx, |p, _| p.exited), Some(Some(3)));
+        // (`Exited` may fire before the test can subscribe, so only the state is checked.)
+        assert!(!pane.read_with(cx, |p, _| p.is_busy()));
+
+        // ↵ on an exited pane closes it.
+        cx.simulate_keystrokes("enter");
+        assert!(events.borrow().iter().any(|e| matches!(e, PaneEvent::Close)));
+
+        // ⌘R restarts it: a new shell is spawned (which exits again at once, so whether
+        // `exited` is still clear right after the restart depends on timing — check the pid).
+        let pid = pane.read_with(cx, |p, _| p.session.as_ref().map(TerminalSession::pid));
+        let guard = spawn_lock();
+        cx.dispatch_action(RestartPane);
+        drop(guard);
+        let new_pid = pane.read_with(cx, |p, _| p.session.as_ref().map(TerminalSession::pid));
+        assert!(new_pid.is_some() && new_pid != pid, "restart spawns a new session");
+        wait_until(cx, |cx| pane.read_with(cx, |p, _| p.exited.is_some()));
+        assert_eq!(pane.read_with(cx, |p, _| p.exited), Some(Some(3)));
+    }
+
+    #[gpui::test]
+    fn restart_is_a_no_op_while_running(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let pid = pane.read_with(cx, |p, _| p.session.as_ref().unwrap().pid());
+        pane.update(cx, Pane::restart);
+        assert_eq!(pane.read_with(cx, |p, _| p.session.as_ref().unwrap().pid()), pid);
+    }
+
+    // ---- keyboard, paste, IME -------------------------------------------------------------
+
+    #[gpui::test]
+    fn keys_are_encoded_to_the_pty(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::new();
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        let events = record(&pane, cx);
+        // Plain text goes through the input handler, the rest through the key encoder.
+        cx.simulate_keystrokes("a ctrl-c up enter tab backspace escape");
+        cap.expect(cx, b"a\x03\x1b[A\r\t\x7f\x1b");
+        assert!(pane.read_with(cx, |p, _| p.last_user_input.is_some()));
+        assert!(events.borrow().iter().any(|e| matches!(e, PaneEvent::UserInput)));
+    }
+
+    #[gpui::test]
+    fn app_cursor_mode_changes_arrow_keys(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::with_prelude(r"\033[?1h");
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        cx.simulate_keystrokes("up down");
+        cap.expect(cx, b"\x1bOA\x1bOB");
+    }
+
+    #[gpui::test]
+    fn shift_enter_and_send_bytes(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::new();
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        cx.dispatch_action(SendShiftEnter);
+        pane.update(cx, |p, cx| p.send_bytes(b"xyz", cx));
+        cap.expect(cx, b"\x1b\rxyz");
+    }
+
+    #[gpui::test]
+    fn paste_is_plain_or_bracketed(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::with_prelude(r"\033[?2004h");
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        cx.write_to_clipboard(ClipboardItem::new_string("one\ntwo".into()));
+        // Bracketed mode: multi-line text is pasted without asking.
+        cx.dispatch_action(Paste);
+        cap.expect(cx, b"\x1b[200~one\rtwo\x1b[201~");
+    }
+
+    #[gpui::test]
+    fn multiline_paste_outside_bracketed_mode_asks_first(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::new();
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        pane.update_in(cx, |p, window, cx| p.paste_text("ls\nrm -rf x\n", window, cx));
+        cx.run_until_parked();
+        assert!(cx.update(|window, cx| crate::dialog::is_open(window, cx)), "a confirmation sheet is shown");
+        // A single line (trailing newline ignored) goes straight through.
+        cx.update(|_, cx| cx.set_global(crate::dialog::ActiveDialog(None)));
+        pane.update_in(cx, |p, window, cx| p.paste_text("pwd", window, cx));
+        cap.expect(cx, b"pwd");
+    }
+
+    #[gpui::test]
+    fn ime_marked_text_is_shown_then_committed(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::new();
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        pane.update_in(cx, |p, window, cx| {
+            p.replace_and_mark_text_in_range(None, "に", None, window, cx);
+            assert_eq!(p.marked_text.as_deref(), Some("に"));
+            assert_eq!(p.marked_text_range(window, cx), Some(0..1));
+            assert_eq!(p.text_for_range(0..1, &mut None, window, cx), None);
+            assert_eq!(p.selected_text_range(false, window, cx).map(|s| s.range), Some(0..0));
+            assert_eq!(p.character_index_for_point(point(px(0.), px(0.)), window, cx), None);
+            let b = p.bounds_for_range(0..1, Bounds::default(), window, cx).expect("cursor bounds");
+            let g = p.geom.clone().unwrap();
+            assert_eq!(b.size, gpui::size(g.cell_w, g.cell_h));
+        });
+        // Marked text is not sent; keys are swallowed while composing.
+        cx.simulate_keystrokes("left");
+        pane.update_in(cx, |p, window, cx| {
+            p.unmark_text(window, cx);
+            assert!(p.marked_text.is_none());
+            p.replace_and_mark_text_in_range(None, "", None, window, cx);
+            assert!(p.marked_text.is_none(), "empty composition clears");
+            p.replace_text_in_range(None, "日本", window, cx);
+            p.replace_text_in_range(None, "", window, cx);
+        });
+        cap.expect(cx, "日本".as_bytes());
+    }
+
+    // ---- selection and clipboard ----------------------------------------------------------
+
+    fn selection(pane: &Entity<Pane>, cx: &mut VisualTestContext) -> Option<String> {
+        pane.read_with(cx, |p, _| p.session.as_ref().unwrap().term().lock().selection_to_string())
+    }
+
+    fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
+        cx.read_from_clipboard().and_then(|c| c.text())
+    }
+
+    fn mouse_down(cx: &mut VisualTestContext, pos: Point<Pixels>, clicks: usize, modifiers: Modifiers) {
+        cx.simulate_event(MouseDownEvent {
+            position: pos,
+            modifiers,
+            button: MouseButton::Left,
+            click_count: clicks,
+            first_mouse: false,
+        });
+    }
+
+    fn mouse_up(cx: &mut VisualTestContext, pos: Point<Pixels>) {
+        cx.simulate_event(MouseUpEvent {
+            position: pos,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Left,
+            click_count: 1,
+        });
+    }
+
+    #[gpui::test]
+    fn drag_selects_and_copies_on_release(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"hello world   \r\nsecond line");
+        let (a, b) = (cell(&pane, cx, 0, 0), cell_r(&pane, cx, 4, 0));
+        mouse_down(cx, a, 1, Modifiers::none());
+        assert_eq!(selection(&pane, cx), None, "a plain click selects nothing");
+        cx.simulate_mouse_move(b, MouseButton::Left, Modifiers::none());
+        assert_eq!(selection(&pane, cx).as_deref(), Some("hello"));
+        mouse_up(cx, b);
+        assert_eq!(clipboard(cx).as_deref(), Some("hello"), "copy on select");
+
+        // ⇧-click extends the selection.
+        let at = cell(&pane, cx, 7, 1);
+        mouse_down(cx, at, 1, Modifiers::shift());
+        let at = cell(&pane, cx, 7, 1);
+        mouse_up(cx, at);
+        assert_eq!(selection(&pane, cx).as_deref(), Some("hello world\nsecond "));
+        assert_eq!(clipboard(cx).as_deref(), Some("hello world\nsecond"), "trailing spaces trimmed");
+    }
+
+    #[gpui::test]
+    fn plain_click_copies_nothing(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"abc");
+        cx.write_to_clipboard(ClipboardItem::new_string("keep".into()));
+        let at = cell(&pane, cx, 1, 0);
+        mouse_down(cx, at, 1, Modifiers::none());
+        let at = cell(&pane, cx, 1, 0);
+        mouse_up(cx, at);
+        assert_eq!(selection(&pane, cx), None);
+        assert_eq!(clipboard(cx).as_deref(), Some("keep"));
+    }
+
+    #[gpui::test]
+    fn double_and_triple_click_select_word_and_line(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"alpha beta(gamma)\r\nnext");
+        let at = cell(&pane, cx, 7, 0);
+        mouse_down(cx, at, 2, Modifiers::none());
+        assert_eq!(selection(&pane, cx).as_deref(), Some("beta"), "word separators include (");
+        let at = cell(&pane, cx, 7, 0);
+        mouse_up(cx, at);
+        assert_eq!(clipboard(cx).as_deref(), Some("beta"));
+        let at = cell(&pane, cx, 2, 0);
+        mouse_down(cx, at, 3, Modifiers::none());
+        assert_eq!(selection(&pane, cx).as_deref(), Some("alpha beta(gamma)\n"));
+        let at = cell(&pane, cx, 2, 0);
+        mouse_up(cx, at);
+        assert_eq!(clipboard(cx).as_deref(), Some("alpha beta(gamma)"));
+    }
+
+    #[gpui::test]
+    fn alt_drag_selects_a_block(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"abcdef\r\nghijkl\r\nmnopqr");
+        let at = cell(&pane, cx, 1, 0);
+        mouse_down(cx, at, 1, Modifiers::alt());
+        let at = cell_r(&pane, cx, 2, 2);
+        cx.simulate_mouse_move(at, MouseButton::Left, Modifiers::alt());
+        assert_eq!(selection(&pane, cx).as_deref(), Some("bc\nhi\nno"));
+        // Moving without the button ends the drag.
+        let at = cell(&pane, cx, 4, 2);
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        assert!(pane.read_with(cx, |p, _| p.selecting.is_none()));
+    }
+
+    #[gpui::test]
+    fn copy_select_all_and_clear(cx: &mut TestAppContext) {
+        let mut cfg = silent();
+        cfg.terminal.copy_on_select = false;
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        feed(&pane, cx, b"one   \r\ntwo");
+        cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+        cx.dispatch_action(Copy);
+        assert_eq!(clipboard(cx).as_deref(), Some("before"), "⌘C without a selection does nothing");
+        let at = cell(&pane, cx, 0, 0);
+        mouse_down(cx, at, 1, Modifiers::none());
+        let at = cell(&pane, cx, 1, 0);
+        cx.simulate_mouse_move(at, MouseButton::Left, Modifiers::none());
+        let at = cell(&pane, cx, 1, 0);
+        mouse_up(cx, at);
+        assert_eq!(clipboard(cx).as_deref(), Some("before"), "copy_on_select = false");
+
+        cx.dispatch_action(SelectAll);
+        cx.dispatch_action(Copy);
+        let all = clipboard(cx).unwrap();
+        assert!(all.starts_with("one\ntwo"), "{all:?}");
+
+        feed(&pane, cx, &b"x\r\n".repeat(40));
+        assert!(
+            pane.read_with(cx, |p, _| p.session.as_ref().unwrap().term().lock().grid().history_size()) > 0
+        );
+        cx.dispatch_action(ClearBuffer);
+        pane.read_with(cx, |p, _| {
+            let term = p.session.as_ref().unwrap().term().lock();
+            assert_eq!(term.grid().history_size(), 0, "scrollback cleared");
+            assert!(term.selection.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn typing_clears_the_selection(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"word");
+        cx.dispatch_action(SelectAll);
+        assert!(selection(&pane, cx).is_some());
+        cx.simulate_keystrokes("ctrl-l");
+        assert!(selection(&pane, cx).is_none());
+    }
+
+    #[gpui::test]
+    fn copy_last_output_needs_shell_integration(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+        cx.dispatch_action(CopyLastOutput);
+        assert_eq!(clipboard(cx).as_deref(), Some("unchanged"));
+        let _ = pane;
+    }
+
+    #[gpui::test]
+    fn copy_last_output_with_prompt_marks(cx: &mut TestAppContext) {
+        let script = r"printf '\033]133;A\007$ \033]133;B\007ls\r\n\033]133;C\007file-a\r\nfile-b\r\n\033]133;D;0\007\033]133;A\007$ '; exec cat >/dev/null";
+        let (pane, cx) = open(cx, config_running(script), PaneSpawn::default());
+        wait_until(cx, |cx| pane.read_with(cx, |p, _| p.session.as_ref().unwrap().last_output().is_some()));
+        cx.dispatch_action(CopyLastOutput);
+        assert_eq!(clipboard(cx).as_deref(), Some("file-a\nfile-b"));
+    }
+
+    // ---- scrolling ------------------------------------------------------------------------
+
+    fn offset(pane: &Entity<Pane>, cx: &mut VisualTestContext) -> usize {
+        pane.read_with(cx, |p, _| p.session.as_ref().unwrap().term().lock().grid().display_offset())
+    }
+
+    fn history(pane: &Entity<Pane>, cx: &mut VisualTestContext) -> usize {
+        pane.read_with(cx, |p, _| p.session.as_ref().unwrap().term().lock().grid().history_size())
+    }
+
+    fn fill_lines(pane: &Entity<Pane>, cx: &mut VisualTestContext, n: usize) {
+        let text: String = (0..n).map(|i| format!("line {i}\r\n")).collect::<Vec<_>>().concat();
+        feed(pane, cx, text.as_bytes());
+    }
+
+    fn wheel(cx: &mut VisualTestContext, pos: Point<Pixels>, delta: ScrollDelta, modifiers: Modifiers) {
+        cx.simulate_event(ScrollWheelEvent {
+            position: pos,
+            delta,
+            modifiers,
+            ..ScrollWheelEvent::default()
+        });
+    }
+
+    #[gpui::test]
+    fn trackpad_scroll_is_pixel_smooth(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        fill_lines(&pane, cx, 100);
+        let g = geom(&pane, cx);
+        let h = f32::from(g.cell_h);
+        let pos = cell(&pane, cx, 3, 3);
+        wheel(cx, pos, ScrollDelta::Pixels(point(px(0.), px(h * 3.5))), Modifiers::none());
+        assert_eq!(offset(&pane, cx), 3);
+        let frac = pane.read_with(cx, |p, _| p.scroll.frac);
+        assert!((frac - h * 0.5).abs() < 0.01, "sub-line offset {frac}");
+
+        // New output while scrolled up shows the pill; ⌘End jumps back.
+        pane.update(cx, |p, cx| p.handle_event(TerminalEvent::Wakeup, cx));
+        assert!(pane.read_with(cx, |p, _| p.new_output_below));
+        cx.dispatch_action(ScrollToBottom);
+        assert_eq!(offset(&pane, cx), 0);
+        assert!(pane.read_with(cx, |p, _| !p.new_output_below && p.scroll.frac == 0.0));
+
+        // Scrolling back down to the bottom hides the pill too.
+        wheel(cx, pos, ScrollDelta::Pixels(point(px(0.), px(h * 2.))), Modifiers::none());
+        pane.update(cx, |p, _| p.new_output_below = true);
+        wheel(cx, pos, ScrollDelta::Pixels(point(px(0.), px(-h * 10.))), Modifiers::none());
+        assert_eq!(offset(&pane, cx), 0);
+        assert!(!pane.read_with(cx, |p, _| p.new_output_below));
+    }
+
+    #[gpui::test]
+    fn wheel_lines_use_the_multiplier(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        fill_lines(&pane, cx, 100);
+        let at = cell(&pane, cx, 0, 0);
+        wheel(cx, at, ScrollDelta::Lines(point(0., 2.)), Modifiers::none());
+        assert_eq!(offset(&pane, cx), 6, "2 notches × 3 lines");
+    }
+
+    #[gpui::test]
+    fn wheel_lines_animate_when_smooth(cx: &mut TestAppContext) {
+        let mut cfg = silent();
+        cfg.terminal.smooth_scroll_duration = 40;
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        fill_lines(&pane, cx, 100);
+        let at = cell(&pane, cx, 0, 0);
+        wheel(cx, at, ScrollDelta::Lines(point(0., 1.)), Modifiers::none());
+        // Each frame (prepaint) advances the animation (in real time, so it may be done already).
+        wait_until(cx, |cx| {
+            pane.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            !pane.read_with(cx, |p, _| p.scroll.animating())
+        });
+        // 3 lines in pixels; the eased steps can sum to a hair under a whole line, which
+        // leaves 2 lines + a fraction of ~1 line (see the report), so compare in pixels.
+        let h = f32::from(geom(&pane, cx).cell_h);
+        let scrolled = offset(&pane, cx) as f32 * h + pane.read_with(cx, |p, _| p.scroll.frac);
+        assert!((scrolled - 3. * h).abs() < 0.01, "scrolled {scrolled} px");
+    }
+
+    #[gpui::test]
+    fn page_top_and_bottom_actions(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        fill_lines(&pane, cx, 100);
+        let rows = geom(&pane, cx).rows;
+        cx.dispatch_action(ScrollPageUp);
+        assert_eq!(offset(&pane, cx), rows);
+        cx.dispatch_action(ScrollPageDown);
+        assert_eq!(offset(&pane, cx), 0);
+        cx.dispatch_action(ScrollToTop);
+        assert_eq!(offset(&pane, cx), history(&pane, cx));
+        assert!(pane.read_with(cx, |p, _| p.scroll.last_scroll.is_some()), "shows the scrollbar");
+        // Typing jumps to the bottom (scroll_on_input).
+        cx.simulate_keystrokes("ctrl-l");
+        assert_eq!(offset(&pane, cx), 0);
+    }
+
+    #[gpui::test]
+    fn prompt_jumps_without_marks_move_one_line(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        fill_lines(&pane, cx, 100);
+        cx.dispatch_action(PreviousPrompt);
+        cx.dispatch_action(PreviousPrompt);
+        assert_eq!(offset(&pane, cx), 2);
+        cx.dispatch_action(NextPrompt);
+        assert_eq!(offset(&pane, cx), 1);
+    }
+
+    #[gpui::test]
+    fn prompt_jumps_follow_marks(cx: &mut TestAppContext) {
+        // Three prompts, 30 lines of output each.
+        let script = r"i=0; while [ $i -lt 3 ]; do printf '\033]133;A\007$ p%s\r\n' $i; j=0; while [ $j -lt 30 ]; do printf 'out\r\n'; j=$((j+1)); done; i=$((i+1)); done; printf 'END'; exec cat >/dev/null";
+        let (pane, cx) = open(cx, config_running(script), PaneSpawn::default());
+        wait_until(cx, |cx| screen(&pane, cx).contains("END"));
+        let prompts = pane.read_with(cx, |p, _| p.session.as_ref().unwrap().prompt_lines());
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        let top_line = |pane: &Entity<Pane>, cx: &mut VisualTestContext| -(offset(pane, cx) as i32);
+        cx.dispatch_action(PreviousPrompt);
+        let p_last = *prompts.iter().rev().find(|&&l| l < 0).unwrap();
+        assert_eq!(top_line(&pane, cx), p_last, "the previous prompt is at the top");
+        cx.dispatch_action(PreviousPrompt);
+        cx.dispatch_action(PreviousPrompt);
+        assert_eq!(top_line(&pane, cx), prompts[0]);
+        cx.dispatch_action(PreviousPrompt);
+        assert_eq!(top_line(&pane, cx), prompts[0], "no prompt above the first");
+        cx.dispatch_action(NextPrompt);
+        assert_eq!(top_line(&pane, cx), prompts[1]);
+        for _ in 0..3 {
+            cx.dispatch_action(NextPrompt);
+        }
+        assert_eq!(offset(&pane, cx), 0, "past the last prompt: bottom");
+    }
+
+    #[gpui::test]
+    fn alternate_screen_wheel_sends_arrows(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::with_prelude(r"\033[?1049h");
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        let h = f32::from(geom(&pane, cx).cell_h);
+        let pos = cell(&pane, cx, 0, 0);
+        wheel(cx, pos, ScrollDelta::Lines(point(0., 2.)), Modifiers::none());
+        // Half a line accumulates; the second half completes one more line.
+        wheel(cx, pos, ScrollDelta::Pixels(point(px(0.), px(-h * 0.5))), Modifiers::none());
+        wheel(cx, pos, ScrollDelta::Pixels(point(px(0.), px(-h * 0.6))), Modifiers::none());
+        cap.expect(cx, b"\x1b[A\x1b[A\x1b[B");
+        assert_eq!(offset(&pane, cx), 0, "the alternate screen has no scrollback");
+    }
+
+    // ---- mouse reporting ------------------------------------------------------------------
+
+    #[gpui::test]
+    fn mouse_reports_go_to_the_program(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::with_prelude(r"\033[?1000h");
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        let events = record(&pane, cx);
+        let pos = cell(&pane, cx, 2, 1);
+        mouse_down(cx, pos, 1, Modifiers::none());
+        mouse_up(cx, pos);
+        // Right click is reported too instead of opening the context menu.
+        cx.simulate_event(MouseDownEvent {
+            position: pos,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Right,
+            click_count: 1,
+            first_mouse: false,
+        });
+        wheel(cx, pos, ScrollDelta::Lines(point(0., 1.)), Modifiers::none());
+        // X10 encoding: ESC [ M, button + 32, col + 33, row + 33.
+        let (c, r) = (b'!' + 2, b'!' + 1);
+        cap.expect(
+            cx,
+            &[
+                0x1b, b'[', b'M', 32, c, r, 0x1b, b'[', b'M', 35, c, r, 0x1b, b'[', b'M', 34, c, r, 0x1b,
+                b'[', b'M', 96, c, r,
+            ],
+        );
+        assert!(!events.borrow().iter().any(|e| matches!(e, PaneEvent::ContextMenu)));
+        assert_eq!(selection(&pane, cx), None);
+
+        // ⇧ forces a local selection.
+        let at = cell(&pane, cx, 0, 0);
+        mouse_down(cx, at, 1, Modifiers::shift());
+        let at = cell_r(&pane, cx, 3, 0);
+        cx.simulate_mouse_move(at, MouseButton::Left, Modifiers::shift());
+        assert_eq!(selection(&pane, cx).as_deref(), Some("READ"));
+    }
+
+    #[gpui::test]
+    fn right_click_opens_the_context_menu(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let events = record(&pane, cx);
+        let at = cell(&pane, cx, 1, 1);
+        cx.simulate_event(MouseDownEvent {
+            position: at,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Right,
+            click_count: 1,
+            first_mouse: false,
+        });
+        assert!(events.borrow().iter().any(|e| matches!(e, PaneEvent::ContextMenu)));
+    }
+
+    #[gpui::test]
+    fn dragging_past_the_edge_autoscrolls(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        fill_lines(&pane, cx, 100);
+        let g = geom(&pane, cx);
+        let at = cell(&pane, cx, 2, 2);
+        mouse_down(cx, at, 1, Modifiers::none());
+        // GPUI only delivers `on_mouse_move` while the pointer is over the grid, so a move past
+        // the edge is fed to the handler directly (see the report: the wiring never does it).
+        let above = point(g.origin.x + px(20.), g.bounds.top() - px(40.));
+        let drag = |pos: Point<Pixels>| MouseMoveEvent {
+            position: pos,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::none(),
+        };
+        pane.update_in(cx, |p, window, cx| p.on_mouse_move(&drag(above), window, cx));
+        assert!(pane.read_with(cx, |p, _| p.autoscroll.is_some()));
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        let off = offset(&pane, cx);
+        assert!(off >= 3, "scrolled {off} lines into history, 2 per 30 ms tick");
+        let s = selection(&pane, cx).unwrap();
+        assert!(s.lines().count() > 3, "the selection grew with the scroll: {s:?}");
+        // Back inside: autoscroll stops.
+        let inside = cell(&pane, cx, 3, 3);
+        pane.update_in(cx, |p, window, cx| p.on_mouse_move(&drag(inside), window, cx));
+        assert!(pane.read_with(cx, |p, _| p.autoscroll.is_none()));
+        // Below the bottom edge it scrolls back down.
+        let below = point(g.origin.x + px(20.), g.bounds.bottom() + px(30.));
+        pane.update_in(cx, |p, window, cx| p.on_mouse_move(&drag(below), window, cx));
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        assert!(offset(&pane, cx) < off);
+        mouse_up(cx, inside);
+        assert!(pane.read_with(cx, |p, _| p.autoscroll.is_none() && p.selecting.is_none()));
+    }
+
+    // ---- find -----------------------------------------------------------------------------
+
+    fn set_query(pane: &Entity<Pane>, cx: &mut VisualTestContext, q: &str) {
+        let input = pane.read_with(cx, |p, _| p.find.as_ref().unwrap().input.clone());
+        input.update(cx, |i, cx| i.set_text(q, cx));
+        pane.update(cx, Pane::run_search);
+        cx.run_until_parked();
+    }
+
+    fn find_state(pane: &Entity<Pane>, cx: &mut VisualTestContext) -> (usize, Option<usize>) {
+        pane.read_with(cx, |p, _| (p.find_highlights().len(), p.find_current_index()))
+    }
+
+    #[gpui::test]
+    fn find_counts_matches_and_steps_through_them(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"foo bar\r\nFOO baz\r\nfoo.qux\r\nfo+o\r\n");
+        assert_eq!(find_state(&pane, cx), (0, None));
+        cx.dispatch_action(Find);
+        let input = pane.read_with(cx, |p, _| p.find.as_ref().unwrap().input.clone());
+        assert!(cx.update(|window, cx| input.focus_handle(cx).is_focused(window)), "⌘F focuses the query");
+
+        // Typing in the field searches as you type.
+        cx.simulate_input("foo");
+        assert_eq!(find_state(&pane, cx), (3, Some(2)), "case-insensitive; starts at the bottom match");
+        cx.dispatch_action(FindNext);
+        assert_eq!(find_state(&pane, cx).1, Some(0), "wraps around");
+        cx.dispatch_action(FindPrevious);
+        assert_eq!(find_state(&pane, cx).1, Some(2));
+        cx.simulate_keystrokes("enter");
+        assert_eq!(find_state(&pane, cx).1, Some(0), "↵ = next");
+
+        // (A lowercase query stays case-insensitive even with "Aa" on: alacritty's smart case;
+        // see the report.) An uppercase query honours the toggle.
+        set_query(&pane, cx, "FOO");
+        assert_eq!(find_state(&pane, cx).0, 3, "case-insensitive by default");
+        pane.update(cx, |p, cx| {
+            p.find.as_mut().unwrap().case_sensitive = true;
+            p.run_search(cx);
+        });
+        assert_eq!(find_state(&pane, cx).0, 1);
+
+        // Literal by default: `.` and `+` are not regex syntax.
+        set_query(&pane, cx, "foo.");
+        assert_eq!(find_state(&pane, cx).0, 1);
+        set_query(&pane, cx, "fo+o");
+        assert_eq!(find_state(&pane, cx).0, 1);
+        pane.update(cx, |p, cx| {
+            p.find.as_mut().unwrap().regex = true;
+            p.run_search(cx);
+        });
+        assert_eq!(find_state(&pane, cx).0, 3, "regex fo+o matches foo, foo, foo");
+        set_query(&pane, cx, "(unclosed");
+        assert_eq!(find_state(&pane, cx), (0, None), "an invalid regex matches nothing");
+        set_query(&pane, cx, "");
+        assert_eq!(find_state(&pane, cx), (0, None));
+        cx.dispatch_action(FindNext);
+
+        // ⌘F again keeps the query; Esc closes and focuses the terminal.
+        cx.dispatch_action(Find);
+        assert!(pane.read_with(cx, |p, _| p.find.is_some()));
+        cx.simulate_keystrokes("escape");
+        assert!(pane.read_with(cx, |p, _| p.find.is_none()));
+        assert!(cx.update(|window, cx| pane.read(cx).focus_handle.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn find_reveals_matches_in_scrollback(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"needle\r\n");
+        fill_lines(&pane, cx, 100);
+        cx.dispatch_action(Find);
+        cx.simulate_input("needle");
+        assert_eq!(find_state(&pane, cx), (1, Some(0)));
+        assert!(offset(&pane, cx) > 0, "scrolled up to the match");
+    }
+
+    #[gpui::test]
+    fn keys_go_to_the_find_field_not_the_pty(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::new();
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        cx.dispatch_action(Find);
+        cx.simulate_keystrokes("x ctrl-c");
+        cx.simulate_keystrokes("escape");
+        cx.simulate_keystrokes("y");
+        cap.expect(cx, b"y");
+    }
+
+    // ---- links ----------------------------------------------------------------------------
+
+    fn link_at(
+        pane: &Entity<Pane>,
+        cx: &mut VisualTestContext,
+        col: usize,
+        row: usize,
+    ) -> Option<HoveredLink> {
+        let pos = cell(pane, cx, col, row);
+        pane.read_with(cx, |p, cx| p.link_at(pos, cx))
+    }
+
+    #[gpui::test]
+    fn links_are_found_under_the_pointer(cx: &mut TestAppContext) {
+        let tmp = tempfile::tempdir().unwrap();
+        // Canonical: without OSC 7 the cwd is read back from the process (`/private/var/…`).
+        let dir = tmp.path().canonicalize().unwrap();
+        std::fs::write(dir.join("notes.txt"), "").unwrap();
+        let (pane, cx) = open(cx, silent(), PaneSpawn { cwd: Some(dir.clone()), ..PaneSpawn::default() });
+        feed(&pane, cx, b"see https://example.com/a here\r\nnotes.txt:3\r\n\x1b]8;;https://nox.dev\x1b\\docs\x1b]8;;\x1b\\ plain");
+        let url = link_at(&pane, cx, 8, 0).expect("url");
+        assert_eq!(url.target, LinkTarget::Url("https://example.com/a".into()));
+        assert_eq!(url.spans, vec![(Line(0), 4, 24)]);
+        assert_eq!(link_at(&pane, cx, 1, 0), None, "plain words are not links");
+
+        let path = link_at(&pane, cx, 2, 1).expect("path");
+        assert_eq!(path.target, LinkTarget::Path(dir.join("notes.txt")));
+        assert_eq!(path.spans, vec![(Line(1), 0, 10)]);
+
+        let osc8 = link_at(&pane, cx, 2, 2).expect("osc 8");
+        assert_eq!(osc8.target, LinkTarget::Url("https://nox.dev".into()));
+        assert_eq!(osc8.spans, vec![(Line(2), 0, 3)], "spans the cells carrying the link");
+        assert_eq!(link_at(&pane, cx, 6, 2), None);
+    }
+
+    #[gpui::test]
+    fn wrapped_urls_span_lines(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let cols = geom(&pane, cx).cols;
+        let url = format!("https://example.com/{}", "x".repeat(cols));
+        feed(&pane, cx, url.as_bytes());
+        let l = link_at(&pane, cx, 3, 1).expect("hovering the wrapped part");
+        assert_eq!(l.target, LinkTarget::Url(url.clone()));
+        assert_eq!(l.spans, vec![(Line(0), 0, cols - 1), (Line(1), 0, url.len() - cols - 1)]);
+        assert_eq!(link_at(&pane, cx, 0, 0).map(|l| l.target), Some(LinkTarget::Url(url)));
+    }
+
+    #[gpui::test]
+    fn cmd_hover_underlines_and_cmd_click_opens(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"go to https://nox.dev/x now");
+        let at = cell(&pane, cx, 10, 0);
+        cx.simulate_mouse_move(at, None, Modifiers::command());
+        assert!(pane.read_with(cx, |p, _| p.hovered_link.is_some()));
+        // Releasing ⌘ removes the underline.
+        cx.simulate_modifiers_change(Modifiers::none());
+        assert!(pane.read_with(cx, |p, _| p.hovered_link.is_none()));
+        // Pressing ⌘ over a link shows it again.
+        cx.simulate_modifiers_change(Modifiers::command());
+        assert!(pane.read_with(cx, |p, _| p.hovered_link.is_some()));
+        mouse_down(cx, at, 1, Modifiers::command());
+        assert_eq!(cx.opened_url().as_deref(), Some("https://nox.dev/x"));
+        assert_eq!(selection(&pane, cx), None, "⌘-click on a link doesn't select");
+        // Moving without ⌘ drops the hover.
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        assert!(pane.read_with(cx, |p, _| p.hovered_link.is_none()));
+    }
+
+    #[gpui::test]
+    fn cmd_click_opens_files_with_the_default_app(cx: &mut TestAppContext) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        std::fs::write(dir.join("a.md"), "").unwrap();
+        let (pane, cx) = open(cx, silent(), PaneSpawn { cwd: Some(dir.clone()), ..PaneSpawn::default() });
+        feed(&pane, cx, b"a.md");
+        let at = cell(&pane, cx, 1, 0);
+        mouse_down(cx, at, 1, Modifiers::command());
+        assert_eq!(cx.opened_url(), Some(format!("file://{}", dir.join("a.md").display())));
+    }
+
+    // ---- agents and resume ----------------------------------------------------------------
+
+    fn launched_agent(command: &str) -> AgentInfo {
+        AgentInfo {
+            kind: "claude".into(),
+            tracker: AgentTracker::new("claude", Instant::now()),
+            launch: Some(AgentLaunch {
+                kind: "claude".into(),
+                command: command.into(),
+                start_cwd: PathBuf::from("/"),
+                resumed: true,
+            }),
+            cmdline: command.into(),
+        }
+    }
+
+    #[gpui::test]
+    fn quick_failing_resume_shows_the_banner(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        pane.update(cx, |p, cx| {
+            p.agent = Some(launched_agent("claude --resume s1"));
+            p.handle_event(TerminalEvent::Osc(OscEvent::CommandStart), cx);
+            p.handle_event(TerminalEvent::Osc(OscEvent::CommandEnd(Some(1))), cx);
+            assert!(p.resume_failed);
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn enter_after_a_failed_resume_starts_a_new_session(cx: &mut TestAppContext) {
+        let (cap, cfg) = Capture::new();
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        Capture::ready(&pane, cx);
+        pane.update(cx, |p, cx| {
+            p.agent = Some(launched_agent("claude --resume s1"));
+            p.resume_failed = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        assert!(!pane.read_with(cx, |p, _| p.resume_failed));
+        // ⌘R retries the resume command in the running shell.
+        pane.update(cx, |p, _| p.resume_failed = true);
+        cx.dispatch_action(RestartPane);
+        assert!(!pane.read_with(cx, |p, _| p.resume_failed));
+        cap.expect(cx, b"claude\rclaude --resume s1\r");
+    }
+
+    #[gpui::test]
+    fn restart_after_a_failed_resume_reruns_the_command(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        pane.update(cx, |p, cx| {
+            p.agent = Some(launched_agent("claude --resume s1"));
+            p.resume_failed = true;
+            p.osc_title = Some("old".into());
+            p.handle_event(TerminalEvent::Exited(Some(1)), cx);
+            assert_eq!(p.agent_state(), Some(AgentState::Exited));
+        });
+        cx.run_until_parked();
+        // ↵ on an exited pane whose resume failed starts a new agent session (not close).
+        let events = record(&pane, cx);
+        cx.simulate_keystrokes("enter");
+        assert!(!events.borrow().iter().any(|e| matches!(e, PaneEvent::Close)));
+        pane.update(cx, |p, _| p.resume_failed = true);
+        let guard = spawn_lock();
+        pane.update(cx, Pane::restart);
+        drop(guard);
+        pane.read_with(cx, |p, _| {
+            assert!(matches!(&p.spawn.startup, Some(Startup::Run(c)) if c == "claude --resume s1"));
+            assert!(p.agent.is_none() && p.osc_title.is_none() && p.exited.is_none() && !p.resume_failed);
+        });
+    }
+
+    #[gpui::test]
+    fn agent_launch_is_tracked_from_the_start(cx: &mut TestAppContext) {
+        let spawn = PaneSpawn {
+            agent: Some(AgentLaunch {
+                kind: "codex".into(),
+                command: "codex".into(),
+                start_cwd: PathBuf::from("/"),
+                resumed: false,
+            }),
+            startup: Some(Startup::Type("codex".into())),
+            ..PaneSpawn::default()
+        };
+        let (pane, cx) = open(cx, silent(), spawn);
+        let events = record(&pane, cx);
+        pane.read_with(cx, |p, _| {
+            let a = p.agent.as_ref().expect("agent");
+            assert_eq!(a.kind, "codex");
+            assert_eq!(a.cmdline, "codex");
+        });
+        pane.update(cx, |p, cx| {
+            // Focusing the pane refreshed the process info, which sees the shell (`cat`) in the
+            // foreground, not codex: the agent counts as exited until its process shows up.
+            // Start over with a live tracker; only events that don't refresh are fed.
+            p.agent.as_mut().unwrap().tracker = AgentTracker::new("codex", Instant::now());
+            p.handle_event(
+                TerminalEvent::Osc(OscEvent::Notify { title: None, body: "needs you".into() }),
+                cx,
+            );
+            assert_eq!(p.agent_state(), Some(AgentState::NeedsInput));
+            p.send_bytes(b"y", cx);
+            assert_eq!(p.agent_state(), Some(AgentState::Working), "input resumes the turn");
+        });
+        cx.run_until_parked();
+        assert!(events.borrow().iter().any(|e| matches!(e, PaneEvent::AgentChanged { transition: Some(_) })));
+    }
+
+    // ---- process detection ----------------------------------------------------------------
+
+    /// `set -m` gives the job its own process group in the foreground of the PTY.
+    fn job(cmd: &str) -> nox_config::Config {
+        config_running(&format!("set -m; {cmd}; printf DONE; exec cat >/dev/null"))
+    }
+
+    fn refresh_until(pane: &Entity<Pane>, cx: &mut VisualTestContext, f: impl Fn(&Pane) -> bool) {
+        wait_until(cx, |cx| {
+            pane.update(cx, Pane::refresh_info);
+            pane.read_with(cx, |p, _| f(p))
+        });
+    }
+
+    #[gpui::test]
+    fn foreground_process_names_the_pane_and_is_timed(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, job("/bin/sleep 0.5"), PaneSpawn::default());
+        let events = record(&pane, cx);
+        // (Right after the fork the job is still `bash` until it execs `sleep`.)
+        refresh_until(&pane, cx, |p| {
+            !p.process_is_shell && p.process.as_ref().is_some_and(|p| p.exe == "sleep")
+        });
+        pane.read_with(cx, |p, _| {
+            assert_eq!(p.title(nox_config::TabTitle::Auto), "sleep");
+            assert!(p.is_busy());
+            assert_eq!(p.status(), TabStatus::Running, "no integration: busy = running");
+            assert!(p.cwd.is_some(), "cwd follows the foreground process");
+        });
+        refresh_until(&pane, cx, |p| p.process_is_shell);
+        assert!(pane.read_with(cx, |p, _| p.running_since.is_none()));
+        cx.run_until_parked();
+        // (The event names the process that is in the foreground *after* the command, here
+        // `cat`, not `sleep`; see the report.)
+        assert!(events.borrow().iter().any(|e| matches!(
+            e,
+            PaneEvent::CommandFinished { exit: None, duration, .. } if *duration >= Duration::from_millis(400)
+        )));
+    }
+
+    /// Helper process for [`agents_are_detected_from_the_foreground_process`]: a copy of this
+    /// test binary named `claude` runs only this test, which sleeps when asked to.
+    #[test]
+    fn sleeper() {
+        if let Some(ms) = std::env::var("NOX_TEST_SLEEP_MS").ok().and_then(|v| v.parse().ok()) {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+    }
+
+    #[gpui::test]
+    fn agents_are_detected_from_the_foreground_process(cx: &mut TestAppContext) {
+        // A real executable named `claude` (copies of system binaries don't run on macOS).
+        let dir = tempfile::tempdir().unwrap();
+        let claude = dir.path().join("claude");
+        std::fs::copy(std::env::current_exe().unwrap(), &claude).unwrap();
+        let cmd = format!("'{}' --exact pane::tests::sleeper --quiet", claude.display());
+        let spawn = PaneSpawn {
+            env: HashMap::from([("NOX_TEST_SLEEP_MS".to_string(), "600".to_string())]),
+            ..PaneSpawn::default()
+        };
+        let (pane, cx) = open(cx, job(&cmd), spawn);
+        let events = record(&pane, cx);
+        refresh_until(&pane, cx, |p| p.agent.is_some());
+        pane.read_with(cx, |p, _| {
+            let a = p.agent.as_ref().unwrap();
+            assert_eq!(a.kind, "claude");
+            assert!(a.launch.is_none(), "detected, not launched");
+            // (The args can be unreadable for a moment right after `exec`.)
+            assert!(a.cmdline.starts_with("claude"), "{}", a.cmdline);
+            assert!(p.is_agent());
+            assert_eq!(p.process_display_name().as_deref(), Some("claude"));
+            assert_eq!(p.status(), TabStatus::None, "a fresh agent is idle until it works");
+        });
+        // The agent leaving the foreground means it exited.
+        refresh_until(&pane, cx, |p| p.process_is_shell);
+        assert_eq!(pane.read_with(cx, |p, _| p.agent_state()), Some(AgentState::Exited));
+        assert!(!pane.read_with(cx, |p, _| p.is_agent()));
+        cx.run_until_parked();
+        assert!(events.borrow().iter().filter(|e| matches!(e, PaneEvent::AgentChanged { .. })).count() >= 2);
+    }
+
+    // ---- view -----------------------------------------------------------------------------
+
+    fn click(cx: &mut VisualTestContext, pos: Point<Pixels>, clicks: usize) {
+        mouse_down(cx, pos, clicks, Modifiers::none());
+        cx.simulate_event(MouseUpEvent {
+            position: pos,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Left,
+            click_count: clicks,
+        });
+    }
+
+    #[gpui::test]
+    fn header_buttons_emit_pane_events(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let events = record(&pane, cx);
+        // Right-aligned 20 px buttons, 2 px apart, 10 px from the edge: split ▯▯, split ⊟, max, close.
+        let y = px(14.);
+        let at = |i: f32| point(px(640. - 20. - i * 22.), y);
+        click(cx, at(0.), 1);
+        click(cx, at(1.), 1);
+        click(cx, at(2.), 1);
+        click(cx, at(3.), 1);
+        // Double-clicking the title maximizes too.
+        click(cx, point(px(120.), y), 2);
+        let ev = events.borrow();
+        let got: Vec<_> = ev
+            .iter()
+            .filter(|e| !matches!(e, PaneEvent::Focused | PaneEvent::TitleChanged))
+            .map(|e| format!("{e:?}"))
+            .collect();
+        assert_eq!(
+            got,
+            ["Close", "ToggleMaximize", "Split(Horizontal)", "Split(Vertical)", "ToggleMaximize"]
+        );
+    }
+
+    #[gpui::test]
+    fn header_shows_status_details(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let at = point(px(200.), px(14.));
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        assert!(pane.read_with(cx, |p, _| p.header_hovered), "hovering shows the controls");
+        cx.update(|_, cx| {
+            cx.global_mut::<crate::root::UiFlags>().maximized_panes.insert(PaneId(1));
+        });
+        for state in [AgentState::Working, AgentState::NeedsInput, AgentState::Idle] {
+            pane.update(cx, |p, cx| {
+                p.branch = Some("main".into());
+                p.unread = 2;
+                p.claims = vec!["src/lib.rs".into()];
+                p.from_banner = Some(("reviewer".into(), Instant::now()));
+                p.custom_icon = Some("rust".into());
+                p.report_status(state, None, None, cx);
+                p.shake(cx);
+            });
+            cx.run_until_parked();
+        }
+        // The shake animation ends after 12 frames.
+        cx.executor().advance_clock(Duration::from_millis(300));
+        cx.run_until_parked();
+        assert!(pane.read_with(cx, |p, _| p.shake.is_none()));
+        cx.simulate_mouse_move(point(px(200.), px(200.)), None, Modifiers::none());
+        assert!(!pane.read_with(cx, |p, _| p.header_hovered));
+    }
+
+    #[gpui::test]
+    fn exited_and_error_overlays_render(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        for exit in [Some(0), None] {
+            pane.update(cx, |p, cx| {
+                p.exited = Some(exit);
+                p.resume_failed = true;
+                p.spawn_error = Some("no such shell".into());
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+    }
+
+    #[gpui::test]
+    fn new_output_pill_jumps_to_the_bottom(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        fill_lines(&pane, cx, 100);
+        cx.dispatch_action(ScrollPageUp);
+        pane.update(cx, |p, cx| p.handle_event(TerminalEvent::Wakeup, cx));
+        assert!(pane.read_with(cx, |p, _| p.new_output_below));
+        cx.run_until_parked();
+        // The pill is centred, 10 px above the bottom.
+        click(cx, point(px(320.), px(360. - 20.)), 1);
+        assert!(!pane.read_with(cx, |p, _| p.new_output_below));
+        assert_eq!(offset(&pane, cx), 0);
+    }
+
+    #[gpui::test]
+    fn focus_and_blur(cx: &mut TestAppContext) {
+        let mut cfg = silent();
+        cfg.ui.focus_follows_mouse = true;
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        let events = record(&pane, cx);
+        cx.update(|window, _| window.blur());
+        pane.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        assert!(!cx.update(|window, cx| pane.read(cx).focus_handle.is_focused(window)));
+        // Focus follows the mouse.
+        let at = cell(&pane, cx, 3, 3);
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        assert!(cx.update(|window, cx| pane.read(cx).focus_handle.is_focused(window)));
+        // Focus listeners run with the next frame.
+        pane.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        assert!(events.borrow().iter().any(|e| matches!(e, PaneEvent::Focused)));
+        // A click focuses too.
+        cx.update(|window, _| window.blur());
+        cx.run_until_parked();
+        mouse_down(cx, at, 1, Modifiers::none());
+        assert!(cx.update(|window, cx| pane.read(cx).focus_handle.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn cursor_blinks_for_five_seconds(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let t0 = pane.read_with(cx, |p, _| p.blink_epoch);
+        assert!(
+            pane.read_with(cx, |p, _| p.cursor_visible(t0 + Duration::from_millis(600))),
+            "steady cursor"
+        );
+        feed(&pane, cx, b"\x1b[1 q");
+        pane.update(cx, |p, cx| p.handle_event(TerminalEvent::CursorBlinkingChange, cx));
+        pane.read_with(cx, |p, _| {
+            let t0 = p.blink_epoch;
+            assert!(p.blink_task.is_some());
+            assert!(p.cursor_visible(t0 + Duration::from_millis(100)));
+            assert!(!p.cursor_visible(t0 + Duration::from_millis(600)));
+            assert!(p.cursor_visible(t0 + Duration::from_millis(1100)));
+            assert!(p.cursor_visible(t0 + Duration::from_secs(6)), "stops blinking when idle");
+        });
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        assert!(pane.read_with(cx, |p, _| p.blink_task.is_some()), "keeps blinking while active");
+        // Back to a steady cursor: the next tick ends the timer.
+        feed(&pane, cx, b"\x1b[2 q");
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        assert!(pane.read_with(cx, |p, _| p.blink_task.is_none()));
+    }
+
+    #[gpui::test]
+    fn live_config_changes_apply_to_the_session(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let mut cfg = silent();
+        cfg.terminal.scrollback = 10;
+        cfg.terminal.osc52 = nox_config::Osc52::ReadWrite;
+        cx.update(|_, cx| cx.set_global(Settings::new(cfg, nox_mac::Accessibility::default())));
+        cx.run_until_parked();
+        fill_lines(&pane, cx, 100);
+        assert_eq!(history(&pane, cx), 10);
+        for osc52 in [nox_config::Osc52::Off, nox_config::Osc52::Write] {
+            let mut cfg = silent();
+            cfg.terminal.osc52 = osc52;
+            cx.update(|_, cx| cx.set_global(Settings::new(cfg, nox_mac::Accessibility::default())));
+        }
+        // A theme switch re-sends the colors programs can query.
+        cx.update(|_, cx| {
+            let state = cx.global::<crate::theme::ThemeState>().clone();
+            crate::theme::apply(cx, &state, gpui::WindowAppearance::Light);
+        });
+        cx.run_until_parked();
+        let _ = pane;
+    }
+
+    #[gpui::test]
+    fn font_size_override_wins(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        let base = cx.update(|_, cx| Settings::global(cx).term_font.size);
+        let rows = geom(&pane, cx).rows;
+        pane.update(cx, |p, cx| {
+            p.font_size_override = Some(base * 2.);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        pane.read_with(cx, |p, cx| assert_eq!(p.font_size(Settings::global(cx)), base * 2.));
+        assert!(geom(&pane, cx).rows < rows, "bigger font, fewer rows");
+    }
+
+    #[gpui::test]
+    fn unfocused_panes_are_dimmed_without_a_header(cx: &mut TestAppContext) {
+        let mut cfg = silent();
+        cfg.ui.pane_header = false;
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        // Without the header the grid starts at the top padding.
+        let g = geom(&pane, cx);
+        assert_eq!(g.bounds.top(), px(0.));
+        cx.update(|window, _| window.blur());
+        cx.run_until_parked();
+    }
+}

@@ -536,6 +536,46 @@ mod tests {
     }
 
     #[test]
+    fn method_names_match_the_wire() {
+        for method in all_methods() {
+            let name = method.name();
+            let req = Request { v: 1, id: 1, token: None, method };
+            let v = serde_json::to_value(&req).unwrap();
+            assert_eq!(v["method"], json!(name));
+        }
+    }
+
+    #[test]
+    fn only_ls_and_open_work_without_token() {
+        let allowed: Vec<&str> =
+            all_methods().iter().filter(|m| m.allowed_without_token()).map(Method::name).collect();
+        assert_eq!(allowed, vec!["ls", "open"]);
+    }
+
+    #[test]
+    fn state_names_match_serde() {
+        for s in [AgentStateWire::Working, AgentStateWire::NeedsInput, AgentStateWire::Idle] {
+            assert_eq!(serde_json::to_value(s).unwrap(), json!(s.as_str()));
+        }
+        for s in [WaitState::Idle, WaitState::NeedsInput, WaitState::Exited] {
+            assert_eq!(serde_json::to_value(s).unwrap(), json!(s.as_str()));
+        }
+    }
+
+    #[test]
+    fn error_display_and_into_result() {
+        let e = IpcError::new(ErrorCode::NotFound, "no pane named x");
+        assert_eq!(e.to_string(), "no pane named x");
+        assert_eq!(Response::err(1, e.clone()).into_result(), Err(e));
+        assert_eq!(Response::ok(1, json!(5)).into_result(), Ok(json!(5)));
+        // A response must carry ok or error.
+        assert!(serde_json::from_value::<Response>(json!({"v":1,"id":1})).is_err());
+        for code in [ErrorCode::Unauthorized, ErrorCode::Forbidden, ErrorCode::RateLimited] {
+            assert_eq!(code.exit_code(), 1);
+        }
+    }
+
+    #[test]
     fn wire_shape() {
         let req = Request {
             v: 1,

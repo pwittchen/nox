@@ -1109,3 +1109,297 @@ impl Render for SettingsView {
             .children(dialog)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Keystroke, TestAppContext, VisualTestContext};
+
+    use super::*;
+    use crate::config_io::tests::{config_text, fresh_config};
+
+    fn open(cx: &mut TestAppContext) -> (Entity<SettingsView>, &mut VisualTestContext) {
+        crate::test_support::init(cx);
+        // Start from what's on disk (the window shows config.toml).
+        cx.update(crate::config_io::reload_from_disk);
+        let (view, cx) = cx.add_window_view(SettingsView::new);
+        cx.run_until_parked();
+        (view, cx)
+    }
+
+    fn set(view: &Entity<SettingsView>, cx: &mut VisualTestContext, f: impl FnOnce(&mut SettingsView)) {
+        view.update(cx, |v, cx| {
+            f(v);
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
+    fn config(cx: &mut VisualTestContext) -> std::sync::Arc<nox_config::Config> {
+        cx.read(|cx| Settings::global(cx).config.clone())
+    }
+
+    fn key_down(view: &Entity<SettingsView>, cx: &mut VisualTestContext, ks: &str) {
+        let ev = KeyDownEvent { keystroke: Keystroke::parse(ks).unwrap(), is_held: false };
+        view.update_in(cx, |v, window, cx| v.on_key(&ev, window, cx));
+        cx.run_until_parked();
+    }
+
+    #[test]
+    fn value_texts() {
+        assert_eq!(value_text(&toml::Value::String("zsh".into())), "zsh");
+        assert_eq!(value_text(&toml::Value::Integer(3)), "3");
+        assert_eq!(value_text(&toml::Value::Boolean(true)), "true");
+        let arr = toml::Value::Array(vec!["-l".into(), "-i".into()]);
+        assert_eq!(value_text(&arr), "-l, -i");
+        let mut send = toml::Table::new();
+        send.insert("send".into(), "\x1bb".into());
+        assert_eq!(value_text(&toml::Value::Table(send)), "send \\u{1b}b");
+        let mut t = toml::Table::new();
+        t.insert("a".into(), 1.into());
+        t.insert("b".into(), 2.into());
+        assert_eq!(value_text(&toml::Value::Table(t)), "2 entries");
+    }
+
+    #[test]
+    fn every_setting_has_a_section() {
+        for m in nox_config::settings_schema() {
+            assert_eq!(section_of_key(m.key), Some(m.section), "{}", m.key);
+        }
+        assert_eq!(section_of_key("nope.nope"), None);
+    }
+
+    #[gpui::test]
+    fn every_section_and_the_about_page_render(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        std::fs::write(
+            nox_config::config_path(),
+            "[icons]\nhtop = \"python\"\n[shell.env]\nFOO = \"1\"\n[agents.mine]\ncommand = \"mine --x\"\nresume = \"mine -r {session}\"\n",
+        )
+        .unwrap();
+        let (view, cx) = open(cx);
+        assert_eq!(config(cx).icons.get("htop").map(String::as_str), Some("python"));
+        for s in Section::ALL {
+            set(&view, cx, |v| v.section = *s);
+        }
+        // Text inputs are created for the string settings that were shown.
+        view.read_with(cx, |v, _| {
+            assert!(v.inputs.contains_key("shell.program"));
+            assert!(v.inputs.contains_key("shell.args"));
+        });
+        set(&view, cx, |v| v.about = true);
+        // A section click leaves the About page.
+        set(&view, cx, |v| {
+            v.about = false;
+            v.section = Section::Font;
+        });
+    }
+
+    #[gpui::test]
+    fn dropdowns_render_open(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        let (view, cx) = open(cx);
+        for (section, key) in [
+            (Section::Appearance, "ui.theme"),
+            (Section::Appearance, "ui.font_family"),
+            (Section::Font, "font.family"),
+        ] {
+            set(&view, cx, |v| {
+                v.section = section;
+                v.expanded = Some(key.into());
+            });
+            // Esc closes an open list first.
+            key_down(&view, cx, "escape");
+            assert_eq!(view.read_with(cx, |v, _| v.expanded.clone()), None);
+        }
+    }
+
+    #[gpui::test]
+    fn search_spans_sections(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        let (view, cx) = open(cx);
+        let search = view.read_with(cx, |v, _| v.search.clone());
+        search.update_in(cx, |i, window, _| i.focus(window));
+        cx.simulate_input("sidebar");
+        assert_eq!(search.read_with(cx, |i, _| i.text().to_string()), "sidebar");
+        // While searching, the About page doesn't show.
+        set(&view, cx, |v| v.about = true);
+        cx.simulate_input("zzzz-nothing");
+    }
+
+    #[gpui::test]
+    fn text_fields_write_on_enter_and_blur(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        let (view, cx) = open(cx);
+        set(&view, cx, |v| v.section = Section::Shell);
+        let program = view.read_with(cx, |v, _| v.inputs["shell.program"].clone());
+        program.update_in(cx, |i, window, cx| {
+            i.set_text("/bin/zsh", cx);
+            i.focus(window);
+        });
+        cx.simulate_keystrokes("enter");
+        assert_eq!(config(cx).shell.program, "/bin/zsh");
+        assert!(config_text().contains("program = \"/bin/zsh\""), "{}", config_text());
+
+        // Lists are comma-separated; empty parts are dropped. Blur commits too.
+        let args = view.read_with(cx, |v, _| v.inputs["shell.args"].clone());
+        cx.update(|window, _| window.activate_window());
+        args.update_in(cx, |i, window, cx| {
+            i.set_text("-l, , -i ", cx);
+            i.focus(window);
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| window.blur());
+        cx.run_until_parked();
+        assert_eq!(config(cx).shell.args, ["-l", "-i"]);
+
+        // Unchanged text writes nothing.
+        let before = config_text();
+        program.update_in(cx, |i, window, _| i.focus(window));
+        cx.simulate_keystrokes("enter");
+        assert_eq!(config_text(), before);
+    }
+
+    #[test]
+    fn map_entry_validation() {
+        assert!(validate_map_entry("shell.env", "FOO_1", "").is_ok());
+        assert!(validate_map_entry("shell.env", "", "x").is_err());
+        assert!(validate_map_entry("shell.env", "1FOO", "x").is_err());
+        assert!(validate_map_entry("shell.env", "A-B", "x").is_err());
+        assert!(validate_map_entry("icons", "my.tool", "python").is_ok());
+        assert!(validate_map_entry("icons", "htop", " ").is_err());
+    }
+
+    #[gpui::test]
+    fn map_entries_are_added_inline(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        let (view, cx) = open(cx);
+        set(&view, cx, |v| v.section = Section::Shell);
+        let (name, value) = view.read_with(cx, |v, _| v.map_new["shell.env"].clone());
+        cx.update(|window, _| window.activate_window());
+        name.update_in(cx, |i, window, cx| {
+            i.set_text("FOO", cx);
+            i.focus(window);
+        });
+        // Enter in the name moves to the value; Enter there adds the entry and clears the row.
+        cx.simulate_keystrokes("enter");
+        cx.simulate_input("bar baz");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(config(cx).shell.env.get("FOO").map(String::as_str), Some("bar baz"));
+        assert_eq!(name.read_with(cx, |i, _| i.text().to_string()), "");
+        assert_eq!(value.read_with(cx, |i, _| i.text().to_string()), "");
+
+        // An invalid name writes nothing.
+        let before = config_text();
+        name.update_in(cx, |i, window, cx| {
+            i.set_text("NOT VALID", cx);
+            i.focus(window);
+        });
+        cx.simulate_keystrokes("enter enter");
+        assert_eq!(config_text(), before);
+
+        // Icon names may contain dots (one key, not a nested table).
+        set(&view, cx, |v| v.section = Section::Icons);
+        let (name, value) = view.read_with(cx, |v, _| v.map_new["icons"].clone());
+        name.update(cx, |i, cx| i.set_text("my.tool", cx));
+        value.update(cx, |i, cx| i.set_text("python", cx));
+        view.update_in(cx, |v, window, cx| v.add_map_entry("icons", window, cx));
+        cx.run_until_parked();
+        assert_eq!(config(cx).icons.get("my.tool").map(String::as_str), Some("python"));
+    }
+
+    #[gpui::test]
+    fn external_edits_show_up(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        let (view, cx) = open(cx);
+        set(&view, cx, |v| v.section = Section::Shell);
+        std::fs::write(nox_config::config_path(), "[shell]\nprogram = \"/bin/fish\"\n").unwrap();
+        cx.update(|_, cx| crate::config_io::reload_from_disk(cx));
+        cx.run_until_parked();
+        let program = view.read_with(cx, |v, cx| v.inputs["shell.program"].read(cx).text().to_string());
+        assert_eq!(program, "/bin/fish");
+    }
+
+    #[gpui::test]
+    fn recording_a_shortcut(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        let (view, cx) = open(cx);
+        set(&view, cx, |v| {
+            v.section = Section::Keys;
+            v.recording = Some("new_tab".into());
+        });
+        // Modifier presses alone wait for the key.
+        key_down(&view, cx, "shift");
+        assert!(view.read_with(cx, |v, _| v.recording.is_some()));
+        key_down(&view, cx, "cmd-shift-y");
+        assert!(view.read_with(cx, |v, _| v.recording.is_none()));
+        assert_eq!(
+            config(cx).keys.get("new_tab"),
+            Some(&nox_config::KeyBinding::Shortcut("shift-cmd-y".into()))
+        );
+        assert!(config_text().contains("new_tab = \"shift-cmd-y\""), "{}", config_text());
+
+        // Esc stops recording without writing; other keys without recording do nothing.
+        set(&view, cx, |v| v.recording = Some("close_tab".into()));
+        key_down(&view, cx, "escape");
+        assert!(view.read_with(cx, |v, _| v.recording.is_none()));
+        key_down(&view, cx, "cmd-j");
+        assert!(!config(cx).keys.contains_key("close_tab"));
+    }
+
+    #[gpui::test]
+    fn keys_editor_shows_conflicts_and_unbound(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        std::fs::write(
+            nox_config::config_path(),
+            "[keys]\nnew_tab = \"cmd-d\"\nclose_tab = \"\"\n\"alt-left\" = { send = \"\\u001bb\" }\n",
+        )
+        .unwrap();
+        let (view, cx) = open(cx);
+        set(&view, cx, |v| {
+            v.section = Section::Keys;
+            v.recording = Some("find".into());
+        });
+        assert!(
+            matches!(config(cx).keys.get("close_tab"), Some(nox_config::KeyBinding::Shortcut(s)) if s.is_empty())
+        );
+    }
+
+    #[gpui::test]
+    fn a_broken_file_disables_controls(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        let (view, cx) = open(cx);
+        std::fs::write(nox_config::config_path(), "[ui\n").unwrap();
+        cx.update(|_, cx| crate::config_io::reload_from_disk(cx));
+        cx.run_until_parked();
+        assert!(cx.read(|cx| cx.global::<ConfigError>().0.is_some()));
+        for s in Section::ALL {
+            set(&view, cx, |v| v.section = *s);
+        }
+        set(&view, cx, |v| {
+            v.section = Section::Appearance;
+            v.expanded = Some("ui.theme".into());
+        });
+    }
+
+    #[gpui::test]
+    fn a_sheet_opened_from_settings_renders_there(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        let (_, cx) = open(cx);
+        cx.update(|window, cx| crate::dialog::confirm(window, cx, "Reset?", "", "Reset", |_, _| {}));
+        cx.run_until_parked();
+        assert!(cx.update(|window, cx| crate::dialog::is_open(window, cx)));
+        cx.simulate_keystrokes("escape");
+    }
+
+    #[gpui::test]
+    fn one_settings_window(cx: &mut TestAppContext) {
+        let _g = fresh_config();
+        crate::test_support::init(cx);
+        cx.update(open_settings_window);
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+        cx.update(open_settings_window);
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+    }
+}

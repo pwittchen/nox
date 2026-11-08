@@ -109,6 +109,36 @@ mod tests {
     }
 
     #[test]
+    fn current_tracks_pending_then_sent() {
+        let mut c = ResizeCoalescer::default();
+        assert_eq!(c.current(), None);
+        assert_eq!(c.deadline(), None);
+        assert_eq!(c.poll(Instant::now()), None);
+        let t = Instant::now();
+        assert_eq!(c.request(sz(90), t), Some(sz(90)));
+        assert_eq!(c.current(), Some(sz(90)));
+        // Within the interval: held back, but reported as the current size.
+        assert_eq!(c.request(sz(91), t + Duration::from_millis(1)), None);
+        assert_eq!(c.current(), Some(sz(91)));
+        assert_eq!(c.deadline(), Some(t + INTERVAL));
+        // Going back to the size the PTY already has cancels the pending one.
+        assert_eq!(c.request(sz(90), t + Duration::from_millis(2)), None);
+        assert_eq!(c.current(), Some(sz(90)));
+        assert_eq!(c.deadline(), None);
+    }
+
+    #[test]
+    fn poll_before_deadline_sends_nothing() {
+        let mut c = ResizeCoalescer::with_initial(sz(80));
+        let t = Instant::now();
+        assert_eq!(c.request(sz(81), t), Some(sz(81)));
+        let t1 = t + Duration::from_millis(10);
+        assert_eq!(c.request(sz(82), t1), None);
+        assert_eq!(c.poll(t1 + Duration::from_millis(1)), None);
+        assert_eq!(c.poll(t + INTERVAL), Some(sz(82)));
+    }
+
+    #[test]
     fn rapid_changes_are_throttled_then_settle() {
         let mut c = ResizeCoalescer::with_initial(sz(80));
         let t0 = Instant::now();

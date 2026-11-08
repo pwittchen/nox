@@ -92,3 +92,77 @@ pub fn ui_font_choices(cx: &mut App) -> Vec<String> {
     v.extend(installed);
     v
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    fn loaded(cx: &App) -> Vec<String> {
+        let mut v: Vec<String> =
+            cx.try_global::<LoadedFonts>().map(|l| l.0.iter().cloned().collect()).unwrap_or_default();
+        v.sort();
+        v
+    }
+
+    #[gpui::test]
+    fn bundled_families_register_once(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.update(|cx| {
+            load_family(cx, "Hack");
+            load_family(cx, "hack");
+            assert_eq!(loaded(cx), ["hack"]);
+            // Not bundled: nothing to register.
+            load_family(cx, "Menlo");
+            load_family(cx, "Comic Sans");
+            assert_eq!(loaded(cx), ["hack"]);
+        });
+    }
+
+    #[gpui::test]
+    fn ensure_loaded_registers_configured_fonts_and_notices_missing(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        let mut config = crate::test_support::config();
+        config.font.family = "Fira Code, Hack".into();
+        config.ui.font_family = "Inter".into();
+        cx.update(|cx| {
+            ensure_loaded(cx, &config);
+            assert_eq!(loaded(cx), ["fira code", "hack", "inter", "jetbrains mono"]);
+            // The headless text system knows no font names, so both are reported as missing.
+            let notices = crate::toast::messages(cx);
+            assert!(notices.iter().any(|m| m.contains("“Fira Code” not found")), "{notices:?}");
+            assert!(notices.iter().any(|m| m.contains("“Inter” not found")), "{notices:?}");
+        });
+    }
+
+    #[gpui::test]
+    fn system_ui_font_is_never_loaded_or_reported(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        let config = crate::test_support::config();
+        cx.update(|cx| {
+            ensure_loaded(cx, &config);
+            assert_eq!(loaded(cx), ["jetbrains mono"]);
+            let notices = crate::toast::messages(cx);
+            assert!(notices.iter().all(|m| !m.contains("system font")), "{notices:?}");
+        });
+    }
+
+    #[gpui::test]
+    fn picker_choices(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        cx.update(|cx| {
+            let t = terminal_font_choices(cx);
+            assert_eq!(t[0], "JetBrains Mono");
+            let n = BUNDLED_TERMINAL_FONTS.len() + SYSTEM_TERMINAL_FONTS.len();
+            assert_eq!(t[n - 1], "Menlo");
+            // Installed families come after, without repeats.
+            let mut seen = std::collections::HashSet::new();
+            assert!(t.iter().all(|f| seen.insert(f.to_ascii_lowercase())), "{t:?}");
+            let u = ui_font_choices(cx);
+            assert_eq!(u[0], "system");
+            let bundled: Vec<String> = BUNDLED_UI_FONTS.iter().map(|(n, _)| (*n).to_string()).collect();
+            assert_eq!(&u[1..=bundled.len()], bundled.as_slice());
+            assert!(u.iter().all(|f| !f.starts_with('.')), "hidden system fonts are left out: {u:?}");
+        });
+    }
+}

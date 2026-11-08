@@ -670,3 +670,388 @@ impl Render for TextInput {
             .child(TextElement { input: cx.entity() })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui::{Modifiers, TestAppContext, VisualTestContext};
+
+    use super::*;
+
+    type Events = Rc<RefCell<Vec<String>>>;
+
+    /// Lays the input out in a 400 px wide row at (20, 10), as a sheet or the palette would.
+    struct Host(Entity<TextInput>);
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().pl(px(20.)).pt(px(10.)).child(div().w(px(400.)).flex().child(self.0.clone()))
+        }
+    }
+
+    /// A focused input with `text` (caret at the end), recording its events.
+    fn input<'a>(
+        cx: &'a mut TestAppContext,
+        text: &str,
+    ) -> (Entity<TextInput>, &'a mut VisualTestContext, Events) {
+        crate::test_support::init(cx);
+        let (host, cx) = cx.add_window_view(|_, cx| Host(cx.new(|cx| TextInput::new(cx, "Placeholder"))));
+        let input = host.read_with(cx, |h, _| h.0.clone());
+        let events: Events = Rc::default();
+        let ev = events.clone();
+        let text = text.to_string();
+        input.update_in(cx, |i, window, cx| {
+            cx.subscribe(&cx.entity(), move |_, _, e: &InputEvent, _| ev.borrow_mut().push(format!("{e:?}")))
+                .detach();
+            i.set_text_cursor_end(text, cx);
+            i.focus(window);
+        });
+        cx.run_until_parked();
+        (input, cx, events)
+    }
+
+    fn state(input: &Entity<TextInput>, cx: &mut VisualTestContext) -> (String, Range<usize>, bool) {
+        input.read_with(cx, |i, _| (i.content.clone(), i.selected.clone(), i.reversed))
+    }
+
+    #[gpui::test]
+    fn typing_and_deleting(cx: &mut TestAppContext) {
+        let (input, cx, events) = input(cx, "");
+        cx.simulate_input("héllo");
+        assert_eq!(state(&input, cx), ("héllo".into(), 6..6, false));
+        cx.simulate_keystrokes("backspace");
+        assert_eq!(input.read_with(cx, |i, _| i.text().to_string()), "héll");
+        cx.simulate_keystrokes("left left left delete");
+        assert_eq!(state(&input, cx), ("hll".into(), 1..1, false));
+        // Backspace / delete at the edges do nothing harmful.
+        cx.simulate_keystrokes("home backspace end delete");
+        assert_eq!(state(&input, cx).0, "hll");
+        assert!(events.borrow().iter().all(|e| e == "Changed"));
+        assert!(events.borrow().len() >= 3);
+    }
+
+    #[gpui::test]
+    fn word_and_line_movement(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "git commit --amend");
+        cx.simulate_keystrokes("alt-left");
+        assert_eq!(state(&input, cx).1, 13..13);
+        cx.simulate_keystrokes("alt-left alt-left");
+        assert_eq!(state(&input, cx).1, 0..0);
+        cx.simulate_keystrokes("alt-left");
+        assert_eq!(state(&input, cx).1, 0..0);
+        cx.simulate_keystrokes("alt-right");
+        assert_eq!(state(&input, cx).1, 3..3);
+        cx.simulate_keystrokes("alt-right alt-right alt-right");
+        assert_eq!(state(&input, cx).1, 18..18);
+        cx.simulate_keystrokes("cmd-left");
+        assert_eq!(state(&input, cx).1, 0..0);
+        cx.simulate_keystrokes("cmd-right");
+        assert_eq!(state(&input, cx).1, 18..18);
+        cx.simulate_keystrokes("home right");
+        assert_eq!(state(&input, cx).1, 1..1);
+        cx.simulate_keystrokes("end");
+        assert_eq!(state(&input, cx).1, 18..18);
+    }
+
+    #[gpui::test]
+    fn selection_extends_and_flips(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "abc def");
+        cx.simulate_keystrokes("shift-left shift-left");
+        assert_eq!(state(&input, cx), ("abc def".into(), 5..7, true));
+        // Left / right with a selection collapse it to its edge.
+        cx.simulate_keystrokes("left");
+        assert_eq!(state(&input, cx).1, 5..5);
+        cx.simulate_keystrokes("shift-right shift-right");
+        assert_eq!(state(&input, cx), ("abc def".into(), 5..7, false));
+        cx.simulate_keystrokes("right");
+        assert_eq!(state(&input, cx).1, 7..7);
+        // Extending past the anchor flips the direction.
+        cx.simulate_keystrokes("left left shift-right shift-alt-left shift-alt-left");
+        assert_eq!(state(&input, cx), ("abc def".into(), 0..5, true));
+        cx.simulate_keystrokes("alt-shift-right");
+        assert_eq!(state(&input, cx), ("abc def".into(), 3..5, true));
+        cx.simulate_keystrokes("cmd-shift-right");
+        assert_eq!(state(&input, cx), ("abc def".into(), 5..7, false));
+        cx.simulate_keystrokes("cmd-shift-left");
+        assert_eq!(state(&input, cx), ("abc def".into(), 0..5, true));
+        cx.simulate_keystrokes("cmd-a");
+        assert_eq!(state(&input, cx), ("abc def".into(), 0..7, false));
+        // Typing replaces the selection.
+        cx.simulate_input("x");
+        assert_eq!(state(&input, cx), ("x".into(), 1..1, false));
+    }
+
+    #[gpui::test]
+    fn deleting_words_and_lines(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "cd ~/src/nox  ");
+        cx.simulate_keystrokes("alt-backspace");
+        assert_eq!(state(&input, cx).0, "cd ~/src/");
+        cx.simulate_keystrokes("alt-backspace");
+        assert_eq!(state(&input, cx).0, "cd ~/");
+        cx.simulate_keystrokes("cmd-backspace");
+        assert_eq!(state(&input, cx), (String::new(), 0..0, false));
+        // With a selection, word delete removes just the selection.
+        input.update(cx, |i, cx| i.set_text("one two", cx));
+        cx.simulate_keystrokes("alt-backspace");
+        assert_eq!(state(&input, cx).0, "");
+        input.update(cx, |i, cx| i.set_text_cursor_end("one two", cx));
+        cx.simulate_keystrokes("shift-left backspace");
+        assert_eq!(state(&input, cx).0, "one tw");
+        cx.simulate_keystrokes("home shift-right delete");
+        assert_eq!(state(&input, cx).0, "ne tw");
+    }
+
+    #[gpui::test]
+    fn clipboard(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "hello world");
+        // Nothing selected: copy and cut leave the clipboard alone.
+        cx.write_to_clipboard(ClipboardItem::new_string("keep".into()));
+        cx.simulate_keystrokes("cmd-c cmd-x");
+        assert_eq!(cx.read_from_clipboard().and_then(|c| c.text()).as_deref(), Some("keep"));
+        assert_eq!(state(&input, cx).0, "hello world");
+
+        cx.simulate_keystrokes("shift-alt-left cmd-c");
+        assert_eq!(cx.read_from_clipboard().and_then(|c| c.text()).as_deref(), Some("world"));
+        cx.simulate_keystrokes("cmd-x");
+        assert_eq!(state(&input, cx).0, "hello ");
+        cx.simulate_keystrokes("cmd-v cmd-v");
+        assert_eq!(state(&input, cx).0, "hello worldworld");
+        // Pasted newlines become spaces (single-line field).
+        cx.write_to_clipboard(ClipboardItem::new_string("a\nb".into()));
+        cx.simulate_keystrokes("cmd-a cmd-v");
+        assert_eq!(state(&input, cx), ("a b".into(), 3..3, false));
+    }
+
+    #[gpui::test]
+    fn undo_restores_text_and_selection(cx: &mut TestAppContext) {
+        let (input, cx, events) = input(cx, "abc");
+        cx.simulate_input("d");
+        cx.simulate_keystrokes("shift-left shift-left backspace");
+        assert_eq!(state(&input, cx).0, "ab");
+        events.borrow_mut().clear();
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(state(&input, cx), ("abcd".into(), 2..4, false));
+        assert_eq!(*events.borrow(), ["Changed"]);
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(state(&input, cx), ("abc".into(), 3..3, false));
+        // An empty undo stack does nothing.
+        events.borrow_mut().clear();
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(state(&input, cx).0, "abc");
+        assert!(events.borrow().is_empty());
+    }
+
+    #[gpui::test]
+    fn undo_history_is_bounded(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "");
+        for _ in 0..120 {
+            cx.simulate_input("x");
+        }
+        input.read_with(cx, |i, _| assert_eq!(i.undo.len(), 100));
+        for _ in 0..150 {
+            cx.simulate_keystrokes("cmd-z");
+        }
+        // The oldest 20 states are gone.
+        assert_eq!(state(&input, cx).0, "x".repeat(20));
+    }
+
+    #[gpui::test]
+    fn submit_cancel_and_blur_events(cx: &mut TestAppContext) {
+        let (input, cx, events) = input(cx, "x");
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter escape");
+        assert_eq!(*events.borrow(), ["Submit", "Cancel"]);
+        cx.update(|window, _| {
+            window.blur();
+            window.refresh();
+        });
+        cx.run_until_parked();
+        assert_eq!(events.borrow().last().map(String::as_str), Some("Blur"));
+        assert_eq!(state(&input, cx).0, "x");
+    }
+
+    #[gpui::test]
+    fn set_text_selects_all(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "");
+        input.update(cx, |i, cx| i.set_text("new name", cx));
+        assert_eq!(state(&input, cx), ("new name".into(), 0..8, false));
+        cx.simulate_input("z");
+        assert_eq!(state(&input, cx).0, "z");
+    }
+
+    #[gpui::test]
+    fn ime_ranges_are_utf16(cx: &mut TestAppContext) {
+        let (input, cx, events) = input(cx, "a😀b");
+        input.update_in(cx, |i, window, cx| {
+            // UTF-8: a=0, 😀=1..5, b=5; UTF-16: a=0, 😀=1..3, b=3.
+            let mut actual = None;
+            assert_eq!(i.text_for_range(1..3, &mut actual, window, cx).as_deref(), Some("😀"));
+            assert_eq!(actual, Some(1..3));
+            let sel = i.selected_text_range(false, window, cx).unwrap();
+            assert_eq!(sel.range, 4..4);
+            assert!(!sel.reversed);
+            assert_eq!(i.marked_text_range(window, cx), None);
+
+            // Composition: mark "ka" in place of the selection, then commit "か".
+            i.replace_and_mark_text_in_range(None, "ka", None, window, cx);
+            assert_eq!(i.content, "a😀bka");
+            assert_eq!(i.marked_text_range(window, cx), Some(4..6));
+            assert_eq!(i.selected, 8..8);
+            i.replace_and_mark_text_in_range(None, "か", None, window, cx);
+            assert_eq!(i.content, "a😀bか");
+            assert_eq!(i.marked, Some(6..9));
+            assert_eq!(i.selected, 9..9);
+            i.replace_text_in_range(None, "か", window, cx);
+            assert_eq!(i.content, "a😀bか");
+            assert_eq!(i.marked, None);
+            assert_eq!(i.selected, 9..9);
+
+            // An explicit UTF-16 range replaces exactly that text.
+            i.replace_text_in_range(Some(1..3), "x", window, cx);
+            assert_eq!(i.content, "axbか");
+
+            // Unmark keeps the text.
+            i.replace_and_mark_text_in_range(Some(0..0), "z", None, window, cx);
+            assert_eq!(i.marked_text_range(window, cx), Some(0..1));
+            i.unmark_text(window, cx);
+            assert_eq!(i.marked_text_range(window, cx), None);
+            assert_eq!(i.content, "zaxbか");
+            // Marking empty text clears the mark.
+            i.replace_and_mark_text_in_range(Some(0..1), "", None, window, cx);
+            assert_eq!(i.marked, None);
+            assert_eq!(i.content, "axbか");
+        });
+        assert!(events.borrow().iter().all(|e| e == "Changed"));
+    }
+
+    #[gpui::test]
+    fn ime_selection_inside_marked_text(cx: &mut TestAppContext) {
+        // The IME's selection is relative to the marked text. (Only ASCII before the mark here:
+        // the conversion currently goes through the whole content, see the coverage report.)
+        let (input, cx, _) = input(cx, "ab");
+        input.update_in(cx, |i, window, cx| {
+            i.replace_and_mark_text_in_range(Some(1..1), "xyz", Some(1..2), window, cx);
+            assert_eq!(i.content, "axyzb");
+            assert_eq!(i.marked, Some(1..4));
+            assert_eq!(i.selected, 2..3);
+            // The next composition step replaces the marked text, not the selection.
+            i.replace_and_mark_text_in_range(None, "q", Some(1..1), window, cx);
+            assert_eq!(i.content, "aqb");
+            assert_eq!(i.selected, 2..2);
+        });
+    }
+
+    #[gpui::test]
+    fn marked_text_renders_underlined_run(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "ab");
+        input.update_in(cx, |i, window, cx| {
+            i.replace_and_mark_text_in_range(Some(1..1), "x", None, window, cx);
+        });
+        cx.run_until_parked();
+        input.read_with(cx, |i, _| {
+            assert_eq!(i.content, "axb");
+            assert_eq!(i.last_layout.as_ref().map(|l| l.len), Some(3));
+        });
+    }
+
+    #[gpui::test]
+    fn geometry_queries(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "abcd");
+        input.update_in(cx, |i, window, cx| {
+            let bounds = i.last_bounds.unwrap();
+            let layout = i.last_layout.clone().unwrap();
+            let b = i.bounds_for_range(1..3, bounds, window, cx).unwrap();
+            assert_eq!(b.left(), bounds.left() + layout.x_for_index(1));
+            assert_eq!(b.right(), bounds.left() + layout.x_for_index(3));
+            let p = point(bounds.left() + layout.x_for_index(2) + px(1.), bounds.top() + px(2.));
+            // Inside the field there is an index (its value is off, see the coverage report:
+            // it always answers for x = the field's left edge).
+            assert!(i.character_index_for_point(p, window, cx).is_some());
+            // Outside the field: no index.
+            assert_eq!(i.character_index_for_point(point(px(-50.), px(-50.)), window, cx), None);
+        });
+    }
+
+    #[gpui::test]
+    fn geometry_needs_a_layout(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        let cx = cx.add_empty_window();
+        let input = cx.update(|_, cx| cx.new(|cx| TextInput::new(cx, "")));
+        input.update_in(cx, |i, window, cx| {
+            let b = Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.)));
+            assert_eq!(i.bounds_for_range(0..0, b, window, cx), None);
+            assert_eq!(i.character_index_for_point(point(px(1.), px(1.)), window, cx), None);
+            assert_eq!(i.index_for_position(point(px(1.), px(1.))), 0);
+        });
+    }
+
+    #[gpui::test]
+    fn mouse_places_caret_and_selects(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "hello world");
+        cx.update(|window, _| window.blur());
+        let (bounds, layout) =
+            input.read_with(cx, |i, _| (i.last_bounds.unwrap(), i.last_layout.clone().unwrap()));
+        let at = |idx: usize| {
+            point(bounds.left() + layout.x_for_index(idx), bounds.top() + bounds.size.height / 2.)
+        };
+
+        cx.simulate_click(at(3), Modifiers::none());
+        assert_eq!(state(&input, cx).1, 3..3);
+        assert!(cx.update(|window, cx| input.read(cx).focus.is_focused(window)), "a click focuses");
+
+        // Shift-click extends from the caret.
+        cx.simulate_click(at(8), Modifiers::shift());
+        assert_eq!(state(&input, cx).1, 3..8);
+
+        // Drag selects.
+        cx.simulate_mouse_down(at(1), MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(at(5), Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(at(5), MouseButton::Left, Modifiers::none());
+        assert_eq!(state(&input, cx).1, 1..5);
+        // Moving without a pressed button after mouse up doesn't change the selection.
+        cx.simulate_mouse_move(at(9), None, Modifiers::none());
+        assert_eq!(state(&input, cx).1, 1..5);
+
+        // Below the field: the end; above: the start.
+        input.read_with(cx, |i, _| {
+            assert_eq!(i.index_for_position(point(at(2).x, bounds.bottom() + px(5.))), 11);
+            assert_eq!(i.index_for_position(point(at(2).x, bounds.top() - px(5.))), 0);
+        });
+
+        // Double click selects everything.
+        cx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position: at(2),
+            modifiers: Modifiers::none(),
+            click_count: 2,
+            first_mouse: false,
+        });
+        assert_eq!(state(&input, cx).1, 0..11);
+    }
+
+    #[gpui::test]
+    fn placeholder_renders_when_empty(cx: &mut TestAppContext) {
+        let (input, cx, _) = input(cx, "");
+        input.read_with(cx, |i, _| {
+            assert_eq!(i.text(), "");
+            assert_eq!(i.last_layout.as_ref().map(|l| l.len), Some("Placeholder".len()));
+        });
+        input.update(cx, |i, cx| i.set_text("all", cx));
+        cx.run_until_parked();
+        input.read_with(cx, |i, _| assert_eq!(i.last_layout.as_ref().map(|l| l.len), Some(3)));
+    }
+
+    #[gpui::test]
+    fn root_smoke(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        let (root, cx) =
+            cx.add_window_view(|window, cx| crate::root::Root::new(crate::root::Initial::Fresh, window, cx));
+        cx.run_until_parked();
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.list.len(), 1);
+            assert_eq!(r.panes.len(), 1);
+        });
+    }
+}

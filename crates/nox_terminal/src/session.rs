@@ -859,6 +859,14 @@ fn reader_loop(
 mod tests {
     use super::*;
 
+    /// Concurrent PTY spawns in one process occasionally fail (`Os { code: -6 }` from the
+    /// fork / `TIOCSCTTY` dance); the app spawns from one thread, so serialize them here too.
+    fn spawn(opts: &SpawnOptions) -> io::Result<TerminalSession> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        TerminalSession::spawn(opts)
+    }
+
     fn wait_for(
         rx: &async_channel::Receiver<TerminalEvent>,
         mut pred: impl FnMut(&TerminalEvent) -> bool,
@@ -880,12 +888,9 @@ mod tests {
 
     #[test]
     fn spawns_shell_and_reads_echo_back_from_grid() {
-        let session = TerminalSession::spawn(&SpawnOptions {
-            program: Some("/bin/sh".into()),
-            args: vec![],
-            ..SpawnOptions::default()
-        })
-        .unwrap();
+        let session =
+            spawn(&SpawnOptions { program: Some("/bin/sh".into()), args: vec![], ..SpawnOptions::default() })
+                .unwrap();
         let rx = session.events();
         session.write(b"echo nox-$((40+2))\r");
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -906,12 +911,9 @@ mod tests {
 
     #[test]
     fn osc_events_and_last_output() {
-        let session = TerminalSession::spawn(&SpawnOptions {
-            program: Some("/bin/sh".into()),
-            args: vec![],
-            ..SpawnOptions::default()
-        })
-        .unwrap();
+        let session =
+            spawn(&SpawnOptions { program: Some("/bin/sh".into()), args: vec![], ..SpawnOptions::default() })
+                .unwrap();
         let rx = session.events();
         session
             .write(b"printf '\\033]7;file://h/tmp\\007\\033]133;C\\007line1\\nline2\\n\\033]133;D;0\\007'\r");
@@ -920,14 +922,428 @@ mod tests {
         assert!(out.contains("line1") && out.contains("line2"), "out: {out:?}");
     }
 
-    #[test]
-    fn resize_updates_grid() {
-        let session = TerminalSession::spawn(&SpawnOptions {
+    /// Run `script` with `/bin/sh -c`.
+    fn spawn_script(script: &str, opts: SpawnOptions) -> TerminalSession {
+        spawn(&SpawnOptions {
             program: Some("/bin/sh".into()),
-            args: vec![],
+            args: vec!["-c".into(), script.into()],
+            ..opts
+        })
+        .unwrap()
+    }
+
+    /// Poll the screen until `pred` holds (10 s max).
+    fn wait_screen(session: &TerminalSession, pred: impl Fn(&str) -> bool) -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let text = session.screen_text();
+            if pred(&text) {
+                return text;
+            }
+            assert!(Instant::now() < deadline, "timed out; screen:\n{text}");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wait_until(mut pred: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if pred() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    fn test_listener(osc52: ClipboardPolicy) -> (Listener, async_channel::Receiver<TerminalEvent>, File) {
+        let (tx, rx) = async_channel::unbounded();
+        let file = tempfile::tempfile().unwrap();
+        let readback = file.try_clone().unwrap();
+        let mut colors = vec![Rgb { r: 0, g: 0, b: 0 }; COLOR_COUNT];
+        colors[257] = Rgb { r: 0x12, g: 0x34, b: 0x56 };
+        let listener = Listener {
+            tx,
+            writer: Arc::new(Mutex::new(file)),
+            size: Arc::new(Mutex::new(GridSize { cols: 80, rows: 24, cell_w: 8, cell_h: 16 })),
+            colors: Arc::new(RwLock::new(colors)),
+            osc52: Arc::new(RwLock::new(osc52)),
+            clipboard_reply: Arc::new(Mutex::new(None)),
+        };
+        (listener, rx, readback)
+    }
+
+    fn written(mut file: &File) -> String {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut out = String::new();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.read_to_string(&mut out).unwrap();
+        out
+    }
+
+    fn drain(rx: &async_channel::Receiver<TerminalEvent>) -> Vec<TerminalEvent> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    #[test]
+    fn listener_forwards_ui_events() {
+        let (l, rx, _) = test_listener(ClipboardPolicy::Write);
+        l.send_event(Event::Title("t".into()));
+        l.send_event(Event::ResetTitle);
+        l.send_event(Event::Bell);
+        l.send_event(Event::CursorBlinkingChange);
+        l.send_event(Event::ClipboardStore(alacritty_terminal::term::ClipboardType::Clipboard, "c".into()));
+        // Internal events never reach the UI.
+        l.send_event(Event::Wakeup);
+        l.send_event(Event::MouseCursorDirty);
+        l.send_event(Event::Exit);
+        let ev = drain(&rx);
+        assert!(
+            matches!(
+                ev.as_slice(),
+                [
+                    TerminalEvent::Title(t),
+                    TerminalEvent::ResetTitle,
+                    TerminalEvent::Bell,
+                    TerminalEvent::CursorBlinkingChange,
+                    TerminalEvent::ClipboardStore(c),
+                ] if t == "t" && c == "c"
+            ),
+            "{ev:?}"
+        );
+    }
+
+    #[test]
+    fn listener_applies_osc52_policy() {
+        use alacritty_terminal::term::ClipboardType;
+        let fmt: Arc<dyn Fn(&str) -> String + Sync + Send> = Arc::new(|t| format!("<{t}>"));
+        // Off: neither store nor load.
+        let (l, rx, _) = test_listener(ClipboardPolicy::Off);
+        l.send_event(Event::ClipboardStore(ClipboardType::Clipboard, "x".into()));
+        l.send_event(Event::ClipboardLoad(ClipboardType::Clipboard, fmt.clone()));
+        assert!(drain(&rx).is_empty());
+        assert!(l.clipboard_reply.lock().unwrap().is_none());
+        // Write: store only.
+        let (l, rx, _) = test_listener(ClipboardPolicy::Write);
+        l.send_event(Event::ClipboardLoad(ClipboardType::Clipboard, fmt.clone()));
+        assert!(drain(&rx).is_empty());
+        assert!(l.clipboard_reply.lock().unwrap().is_none());
+        // ReadWrite: load is forwarded and its formatter kept for the answer.
+        let (l, rx, _) = test_listener(ClipboardPolicy::ReadWrite);
+        l.send_event(Event::ClipboardLoad(ClipboardType::Clipboard, fmt));
+        assert!(matches!(drain(&rx).as_slice(), [TerminalEvent::ClipboardLoad]));
+        let reply = l.clipboard_reply.lock().unwrap().take().unwrap();
+        assert_eq!(reply("abc"), "<abc>");
+    }
+
+    #[test]
+    fn listener_answers_queries_on_the_pty() {
+        use std::os::unix::process::ExitStatusExt;
+        let (l, rx, file) = test_listener(ClipboardPolicy::Write);
+        l.send_event(Event::PtyWrite("[pty]".into()));
+        l.send_event(Event::ColorRequest(257, Arc::new(|c| format!("[{:02x}{:02x}{:02x}]", c.r, c.g, c.b))));
+        // Out-of-range color indices get no reply.
+        l.send_event(Event::ColorRequest(COLOR_COUNT, Arc::new(|_| "[bad]".into())));
+        l.send_event(Event::TextAreaSizeRequest(Arc::new(|w| {
+            format!("[{}x{} {}x{}]", w.num_cols, w.num_lines, w.cell_width, w.cell_height)
+        })));
+        l.send_event(Event::ChildExit(std::process::ExitStatus::from_raw(0)));
+        assert_eq!(written(&file), "[pty][123456][80x24 8x16]");
+        assert!(drain(&rx).is_empty(), "replies don't go to the UI");
+    }
+
+    #[test]
+    fn marks_are_capped() {
+        let mut m = Marks::default();
+        for i in 0..4096 {
+            m.push(Mark { kind: MarkKind::Prompt, abs_line: i });
+        }
+        assert_eq!(m.marks.len(), 4096);
+        m.push(Mark { kind: MarkKind::CommandEnd, abs_line: 4096 });
+        // The oldest 1024 are dropped in one go.
+        assert_eq!(m.marks.len(), 4096 - 1024 + 1);
+        assert_eq!(m.marks[0].abs_line, 1024);
+        assert_eq!(m.marks.last().unwrap().kind, MarkKind::CommandEnd);
+    }
+
+    #[test]
+    fn term_config_maps_settings() {
+        use alacritty_terminal::vte::ansi::CursorShape;
+        let opts = SpawnOptions {
+            cursor: CursorConfig { shape: CursorKind::Bar, blinking: false },
+            osc52: ClipboardPolicy::Off,
+            scrollback: 1_000_000,
+            word_separators: " /".into(),
+            kitty_keyboard: true,
+            ..SpawnOptions::default()
+        };
+        let c = term_config(&opts);
+        assert_eq!(c.default_cursor_style.shape, CursorShape::Beam);
+        assert!(!c.default_cursor_style.blinking);
+        assert_eq!(c.osc52, Osc52::Disabled);
+        assert_eq!(c.scrolling_history, 100_000, "scrollback is capped");
+        assert_eq!(c.semantic_escape_chars, " /");
+        assert!(c.kitty_keyboard);
+        let c = term_config(&SpawnOptions {
+            cursor: CursorConfig { shape: CursorKind::Underline, blinking: true },
+            osc52: ClipboardPolicy::ReadWrite,
+            ..SpawnOptions::default()
+        });
+        assert_eq!(c.default_cursor_style.shape, CursorShape::Underline);
+        assert_eq!(c.osc52, Osc52::CopyPaste);
+        let c = term_config(&SpawnOptions::default());
+        assert_eq!(c.default_cursor_style.shape, CursorShape::Block);
+        assert_eq!(c.osc52, Osc52::OnlyCopy);
+    }
+
+    #[test]
+    fn lines_text_of_empty_range() {
+        let term = Term::new(TermConfig::default(), &TermDims { cols: 10, rows: 3 }, ());
+        assert_eq!(lines_text(&term, 2, 1), "");
+        assert_eq!(lines_text(&term, 0, 2), "");
+        let dims = TermDims { cols: 10, rows: 3 };
+        assert_eq!((dims.total_lines(), dims.screen_lines(), dims.columns()), (3, 3, 10));
+    }
+
+    #[test]
+    fn terminal_queries_are_answered_through_the_pty() {
+        let session = spawn_script(
+            r"stty -echo; printf 'READY\n'; read x; printf '\033[14t\033]11;?\007\033[6nASKED\n'; exec cat -v",
+            SpawnOptions::default(),
+        );
+        wait_screen(&session, |s| s.contains("READY"));
+        let mut colors = vec![Rgb { r: 0, g: 0, b: 0 }; COLOR_COUNT];
+        colors[257] = Rgb { r: 0x12, g: 0x34, b: 0x56 };
+        session.set_query_colors(colors);
+        session.write(b"\r");
+        wait_screen(&session, |s| s.contains("ASKED"));
+        // The replies are now queued on the PTY input; a CR hands them to `cat -v`.
+        session.write(b"\r");
+        let screen = wait_screen(&session, |s| s.contains("R\n") || s.ends_with('R'));
+        assert!(screen.contains("^[[4;384;640t"), "text area size: {screen}");
+        assert!(screen.contains("^[]11;rgb:1212/3434/5656^G"), "background color: {screen}");
+        assert!(screen.contains("^[[2;1R"), "cursor position: {screen}");
+    }
+
+    #[test]
+    fn title_bell_and_clipboard_round_trip() {
+        let session = spawn_script(
+            concat!(
+                r"stty -echo; printf 'READY\n'; read x; ",
+                r"printf '\033]2;my title\007\007\033[?12h\033]52;c;aGVsbG8=\007\033]52;c;?\007ASKED\n'; ",
+                "exec cat -v"
+            ),
+            SpawnOptions { osc52: ClipboardPolicy::ReadWrite, ..SpawnOptions::default() },
+        );
+        let rx = session.events();
+        wait_screen(&session, |s| s.contains("READY"));
+        session.write(b"\r");
+        let mut seen = Vec::new();
+        assert!(
+            wait_for(
+                &rx,
+                |e| {
+                    seen.push(format!("{e:?}"));
+                    matches!(e, TerminalEvent::ClipboardLoad)
+                },
+                10
+            ),
+            "{seen:?}"
+        );
+        let joined = seen.join(" ");
+        assert!(joined.contains(r#"Title("my title")"#), "{joined}");
+        assert!(joined.contains("Bell"), "{joined}");
+        assert!(joined.contains("CursorBlinkingChange"), "{joined}");
+        assert!(joined.contains(r#"ClipboardStore("hello")"#), "{joined}");
+        wait_screen(&session, |s| s.contains("ASKED"));
+        session.answer_clipboard_load("hi");
+        // Answered only once.
+        session.answer_clipboard_load("again");
+        session.write(b"\r");
+        let screen = wait_screen(&session, |s| s.contains("^G"));
+        assert!(screen.contains("^[]52;c;aGk=^G"), "{screen}");
+        assert!(!screen.contains("YWdhaW4"), "{screen}");
+    }
+
+    #[test]
+    fn set_options_applies_live() {
+        let session = spawn_script(r"printf 'READY\n'; read x", SpawnOptions::default());
+        let rx = session.events();
+        wait_screen(&session, |s| s.contains("READY"));
+        session.set_options(
+            500,
+            " ",
+            true,
+            ClipboardPolicy::ReadWrite,
+            false,
+            CursorConfig { shape: CursorKind::Underline, blinking: false },
+        );
+        // A config change re-announces the (unset) title.
+        assert!(wait_for(&rx, |e| matches!(e, TerminalEvent::ResetTitle), 10));
+        assert_eq!(*session.osc52.read().unwrap(), ClipboardPolicy::ReadWrite);
+        assert!(!session.grapheme_clusters.load(Ordering::Relaxed));
+        let term = session.term().lock();
+        assert_eq!(term.cursor_style().shape, alacritty_terminal::vte::ansi::CursorShape::Underline);
+    }
+
+    #[test]
+    fn bracketed_and_plain_paste() {
+        let session = spawn_script(
+            r"printf '\033[?2004h'; stty -echo; printf 'READY\n'; exec cat -v",
+            SpawnOptions::default(),
+        );
+        wait_screen(&session, |s| s.contains("READY"));
+        assert!(session.term().lock().mode().contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE));
+        // Newlines become CR; an embedded end marker can't escape the bracket.
+        session.paste("a\r\nb\x1b[201~c");
+        session.write(b"\r");
+        let screen = wait_screen(&session, |s| s.contains("c^[[201~"));
+        assert!(screen.contains("^[[200~a\nbc^[[201~"), "{screen}");
+        session.paste_bracketed("x\ny", true);
+        let screen = wait_screen(&session, |s| s.contains("y^[[201~"));
+        assert!(screen.contains("^[[200~x\ny^[[201~"), "{screen}");
+        session.paste_bracketed("z", false);
+        session.write(b"\r");
+        wait_screen(&session, |s| s.contains("^[[200~z^[[201~"));
+
+        let plain = spawn_script(r"stty -echo; printf 'READY\n'; exec cat -v", SpawnOptions::default());
+        wait_screen(&plain, |s| s.contains("READY"));
+        plain.paste("p1\nq2\r\n");
+        let screen = wait_screen(&plain, |s| s.contains("q2"));
+        assert!(screen.contains("READY\np1\nq2"), "{screen}");
+        assert!(!screen.contains("200~"), "{screen}");
+    }
+
+    #[test]
+    fn large_paste_goes_through_the_writer_thread() {
+        let session = spawn_script(
+            r"stty -echo; printf 'READY\n'; exec cut -c1-3",
+            SpawnOptions {
+                size: GridSize { cols: 80, rows: 50, cell_w: 8, cell_h: 16 },
+                ..SpawnOptions::default()
+            },
+        );
+        wait_screen(&session, |s| s.contains("READY"));
+        let line = "x".repeat(60);
+        let text = (0..40).map(|i| format!("{i:03}{line}")).collect::<Vec<_>>().join("\n") + "\n";
+        assert!(text.len() > 1024);
+        session.paste(&text);
+        let screen = wait_screen(&session, |s| s.contains("039"));
+        let want: Vec<String> = (0..40).map(|i| format!("{i:03}")).collect();
+        assert_eq!(screen.lines().skip(1).collect::<Vec<_>>(), want);
+    }
+
+    #[test]
+    fn marks_prompt_lines_and_text_extraction() {
+        let session = spawn_script(
+            r"i=1; while [ $i -le 10 ]; do echo line$i; i=$((i+1)); done; printf '\033]133;A\007PROMPT\nDONE'; read x",
+            SpawnOptions {
+                size: GridSize { cols: 40, rows: 5, cell_w: 8, cell_h: 16 },
+                ..SpawnOptions::default()
+            },
+        );
+        wait_screen(&session, |s| s.contains("DONE"));
+        assert_eq!(session.marks(), vec![Mark { kind: MarkKind::Prompt, abs_line: 10 }]);
+        // 12 lines on a 5-line screen: 7 in history; the prompt is on viewport line 3.
+        assert_eq!(session.prompt_lines(), vec![3]);
+        assert_eq!(session.screen_text(), "line8\nline9\nline10\nPROMPT\nDONE");
+        assert_eq!(session.last_lines(2), "PROMPT\nDONE");
+        let all = session.scrollback_text();
+        assert!(all.starts_with("line1\nline2\n") && all.ends_with("line10\nPROMPT\nDONE"), "{all}");
+        // Asking for more lines than exist returns everything.
+        assert_eq!(session.last_lines(1000), all);
+        // No OSC 133 C/D pair yet.
+        assert_eq!(session.last_output(), None);
+    }
+
+    #[test]
+    fn accessors_and_resize_noop() {
+        let size = GridSize { cols: 50, rows: 10, cell_w: 7, cell_h: 15 };
+        let session =
+            spawn_script(r"printf 'READY\n'; read x", SpawnOptions { size, ..SpawnOptions::default() });
+        wait_screen(&session, |s| s.contains("READY"));
+        assert!(session.pid() > 0);
+        assert!(session.pty_fd() >= 0);
+        assert!(session.started() <= Instant::now());
+        assert!(session.since_last_output() < Duration::from_secs(10));
+        assert_eq!(session.size(), size);
+        // Same size: nothing changes.
+        session.resize(size);
+        assert_eq!(session.term().lock().columns(), 50);
+        // Tiny sizes are clamped for the grid but recorded as requested.
+        let tiny = GridSize { cols: 1, rows: 0, cell_w: 7, cell_h: 15 };
+        session.resize(tiny);
+        assert_eq!(session.size(), tiny);
+        let t = session.term().lock();
+        assert_eq!((t.columns(), t.screen_lines()), (2, 1));
+    }
+
+    #[test]
+    fn foreground_and_busy() {
+        let session =
+            spawn(&SpawnOptions { program: Some("/bin/sh".into()), args: vec![], ..SpawnOptions::default() })
+                .unwrap();
+        assert!(wait_until(|| session.foreground().is_some_and(|p| p.pid == session.pid())));
+        assert!(!session.is_busy());
+        session.write(b"exec 2>&1; sleep 30\r");
+        assert!(wait_until(|| session.is_busy()), "screen: {}", session.screen_text());
+        let fg = session.foreground().unwrap();
+        assert_ne!(fg.pid, session.pid());
+        assert_eq!(fg.exe, "sleep");
+        assert_eq!(fg.args, vec!["30"]);
+        session.write(&[0x03]);
+        assert!(wait_until(|| !session.is_busy()));
+    }
+
+    #[test]
+    fn kill_reports_exit_and_stops_writes() {
+        let session = spawn_script(r"printf 'READY\n'; read x", SpawnOptions::default());
+        let rx = session.events();
+        wait_screen(&session, |s| s.contains("READY"));
+        session.kill();
+        assert!(wait_for(&rx, |e| matches!(e, TerminalEvent::Exited(None)), 10));
+        assert!(session.has_exited());
+        // Writes after exit are dropped silently.
+        session.write(b"ignored\r");
+        session.paste("ignored");
+        session.write(b"");
+    }
+
+    #[test]
+    fn bash_integration_reports_marks_and_last_output() {
+        let home = tempfile::tempdir().unwrap();
+        let integration = tempfile::tempdir().unwrap();
+        crate::shell::install(integration.path()).unwrap();
+        let session = spawn(&SpawnOptions {
+            program: Some("/bin/bash".into()),
+            args: vec!["-l".into()],
+            cwd: Some(home.path().to_path_buf()),
+            env: HashMap::from([
+                ("HOME".to_string(), home.path().to_string_lossy().into_owned()),
+                ("BASH_SILENCE_DEPRECATION_WARNING".to_string(), "1".to_string()),
+            ]),
+            integration_dir: Some(integration.path().to_path_buf()),
             ..SpawnOptions::default()
         })
         .unwrap();
+        let rx = session.events();
+        assert!(wait_for(&rx, |e| matches!(e, TerminalEvent::Osc(OscEvent::PromptStart)), 10));
+        session.write(b"echo integrated\r");
+        assert!(wait_for(&rx, |e| matches!(e, TerminalEvent::Osc(OscEvent::CommandEnd(Some(0)))), 10));
+        assert_eq!(session.last_output().as_deref(), Some("integrated"));
+        let kinds: Vec<MarkKind> = session.marks().iter().map(|m| m.kind).collect();
+        assert!(
+            kinds.starts_with(&[MarkKind::Prompt, MarkKind::CommandStart, MarkKind::CommandEnd]),
+            "{kinds:?}"
+        );
+    }
+
+    #[test]
+    fn resize_updates_grid() {
+        // Wait until the shell is up: a shell that gets SIGHUP while it is still starting can
+        // miss it, and then dropping the session blocks in `Pty::drop`'s `wait`.
+        let session = spawn_script(r"printf 'READY\n'; read x", SpawnOptions::default());
+        wait_screen(&session, |s| s.contains("READY"));
         session.resize(GridSize { cols: 100, rows: 30, cell_w: 8, cell_h: 16 });
         let t = session.term().lock();
         assert_eq!(t.columns(), 100);

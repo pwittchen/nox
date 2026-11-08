@@ -24,4 +24,5 @@ raw-window-handle = "0.6"
 rust-embed = "8"
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true

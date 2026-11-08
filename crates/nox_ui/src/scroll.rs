@@ -155,4 +155,58 @@ mod tests {
         assert!((total - 30.0).abs() < 0.01);
         assert!(s.animation_step(start + Duration::from_millis(300)).is_none());
     }
+
+    #[test]
+    fn wheel_notches_extend_a_running_animation() {
+        let mut s = ScrollState::default();
+        s.animate_lines(2.0, 10.0, Duration::from_millis(100));
+        let now = Instant::now();
+        let first = s.animation_step(now + Duration::from_millis(50)).unwrap();
+        assert!(first > 0.0 && first < 20.0, "ease-out: part of the way");
+        // Another notch: the remainder plus the new distance, restarted.
+        s.animate_lines(1.0, 10.0, Duration::from_millis(100));
+        let rest = s.animation_step(Instant::now() + Duration::from_secs(1)).unwrap();
+        assert!((first + rest - 30.0).abs() < 0.01);
+        assert!(!s.animating());
+        // Zero duration completes at once.
+        s.animate_lines(-1.0, 10.0, Duration::ZERO);
+        assert_eq!(s.animation_step(Instant::now()), Some(-10.0));
+        assert!(s.animation_step(Instant::now()).is_none());
+    }
+
+    #[test]
+    fn reset_clears_everything_but_the_scrollbar_timer() {
+        let mut s = ScrollState::default();
+        s.apply_pixels(5.0, 16.0, 0, 10);
+        s.animate_lines(1.0, 16.0, Duration::from_millis(100));
+        s.alt_accum = 0.5;
+        s.reset();
+        assert_eq!(s.frac, 0.0);
+        assert_eq!(s.alt_accum, 0.0);
+        assert!(!s.animating());
+        assert!(s.last_scroll.is_some());
+    }
+
+    #[test]
+    fn scrollbar_fades_after_800ms() {
+        let mut s = ScrollState::default();
+        let t = Instant::now();
+        assert_eq!(s.scrollbar_alpha(t), 0.0, "hidden until scrolling");
+        s.last_scroll = Some(t);
+        assert_eq!(s.scrollbar_alpha(t + Duration::from_millis(500)), 1.0);
+        assert!((s.scrollbar_alpha(t + Duration::from_millis(900)) - 0.5).abs() < 1e-3);
+        assert_eq!(s.scrollbar_alpha(t + Duration::from_millis(1500)), 0.0);
+    }
+
+    #[test]
+    fn scrolling_down_at_the_bottom_snaps_to_zero() {
+        let mut s = ScrollState::default();
+        s.apply_pixels(8.0, 16.0, 0, 10);
+        let a = s.apply_pixels(-20.0, 16.0, 0, 10);
+        assert_eq!(a.lines, 0);
+        assert_eq!(s.frac, 0.0);
+        // No history: nothing to scroll.
+        let a = s.apply_pixels(40.0, 16.0, 0, 0);
+        assert_eq!((a.lines, s.frac), (0, 0.0));
+    }
 }

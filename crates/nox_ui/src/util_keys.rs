@@ -83,3 +83,66 @@ pub fn keystroke_to_config(k: &Keystroke) -> String {
     s.push_str(&k.key);
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ks(s: &str) -> Keystroke {
+        Keystroke::parse(s).unwrap()
+    }
+
+    #[test]
+    fn modifiers_render_in_mac_order() {
+        // ⌃ ⌥ ⇧ ⌘, whatever order the config used.
+        assert_eq!(pretty_keystroke(&ks("cmd-shift-d")), "⇧⌘D");
+        assert_eq!(pretty_keystroke(&ks("cmd-alt-ctrl-shift-x")), "⌃⌥⇧⌘X");
+        assert_eq!(pretty_keystroke(&ks("k")), "K");
+    }
+
+    #[test]
+    fn named_keys_use_symbols() {
+        for (k, want) in [
+            ("enter", "↵"),
+            ("left", "←"),
+            ("right", "→"),
+            ("up", "↑"),
+            ("down", "↓"),
+            ("tab", "⇥"),
+            ("escape", "⎋"),
+            ("backspace", "⌫"),
+            ("delete", "⌦"),
+            ("space", "Space"),
+            ("pageup", "PgUp"),
+            ("pagedown", "PgDn"),
+            ("home", "Home"),
+            ("end", "End"),
+            ("[", "["),
+            ("=", "="),
+            ("f12", "F12"),
+            ("", ""),
+        ] {
+            assert_eq!(pretty_key(k), want, "{k}");
+        }
+    }
+
+    #[test]
+    fn shortcuts_with_chords_and_garbage() {
+        assert_eq!(pretty_shortcut("cmd-k cmd-s"), "⌘K ⌘S");
+        assert_eq!(pretty_shortcut("ctrl-cmd-["), "⌃⌘[");
+        // Unparseable parts are dropped, not shown raw.
+        assert_eq!(pretty_shortcut("hyper-k cmd-t"), "⌘T");
+        assert_eq!(pretty_shortcut(""), "");
+    }
+
+    #[test]
+    fn keystroke_to_config_round_trips() {
+        assert_eq!(keystroke_to_config(&ks("cmd-shift-d")), "shift-cmd-d");
+        assert_eq!(keystroke_to_config(&ks("ctrl-alt-shift-cmd-x")), "ctrl-alt-shift-cmd-x");
+        assert_eq!(keystroke_to_config(&ks("f5")), "f5");
+        for s in ["ctrl-tab", "alt-cmd-,", "shift-pageup", "cmd--"] {
+            let k = ks(s);
+            assert_eq!(ks(&keystroke_to_config(&k)), k, "{s}");
+        }
+    }
+}

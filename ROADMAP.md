@@ -10,9 +10,6 @@
   a `nox` choice in that workflow) and the `HOMEBREW_TAP_TOKEN` secret isn't set on nox yet.
 - **Kitty keyboard protocol** (§7.1): `terminal.kitty_keyboard` is passed to the emulator, but
   the key encoder still sends legacy sequences.
-- **GPUI UI tests** (§14): `#[gpui::test]` coverage for tab / pane actions, tabs position
-  switching, palette filtering, theme preview and Settings controls. Pure parts of `nox_ui`
-  (scrolling, links, attention, fuzzy matching) have unit tests.
 - **Session-restore integration test** with `SIGKILL` and a fake agent binary (§14).
 - **Benchmark regression gate**: CI runs the criterion benches but doesn't yet compare against
   a stored baseline (fail on > 10 %).

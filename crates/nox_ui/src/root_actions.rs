@@ -900,3 +900,421 @@ fn open_appearance_picker(r: &mut Root, w: &mut Window, cx: &mut Context<Root>) 
 
 #[allow(dead_code)]
 fn _unused(_: PaneSpawn, _: Startup, _: Interactivity) {}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::actions as a;
+    use crate::root::tests::{detach_session, dialog_title, make_agent, open, quiet_config, shell_config};
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use nox_layout::PaneId;
+
+    fn tab_ids(root: &Entity<Root>, cx: &mut VisualTestContext) -> Vec<nox_layout::TabId> {
+        root.read_with(cx, |r, _| r.ws.active().tabs.iter().map(|t| t.id).collect())
+    }
+
+    fn active_tab(root: &Entity<Root>, cx: &mut VisualTestContext) -> usize {
+        root.read_with(cx, |r, _| r.ws.active().active_tab)
+    }
+
+    fn focused(root: &Entity<Root>, cx: &mut VisualTestContext) -> PaneId {
+        root.read_with(cx, |r, _| r.focused_pane_id().unwrap())
+    }
+
+    fn has_palette(root: &Entity<Root>, cx: &mut VisualTestContext) -> bool {
+        root.read_with(cx, |r, _| r.palette.is_some())
+    }
+
+    #[gpui::test]
+    fn tab_navigation_and_reordering(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        cx.dispatch_action(a::NewTab);
+        cx.dispatch_action(a::NewTab);
+        let ids = tab_ids(&root, cx);
+        cx.dispatch_action(a::ActivateTab1);
+        assert_eq!(active_tab(&root, cx), 0);
+        cx.dispatch_action(a::ActivateTab3);
+        assert_eq!(active_tab(&root, cx), 2);
+        cx.dispatch_action(a::ActivateTab2);
+        assert_eq!(active_tab(&root, cx), 1);
+        cx.dispatch_action(a::ActivateLastTab);
+        assert_eq!(active_tab(&root, cx), 2);
+        cx.dispatch_action(a::NextTab);
+        assert_eq!(active_tab(&root, cx), 0, "wraps around");
+        cx.dispatch_action(a::PreviousTab);
+        assert_eq!(active_tab(&root, cx), 2);
+        // Unused slots do nothing.
+        for act in [
+            Box::new(a::ActivateTab4) as Box<dyn gpui::Action>,
+            Box::new(a::ActivateTab5),
+            Box::new(a::ActivateTab6),
+            Box::new(a::ActivateTab7),
+            Box::new(a::ActivateTab8),
+        ] {
+            cx.update(|w, cx| w.dispatch_action(act, cx));
+            cx.run_until_parked();
+        }
+        assert_eq!(active_tab(&root, cx), 2);
+        cx.dispatch_action(a::MoveTabLeft);
+        assert_eq!(tab_ids(&root, cx), vec![ids[0], ids[2], ids[1]]);
+        assert_eq!(active_tab(&root, cx), 1);
+        cx.dispatch_action(a::MoveTabRight);
+        assert_eq!(tab_ids(&root, cx), ids);
+        // Missing workspaces are ignored.
+        for act in [
+            Box::new(a::ActivateWorkspace1) as Box<dyn gpui::Action>,
+            Box::new(a::ActivateWorkspace3),
+            Box::new(a::ActivateWorkspace4),
+            Box::new(a::ActivateWorkspace5),
+            Box::new(a::ActivateWorkspace6),
+            Box::new(a::ActivateWorkspace7),
+            Box::new(a::ActivateWorkspace8),
+            Box::new(a::ActivateWorkspace9),
+        ] {
+            cx.update(|w, cx| w.dispatch_action(act, cx));
+            cx.run_until_parked();
+        }
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active, 0));
+        cx.dispatch_action(a::SendText(String::new()));
+    }
+
+    #[gpui::test]
+    fn focus_resize_and_equalize_panes(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let left = focused(&root, cx);
+        cx.dispatch_action(a::SplitVertical);
+        let right = focused(&root, cx);
+        cx.dispatch_action(a::FocusPaneLeft);
+        assert_eq!(focused(&root, cx), left);
+        cx.dispatch_action(a::FocusPaneRight);
+        assert_eq!(focused(&root, cx), right);
+        cx.dispatch_action(a::SplitHorizontal);
+        let bottom = focused(&root, cx);
+        cx.dispatch_action(a::FocusPaneUp);
+        assert_eq!(focused(&root, cx), right);
+        cx.dispatch_action(a::FocusPaneDown);
+        assert_eq!(focused(&root, cx), bottom);
+
+        let rects = |root: &Entity<Root>, cx: &mut VisualTestContext| {
+            root.update_in(cx, |r, w, cx| {
+                let area = r.layout_area(w, cx);
+                let t = r.active_tab().unwrap();
+                t.layout.layout_rects(area, crate::root::DIVIDER_PX)
+            })
+        };
+        let before = rects(&root, cx);
+        let w_of =
+            |rs: &Vec<(PaneId, nox_layout::Rect)>, p: PaneId| rs.iter().find(|(q, _)| *q == p).unwrap().1;
+        cx.dispatch_action(a::ResizePaneLeft);
+        let after = rects(&root, cx);
+        assert!(w_of(&after, bottom).w > w_of(&before, bottom).w, "grows to the left");
+        cx.dispatch_action(a::ResizePaneRight);
+        cx.dispatch_action(a::ResizePaneUp);
+        let up = rects(&root, cx);
+        assert!(w_of(&up, bottom).h > w_of(&before, bottom).h);
+        cx.dispatch_action(a::ResizePaneDown);
+        cx.dispatch_action(a::ResizePaneLeft);
+        cx.dispatch_action(a::EqualizePanes);
+        let eq = rects(&root, cx);
+        assert!((w_of(&eq, left).w - w_of(&eq, right).w).abs() <= 1.0);
+    }
+
+    #[gpui::test]
+    fn command_palette_runs_the_chosen_command(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        cx.dispatch_action(a::CommandPalette);
+        assert!(has_palette(&root, cx));
+        cx.simulate_input("New Tab");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        root.read_with(cx, |r, _| {
+            assert!(r.palette.is_none());
+            assert_eq!(r.ws.active().tabs.len(), 2);
+        });
+        cx.dispatch_action(a::CommandPalette);
+        cx.simulate_keystrokes("escape");
+        assert!(!has_palette(&root, cx));
+        assert_eq!(root.read_with(cx, |r, _| r.ws.active().tabs.len()), 2);
+    }
+
+    #[gpui::test]
+    fn tab_switcher_reveals_tabs_across_workspaces(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let target = root.update_in(cx, |r, w, cx| {
+            let idx = r.create_workspace(Some("other".into()), None, w, cx);
+            let p = r.add_tab(idx, crate::pane::PaneSpawn::default(), w, cx);
+            r.ws.list[idx].tabs[0].custom_name = Some("zebra".into());
+            r.switch_workspace(0, w, cx);
+            p
+        });
+        cx.dispatch_action(a::SwitchTab);
+        assert!(has_palette(&root, cx));
+        cx.simulate_input("zebra");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.active, 1);
+            assert_eq!(r.focused_pane_id(), Some(target));
+        });
+    }
+
+    #[gpui::test]
+    fn workspace_switcher_switches_and_offers_new(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        root.update_in(cx, |r, w, cx| {
+            let idx = r.create_workspace(Some("gamma".into()), None, w, cx);
+            r.add_tab(idx, crate::pane::PaneSpawn::default(), w, cx);
+            r.ws.list[idx].color = Some("red".into());
+            r.ws.list[idx].root_missing = true;
+            r.switch_workspace(0, w, cx);
+        });
+        let p = root.read_with(cx, |r, _| r.ws.list[1].tabs[0].focused);
+        make_agent(&root, p, "fake", AgentState::Working, cx);
+        cx.dispatch_action(a::SwitchWorkspace);
+        cx.simulate_input("gamma");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active, 1));
+        cx.dispatch_action(a::SwitchWorkspace);
+        cx.simulate_input("New Workspace");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(dialog_title(cx).as_deref(), Some("New Workspace"));
+        cx.simulate_keystrokes("escape");
+    }
+
+    #[gpui::test]
+    fn color_picker_sets_and_clears_the_workspace_color(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        cx.dispatch_action(a::SetWorkspaceColor);
+        cx.simulate_input("red");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active().color.as_deref(), Some("red")));
+        cx.dispatch_action(a::SetWorkspaceColor);
+        cx.simulate_input("None");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| assert_eq!(r.ws.active().color, None));
+    }
+
+    #[gpui::test]
+    fn agent_picker_launches_the_chosen_agent(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        cfg.agents.defs.clear();
+        cfg.agents
+            .defs
+            .insert("fake".into(), nox_config::AgentDef { command: "true".into(), ..Default::default() });
+        let (root, cx) = open(cx, cfg);
+        cx.dispatch_action(a::NewAgentTab);
+        cx.simulate_input("fake");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.ws.active().tabs.len(), 2);
+            let p = r.focused_pane().unwrap();
+            assert_eq!(p.read(cx).agent.as_ref().map(|a| a.kind.as_str()), Some("fake"));
+        });
+    }
+
+    #[gpui::test]
+    fn next_agent_cycles_through_waiting_agents(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        // None waiting: stays put.
+        let start = focused(&root, cx);
+        cx.dispatch_action(a::NextAgent);
+        assert_eq!(focused(&root, cx), start);
+        let (x, y) = root.update_in(cx, |r, w, cx| {
+            let x = r.split(SplitDirection::Vertical, None, w, cx).unwrap();
+            let idx = r.create_workspace(Some("b".into()), None, w, cx);
+            let y = r.add_tab(idx, crate::pane::PaneSpawn::default(), w, cx);
+            r.switch_workspace(0, w, cx);
+            (x, y)
+        });
+        make_agent(&root, x, "fake", AgentState::NeedsInput, cx);
+        make_agent(&root, y, "fake", AgentState::NeedsInput, cx);
+        cx.dispatch_action(a::NextAgent);
+        let first = focused(&root, cx);
+        cx.dispatch_action(a::NextAgent);
+        let second = focused(&root, cx);
+        assert_ne!(first, second);
+        let mut both = vec![first, second];
+        both.sort();
+        let mut want = vec![x, y];
+        want.sort();
+        assert_eq!(both, want);
+        // A new round starts over.
+        cx.dispatch_action(a::NextAgent);
+        assert_eq!(focused(&root, cx), first);
+    }
+
+    #[gpui::test]
+    fn agents_panel_groups_agents_by_workspace(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let empty = root.update(cx, |r, cx| (agents_items(r, cx), activity_items(r)));
+        assert_eq!(empty.0.len(), 1);
+        assert!(empty.0[0].header);
+        assert!(empty.0[0].label.contains("No agents"));
+        assert!(empty.1[0].header);
+        let (p0, p1, p2) = root.update_in(cx, |r, w, cx| {
+            let p0 = r.focused_pane_id().unwrap();
+            let p1 = r.split(SplitDirection::Vertical, None, w, cx).unwrap();
+            let idx = r.create_workspace(Some("second".into()), None, w, cx);
+            let p2 = r.add_tab(idx, crate::pane::PaneSpawn::default(), w, cx);
+            r.switch_workspace(0, w, cx);
+            (p0, p1, p2)
+        });
+        make_agent(&root, p0, "claude", AgentState::Working, cx);
+        make_agent(&root, p1, "codex", AgentState::NeedsInput, cx);
+        make_agent(&root, p2, "claude", AgentState::Idle, cx);
+        root.update(cx, |r, cx| {
+            r.panes[&p2].update(cx, |p, _| {
+                p.done_unseen = true;
+                p.unread = 2;
+                p.claims = vec!["src".into()];
+                p.branch = Some("main".into());
+            });
+        });
+        let items = root.update(cx, |r, cx| agents_items(r, cx));
+        let labels: Vec<(bool, String)> = items.iter().map(|i| (i.header, i.label.to_string())).collect();
+        let ws0 = root.read_with(cx, |r, _| r.ws.list[0].name.clone());
+        assert_eq!(
+            labels,
+            vec![
+                (true, ws0),
+                (false, "codex".into()),
+                (false, "claude".into()),
+                (true, "second".into()),
+                (false, "claude".into()),
+            ]
+        );
+        assert!(items[1].hint.as_ref().unwrap().starts_with("needs input"));
+        assert!(items[2].hint.as_ref().unwrap().starts_with("working"));
+        assert_eq!(items[4].hint.as_ref().map(ToString::to_string).as_deref(), Some("idle · unseen"));
+        let detail = items[4].detail.as_ref().unwrap();
+        assert!(detail.contains("claude msg") && detail.contains("⎇ main"));
+        assert!(detail.contains("✉ 2") && detail.contains("1 claim(s)"));
+
+        // The panel itself; Tab shows the activity list; ↵ jumps to the agent. (A query with a
+        // `-`: the random scratch-dir names in the details can't match it.)
+        root.update(cx, |r, cx| r.panes[&p2].update(cx, |p, _| p.custom_name = Some("zz-target".into())));
+        cx.dispatch_action(a::AgentsPanel);
+        assert!(has_palette(&root, cx));
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("shift-tab");
+        cx.simulate_input("zz-target");
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| {
+            assert_eq!(r.ws.active, 1);
+            assert_eq!(r.focused_pane_id(), Some(p2));
+        });
+    }
+
+    #[gpui::test]
+    fn send_selection_without_output_opens_nothing(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let p = focused(&root, cx);
+        detach_session(&root, p, cx);
+        cx.dispatch_action(a::SplitVertical);
+        cx.dispatch_action(a::FocusPaneLeft);
+        cx.dispatch_action(a::SendSelectionTo);
+        assert!(!has_palette(&root, cx));
+    }
+
+    #[gpui::test]
+    fn theme_picker_previews_and_restores_on_escape(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        let name = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| cx.global::<crate::theme::ThemeState>().file.name.clone())
+        };
+        let original = name(cx);
+        cx.dispatch_action(a::SwitchTheme);
+        assert!(has_palette(&root, cx));
+        cx.simulate_keystrokes("down");
+        assert_ne!(name(cx), original, "highlight previews the next theme");
+        cx.simulate_keystrokes("escape");
+        assert_eq!(name(cx), original);
+        assert!(!has_palette(&root, cx));
+
+        let mode =
+            |cx: &mut VisualTestContext| cx.update(|_, cx| cx.global::<crate::theme::ThemeState>().mode);
+        let m0 = mode(cx);
+        cx.dispatch_action(a::SwitchAppearance);
+        if has_palette(&root, cx) {
+            cx.simulate_keystrokes("down");
+            cx.simulate_keystrokes("escape");
+            assert_eq!(mode(cx), m0);
+        }
+    }
+
+    #[gpui::test]
+    fn per_pane_font_size(cx: &mut TestAppContext) {
+        let mut cfg = quiet_config();
+        cfg.font.size_applies_to = nox_config::SizeAppliesTo::Pane;
+        let (root, cx) = open(cx, cfg);
+        let a0 = focused(&root, cx);
+        cx.dispatch_action(a::SplitVertical);
+        let b = focused(&root, cx);
+        let base = cx.update(|_, cx| Settings::global(cx).term_font.size);
+        cx.dispatch_action(a::FontBigger);
+        root.read_with(cx, |r, cx| {
+            assert_eq!(r.font_override, None);
+            assert_eq!(r.panes[&b].read(cx).font_size_override, Some(base + 1.));
+            assert_eq!(r.panes[&a0].read(cx).font_size_override, None);
+        });
+        cx.dispatch_action(a::FontReset);
+        root.read_with(cx, |r, cx| assert_eq!(r.panes[&b].read(cx).font_size_override, None));
+    }
+
+    #[gpui::test]
+    fn quitting_saves_nothing_after_quit_started(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        root.update(cx, |r, _| r.quitting = true);
+        cx.dispatch_action(a::Quit);
+        assert_eq!(dialog_title(cx), None, "nothing runs: no confirmation");
+    }
+
+    /// Run `sleep` in the focused pane's shell and wait (bounded) until it is in the foreground.
+    fn make_busy(root: &Entity<Root>, cx: &mut VisualTestContext) -> bool {
+        let p = root.read_with(cx, |r, _| r.focused_pane().unwrap());
+        cx.update(|_, cx| p.update(cx, |p, _| p.write(b"sleep 5\r")));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            cx.run_until_parked();
+            if cx.update(|_, cx| p.read(cx).is_busy()) {
+                // Pick up the foreground process now (normally a throttled refresh does).
+                cx.update(|_, cx| p.update(cx, crate::pane::Pane::refresh_info));
+                return cx.update(|_, cx| p.read(cx).process_display_name()).is_some();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[gpui::test]
+    fn busy_panes_ask_before_closing(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, shell_config());
+        cx.dispatch_action(a::SplitVertical);
+        assert!(make_busy(&root, cx), "sleep reached the foreground");
+        let busy = focused(&root, cx);
+        for (act, title) in [
+            (Box::new(a::ClosePane) as Box<dyn gpui::Action>, "Close this pane?"),
+            (Box::new(a::CloseTab), "Close this tab?"),
+            (Box::new(a::Quit), "Quit nox?"),
+        ] {
+            cx.update(|w, cx| w.dispatch_action(act, cx));
+            cx.run_until_parked();
+            assert_eq!(dialog_title(cx).as_deref(), Some(title));
+            cx.simulate_keystrokes("escape");
+            assert_eq!(dialog_title(cx), None);
+        }
+        let ws = root.read_with(cx, |r, _| r.ws.active().name.clone());
+        cx.dispatch_action(a::CloseWorkspace);
+        assert_eq!(dialog_title(cx), Some(format!("Close workspace “{ws}”?")));
+        cx.simulate_keystrokes("escape");
+        assert!(root.read_with(cx, |r, _| r.panes.contains_key(&busy)));
+        // Confirming closes it.
+        cx.dispatch_action(a::ClosePane);
+        cx.simulate_keystrokes("enter");
+        root.read_with(cx, |r, _| {
+            assert!(!r.panes.contains_key(&busy));
+            assert_eq!(r.active_tab().unwrap().panes().len(), 1);
+        });
+    }
+}

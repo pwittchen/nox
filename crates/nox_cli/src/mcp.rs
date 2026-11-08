@@ -568,6 +568,124 @@ mod tests {
     }
 
     #[test]
+    fn malformed_requests() {
+        let mut fake = Fake::default();
+        let raw = |line: &str, fake: &mut Fake| -> Option<Value> {
+            handle_jsonrpc(line, fake).map(|s| serde_json::from_str(&s).unwrap())
+        };
+        let r = raw("[1, 2]", &mut fake).unwrap();
+        assert_eq!((r["error"]["code"].clone(), r["id"].clone()), (json!(-32600), Value::Null));
+        assert_eq!(r["error"]["message"], "batches are not supported");
+        let r = raw("42", &mut fake).unwrap();
+        assert_eq!(r["error"]["message"], "invalid request");
+        // A message without a method: an error if it has an id, otherwise ignored.
+        let r = raw(r#"{"jsonrpc":"2.0","id":9,"result":{}}"#, &mut fake).unwrap();
+        assert_eq!((r["id"].clone(), r["error"]["code"].clone()), (json!(9), json!(-32600)));
+        assert_eq!(raw(r#"{"jsonrpc":"2.0","result":{}}"#, &mut fake), None);
+        let r = rpc(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}), &mut fake);
+        assert_eq!(r["error"]["message"], "tools/call needs a tool name");
+        let r = rpc(
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_panes","arguments":[1]}}),
+            &mut fake,
+        );
+        assert_eq!(r["error"]["message"], "arguments must be an object");
+        // Null arguments mean none.
+        let r = rpc(
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_claims","arguments":null}}),
+            &mut fake,
+        );
+        assert_eq!(r["result"]["isError"], false);
+        assert!(fake.calls.iter().all(|(m, _)| *m == Method::Claims), "{:?}", fake.calls);
+    }
+
+    #[test]
+    fn tool_results() {
+        let mut fake = Fake::default();
+        // Non-empty object results are pretty-printed and returned as structured content.
+        let r = call_tool("send_message", &json!({"to":"a","text":"t"}), &mut fake);
+        assert_eq!(r["isError"], false);
+        assert_eq!(r["content"][0]["text"], "{\n  \"ok\": true\n}");
+        assert_eq!(r["structuredContent"], json!({"ok": true}));
+        // read_pane returns the text itself, without structured content.
+        let r = call_tool("read_pane", &json!({"pane":"b"}), &mut fake);
+        assert_eq!(r["content"][0]["text"], "screen text");
+        assert!(r.get("structuredContent").is_none());
+        let r = call_tool("read_pane", &json!({"pane":1}), &mut fake);
+        assert_eq!(r["content"][0]["text"], "invalid arguments: `pane` must be a string");
+        assert_eq!(r["isError"], true);
+    }
+
+    #[test]
+    fn argument_validation() {
+        let err = |name: &str, args: Value| tool_to_method(name, &args).unwrap_err();
+        assert_eq!(err("list_panes", json!({"all": "yes"})), "`all` must be a boolean");
+        assert_eq!(err("send_message", json!({"to": "a"})), "missing `text`");
+        assert_eq!(err("read_pane", json!({"pane": "b", "mode": "pixels"})), "unknown mode `pixels`");
+        assert_eq!(
+            err("read_pane", json!({"pane": "b", "mode": "lines", "lines": 0})),
+            "`lines` must be a positive integer"
+        );
+        assert_eq!(
+            err("read_pane", json!({"pane": "b", "mode": "lines", "lines": 5_000_000_000_u64})),
+            "`lines` must be a positive integer"
+        );
+        assert_eq!(err("wait_for_pane", json!({"pane": "b", "state": "asleep"})), "unknown state `asleep`");
+        assert_eq!(
+            err("wait_for_pane", json!({"pane": "b", "timeout_s": "1"})),
+            "`timeout_s` must be a non-negative number"
+        );
+        assert_eq!(err("spawn_pane", json!({"placement": "float"})), "unknown placement `float`");
+        assert_eq!(err("claim_paths", json!({"paths": 3})), "`paths` must be an array of strings");
+        assert_eq!(err("claim_paths", json!({"paths": ["a", 1]})), "`paths` must be an array of strings");
+        assert_eq!(err("teleport", json!({})), "unknown tool: teleport");
+    }
+
+    #[test]
+    fn argument_defaults_and_shortcuts() {
+        let m = |name: &str, args: Value| tool_to_method(name, &args).unwrap();
+        let read = |mode: Value| m("read_pane", json!({"pane": "b", "mode": mode, "lines": null})).0;
+        assert_eq!(read(json!("lines")), Method::Read { pane: "b".into(), mode: ReadMode::Lines(50) });
+        assert_eq!(read(json!("scrollback")), Method::Read { pane: "b".into(), mode: ReadMode::Scrollback });
+        assert_eq!(read(json!("last_output")), Method::Read { pane: "b".into(), mode: ReadMode::LastOutput });
+        assert_eq!(read(Value::Null), Method::Read { pane: "b".into(), mode: ReadMode::Screen });
+        // A single path may be given as a string.
+        let (c, t) =
+            m("claim_paths", json!({"paths": "src/", "reason": "x", "wait": true, "timeout_s": 2.5}));
+        assert_eq!(
+            c,
+            Method::Claim {
+                paths: vec!["src/".into()],
+                reason: Some("x".into()),
+                wait: true,
+                timeout_s: Some(2.5)
+            }
+        );
+        assert_eq!(t, Some(Duration::from_secs_f64(7.5)));
+        let (w, t) = m("wait_for_pane", json!({"pane": "b", "state": "needs-input"}));
+        assert_eq!(w, Method::Wait { pane: "b".into(), state: WaitState::NeedsInput, timeout_s: None });
+        assert_eq!(t, None);
+        assert_eq!(
+            m("spawn_pane", json!({"placement": "split-right", "name": "h"})).0,
+            Method::Spawn {
+                placement: Placement::SplitRight,
+                name: Some("h".into()),
+                cwd: None,
+                command: vec![]
+            }
+        );
+        assert_eq!(
+            m("spawn_pane", json!({})).0,
+            Method::Spawn { placement: Placement::Tab, name: None, cwd: None, command: vec![] }
+        );
+        for (state, want) in [("working", AgentStateWire::Working), ("idle", AgentStateWire::Idle)] {
+            assert_eq!(
+                m("set_status", json!({"state": state, "message": "m"})).0,
+                Method::Status { state: want, message: Some("m".into()), session: None }
+            );
+        }
+    }
+
+    #[test]
     fn tool_mapping() {
         let m = |name: &str, args: Value| tool_to_method(name, &args).unwrap();
         assert_eq!(

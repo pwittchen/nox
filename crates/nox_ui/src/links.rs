@@ -101,4 +101,37 @@ mod tests {
         let t2 = "missing/file.rs";
         assert!(find_link(t2, 2, Some(d.path())).is_none());
     }
+
+    #[test]
+    fn trims_trailing_punctuation_and_finds_mailto() {
+        let t = "(see https://x.dev/a). and [https://y.dev/b] or <https://z.dev>";
+        let (r, _) = find_link(t, t.find("x.dev").unwrap(), None).unwrap();
+        assert_eq!(&t[r], "https://x.dev/a");
+        let (r, _) = find_link(t, t.find("y.dev").unwrap(), None).unwrap();
+        assert_eq!(&t[r], "https://y.dev/b");
+        let (r, _) = find_link(t, t.find("z.dev").unwrap(), None).unwrap();
+        assert_eq!(&t[r], "https://z.dev");
+        let t = "write to mailto:me@nox.dev, please";
+        let (r, target) = find_link(t, t.find("me@").unwrap(), None).unwrap();
+        assert_eq!(&t[r], "mailto:me@nox.dev");
+        assert_eq!(target, LinkTarget::Url("mailto:me@nox.dev".into()));
+    }
+
+    #[test]
+    fn paths_need_a_slash_or_dot_and_must_exist() {
+        let d = tempfile::tempdir().unwrap();
+        let abs = d.path().join("f.txt");
+        std::fs::write(&abs, "").unwrap();
+        let t = format!("at {}:3.", abs.display());
+        let (r, target) = find_link(&t, 5, None).unwrap();
+        assert_eq!(&t[r], format!("{}:3", abs.display()));
+        assert_eq!(target, LinkTarget::Path(abs));
+        assert!(find_link("just words", 2, Some(d.path())).is_none(), "no slash, no dot");
+        assert!(find_link("a b", 0, Some(d.path())).is_none(), "too short");
+        assert!(find_link("rel/x.rs", 1, None).is_none(), "relative paths need a cwd");
+        assert!(find_link("~/definitely-not-here-nox/x", 3, None).is_none());
+        assert_eq!(strip_line_suffix("a.rs:1:2"), "a.rs");
+        assert_eq!(strip_line_suffix("a.rs:x"), "a.rs:x");
+        assert_eq!(strip_line_suffix("a.rs:"), "a.rs:");
+    }
 }

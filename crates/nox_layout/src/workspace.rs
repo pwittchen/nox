@@ -470,6 +470,36 @@ mod tests {
     }
 
     #[test]
+    fn tab_lookup_and_mutation() {
+        let mut w = Workspace::new(WorkspaceId(1), "w", None);
+        // The first tab inserted into an empty workspace becomes active.
+        assert_eq!(w.insert_tab(5, tab(1)), 0);
+        assert_eq!(w.active().map(|t| t.id), Some(TabId(1)));
+        w.add_tab_after_active(tab(2));
+        assert_eq!(w.tab(TabId(1)).map(|t| t.focused), Some(PaneId(1)));
+        assert!(w.tab(TabId(9)).is_none());
+        w.tab_mut(TabId(1)).unwrap().custom_name = Some("renamed".into());
+        assert_eq!(w.tab(TabId(1)).unwrap().custom_name.as_deref(), Some("renamed"));
+        assert!(w.tab_mut(TabId(9)).is_none());
+        w.active_mut().unwrap().custom_icon = Some("rust".into());
+        assert_eq!(w.tab(TabId(2)).unwrap().custom_icon.as_deref(), Some("rust"));
+        assert!(Workspace::new(WorkspaceId(2), "e", None).active_mut().is_none());
+    }
+
+    #[test]
+    fn workspace_lookup_and_bad_reorder() {
+        let mut list = Workspaces::new(ws(1, "a"));
+        list.push(ws(2, "b"));
+        assert_eq!(list.get(WorkspaceId(2)).map(|w| w.name.as_str()), Some("b"));
+        assert!(list.get(WorkspaceId(3)).is_none());
+        list.get_mut(WorkspaceId(2)).unwrap().name = "bee".into();
+        assert_eq!(list.get(WorkspaceId(2)).unwrap().name, "bee");
+        assert!(list.get_mut(WorkspaceId(3)).is_none());
+        assert!(!list.reorder(2, 0), "out of range");
+        assert_eq!(list.active().id, WorkspaceId(1));
+    }
+
+    #[test]
     fn status_priority() {
         use TabStatus::*;
         assert_eq!(aggregate_status([]), None);

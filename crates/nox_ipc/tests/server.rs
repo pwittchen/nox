@@ -1,11 +1,13 @@
-use std::io::{BufRead, BufReader, Write};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nox_ipc::{
-    Caller, Client, ErrorCode, Handler, LsResult, Method, Responder, Response, Server, TabInfo, WsInfo,
+    Caller, Client, ErrorCode, Handler, IpcError, LsResult, MAX_LINE_BYTES, Method, Responder, Response,
+    Server, TabInfo, Tokens, WsInfo,
 };
 use serde_json::json;
 
@@ -43,6 +45,20 @@ impl Handler for Mock {
                 });
             }
             Method::Claims => drop(reply), // dropped responder → internal error
+            // `notify` with a title picks other responder paths.
+            Method::Notify { title, .. } => match title.as_str() {
+                "result-ok" => reply.result(Ok(json!("fine"))),
+                "result-err" => reply.result(Err(IpcError::new(ErrorCode::Conflict, "held"))),
+                // Maps with non-string keys can't become JSON.
+                "unserializable" => reply.ok_typed(&HashMap::from([((1, 2), 3)])),
+                "debug" => {
+                    let id = reply.id();
+                    let debug = format!("{reply:?}");
+                    reply.ok(json!({"id": id, "debug": debug}));
+                }
+                "panic" => panic!("handler bug"),
+                _ => reply.err(ErrorCode::NotFound, "unsupported in mock"),
+            },
             _ => reply.err(ErrorCode::NotFound, "unsupported in mock"),
         }
     }
@@ -208,4 +224,141 @@ fn stop_returns_even_if_socket_file_was_deleted() {
     let t = Instant::now();
     handle.stop();
     assert!(t.elapsed() < Duration::from_secs(2));
+}
+
+fn authed_client(handle: &nox_ipc::ServerHandle, path: &std::path::Path) -> Client {
+    let token = handle.tokens().issue(Caller { pane_id: 1, tab_id: 1, workspace_id: 1 });
+    Client::connect(path, Some(token)).unwrap()
+}
+
+fn notify(title: &str) -> Method {
+    Method::Notify { title: title.into(), body: None }
+}
+
+#[test]
+fn responder_result_and_serialize_failure() {
+    let (_dir, handle, path) = start();
+    let mut client = authed_client(&handle, &path);
+    assert!(client.has_token());
+    assert_eq!(client.socket_path(), path);
+    assert_eq!(client.call(notify("result-ok"), None).unwrap(), json!("fine"));
+    let err = client.call(notify("result-err"), None).unwrap_err();
+    assert_eq!((err.code, err.message.as_str()), (ErrorCode::Conflict, "held"));
+    let err = client.call(notify("unserializable"), None).unwrap_err();
+    assert_eq!(err.code, ErrorCode::Internal);
+    assert!(err.message.starts_with("serialize result:"), "{}", err.message);
+    let v = client.call(notify("debug"), None).unwrap();
+    let id = v["id"].as_u64().unwrap();
+    assert_eq!(v["debug"], json!(format!("Responder {{ id: {id}, .. }}")));
+}
+
+#[test]
+fn panicking_handler_answers_internal_and_keeps_connection() {
+    let (_dir, handle, path) = start();
+    let mut client = authed_client(&handle, &path);
+    let err = client.call(notify("panic"), None).unwrap_err();
+    assert_eq!(err.code, ErrorCode::Internal);
+    assert_eq!(err.message, "request dropped");
+    // The connection survives.
+    assert_eq!(client.call(notify("result-ok"), None).unwrap(), json!("fine"));
+}
+
+#[test]
+fn missing_version_and_blank_lines() {
+    let (_dir, _handle, path) = start();
+    let mut stream = UnixStream::connect(&path).unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    // Blank lines are skipped; the first answer is for the request without "v".
+    stream.write_all(b"\n   \n{\"id\":4,\"method\":\"ls\"}\n").unwrap();
+    let mut out = String::new();
+    reader.read_line(&mut out).unwrap();
+    let r: Response = serde_json::from_str(&out).unwrap();
+    assert_eq!(r.id, 4);
+    let err = r.into_result().unwrap_err();
+    assert_eq!(err.code, ErrorCode::Usage);
+    assert!(err.message.contains("missing protocol version"), "{}", err.message);
+}
+
+#[test]
+fn overlong_request_line_is_refused() {
+    let (_dir, _handle, path) = start();
+    let stream = UnixStream::connect(&path).unwrap();
+    let mut writer = stream.try_clone().unwrap();
+    // The server may close before we are done writing; ignore write errors.
+    let feeder = std::thread::spawn(move || {
+        let chunk = vec![b'x'; 1 << 20];
+        let mut left = MAX_LINE_BYTES + 2;
+        while left > 0 {
+            let n = left.min(chunk.len());
+            if writer.write_all(&chunk[..n]).is_err() {
+                return;
+            }
+            left -= n;
+        }
+        let _ = writer.write_all(b"\n");
+    });
+    let mut reader = BufReader::new(stream);
+    let mut out = String::new();
+    reader.read_line(&mut out).unwrap();
+    let r: Response = serde_json::from_str(&out).unwrap();
+    assert_eq!(r.id, 0);
+    let err = r.into_result().unwrap_err();
+    assert_eq!((err.code, err.message.as_str()), (ErrorCode::Usage, "request line too long"));
+    // ...and the connection is closed.
+    let mut rest = Vec::new();
+    assert_eq!(reader.read_to_end(&mut rest).unwrap(), 0);
+    feeder.join().unwrap();
+}
+
+#[test]
+fn stop_closes_open_connections() {
+    let (_dir, handle, path) = start();
+    assert_eq!(handle.socket_path(), path);
+    assert!(format!("{handle:?}").starts_with("ServerHandle { path: "));
+    let mut client = authed_client(&handle, &path);
+    // Make sure the connection is registered before stopping.
+    assert_eq!(client.call(notify("result-ok"), None).unwrap(), json!("fine"));
+    handle.stop();
+    let err = client.call(notify("result-ok"), Some(Duration::from_secs(5))).unwrap_err();
+    assert_eq!(err.code, ErrorCode::Internal);
+    // Depending on timing the client notices on write, when arming the read timeout, or on read.
+    let m = err.message.as_str();
+    assert!(
+        m == "nox closed the connection" || m.starts_with("send request:") || m.starts_with("set timeout:"),
+        "{m}"
+    );
+}
+
+#[test]
+fn start_with_shared_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nox.sock");
+    let tokens = Tokens::new();
+    assert!(tokens.is_empty());
+    let token = tokens.issue(Caller { pane_id: 7, tab_id: 1, workspace_id: 1 });
+    let other = tokens.issue(Caller { pane_id: 8, tab_id: 1, workspace_id: 1 });
+    let handle = Server::start_with_tokens(&path, tokens.clone(), Arc::new(Mock)).unwrap();
+    assert_eq!(handle.tokens().len(), 2);
+    let mut client = Client::connect(&path, Some(token.clone())).unwrap();
+    assert_eq!(
+        client.call(Method::Name { name: "n".into() }, None).unwrap(),
+        json!({"pane": 7, "name": "n"})
+    );
+    // Revoking one token leaves the pane's other tokens (and other panes) alone.
+    tokens.revoke(&token);
+    assert_eq!(handle.tokens().len(), 1);
+    assert!(handle.tokens().resolve(&other).is_some());
+    let err = client.call(Method::Name { name: "n".into() }, None).unwrap_err();
+    assert_eq!(err.code, ErrorCode::Unauthorized);
+}
+
+#[test]
+fn group_permissions_on_existing_dir_are_tightened() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = dir.path().join("run");
+    std::fs::create_dir(&run).unwrap();
+    std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let handle = Server::start(&run.join("nox.sock"), Arc::new(Mock)).unwrap();
+    assert_eq!(std::fs::metadata(&run).unwrap().permissions().mode() & 0o777, 0o700);
+    drop(handle);
 }
