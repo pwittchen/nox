@@ -858,6 +858,11 @@ explicit status reporting (below) makes them precise.
      `✳` when idle), kept in the same built-in table as the icons (see 4.6).
   4. **Activity heuristic** (fallback only): output in the last 1.5 s → working; quiet after
      that → idle.
+- Exception to "first wins": hooks miss some turns (Claude Code resumes after a background task
+  without `UserPromptSubmit`, and skips `Stop` when interrupted with Esc), so a title that
+  clearly contradicts a report corrects it, from 2 s after the report on: an animating working
+  title over a reported idle → working, a title changing to idle over a reported working → idle.
+  A reported needs input is never overridden by a title.
 - The state drives the tab and workspace dots (4.2, 4.7), the attention sound and notifications
   (7.11) and the agents panel. A working dot gently pulses (off under Reduce Motion).
 

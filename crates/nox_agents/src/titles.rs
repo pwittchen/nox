@@ -2,7 +2,7 @@
 //!
 //! | agent  | working                                   | needs input | idle |
 //! |--------|-------------------------------------------|-------------|------|
-//! | claude | braille spinner (`⠂ ⠐ …`), `✻ ✽ ✶ ✢ ·` prefix | —        | `✳`  |
+//! | claude | braille spinner (`⠂ ⠐ …`), `✻ ✽ ✶ ✢ ·`, `◐ ◓ ◑ ◒` prefix | — | `✳` |
 //! | gemini | `✦` prefix                                 | `✋` prefix  | `◇`  |
 //!
 //! Codex, Copilot and the others don't set telling titles; they fall back to the activity
@@ -41,7 +41,9 @@ fn claude_state(title: &str) -> Option<(AgentState, &str)> {
     let (c, rest) = split_prefix(title)?;
     match c {
         '✳' => Some((AgentState::Idle, rest)),
-        '✻' | '✽' | '✶' | '✢' | '·' => Some((AgentState::Working, rest)),
+        '✻' | '✽' | '✶' | '✢' | '·' | '◐' | '◓' | '◑' | '◒' => {
+            Some((AgentState::Working, rest))
+        }
         c if is_braille_spinner(c) => Some((AgentState::Working, rest)),
         _ => None,
     }
@@ -90,6 +92,12 @@ mod tests {
         assert_eq!(title_state("claude", "⠂ Fix parser"), Some((AgentState::Working, "Fix parser")));
         assert_eq!(title_state("claude", "⠐ Fix parser"), Some((AgentState::Working, "Fix parser")));
         assert_eq!(title_state("claude", "✻ Fix parser"), Some((AgentState::Working, "Fix parser")));
+        for c in ['◐', '◓', '◑', '◒'] {
+            assert_eq!(
+                title_state("claude", &format!("{c} Fix parser")).map(|s| s.0),
+                Some(AgentState::Working)
+            );
+        }
         assert_eq!(title_state("claude", "plain"), None);
         assert_eq!(title_state("codex", "✳ x"), None);
     }

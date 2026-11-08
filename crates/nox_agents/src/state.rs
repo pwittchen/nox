@@ -6,9 +6,13 @@
 //! `transition.wants_attention(min_duration)`.
 //!
 //! **Source priority** ("the first available wins"):
-//! 1. explicit report (`nox status`, hooks, MCP) — once a pane has reported, OSC notifications,
-//!    titles and activity no longer change its state (the agent tells us precisely; an OSC 9
-//!    still chimes through the app's generic *attention* trigger, so nothing is lost);
+//! 1. explicit report (`nox status`, hooks, MCP) — once a pane has reported, OSC notifications
+//!    and activity no longer change its state (the agent tells us precisely; an OSC 9 still
+//!    chimes through the app's generic *attention* trigger, so nothing is lost). Hooks miss some
+//!    turns, though (Claude Code resumes after a background task without `UserPromptSubmit` and
+//!    skips `Stop` on Esc), so a title that clearly contradicts the report still corrects it, at
+//!    least [`REPORT_GRACE`] after the report: an *animating* working title over a reported idle,
+//!    or a title edge to idle over a reported working;
 //! 2. OSC 9 / 777 notification → needs input (until a report has been seen);
 //! 3. title patterns ([`crate::titles`]) — edge-triggered: only a *change* of the state the title
 //!    signals counts, so an animated spinner doesn't pull a pane out of needs-input;
@@ -33,6 +37,10 @@ use crate::titles::title_state;
 
 /// Output within this window counts as working for the activity heuristic.
 pub const ACTIVITY_WINDOW: Duration = Duration::from_millis(1500);
+
+/// After an explicit report, titles can't override it for this long (a spinner frame or two can
+/// trail a `Stop` hook, an idle title can lead a `UserPromptSubmit` one).
+pub const REPORT_GRACE: Duration = Duration::from_millis(2000);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -118,7 +126,9 @@ pub struct AgentTracker {
     turn_started: Option<Instant>,
     source: StateSource,
     has_report: bool,
+    last_report: Option<Instant>,
     has_title: bool,
+    last_title: Option<String>,
     last_title_state: Option<AgentState>,
     last_output: Option<Instant>,
 }
@@ -136,7 +146,9 @@ impl AgentTracker {
             turn_started: None,
             source: StateSource::Initial,
             has_report: false,
+            last_report: None,
             has_title: false,
+            last_title: None,
             last_title_state: None,
             last_output: None,
         }
@@ -223,6 +235,7 @@ impl AgentTracker {
             self.session = session;
         }
         self.has_report = true;
+        self.last_report = Some(now);
         if msg.is_some() || state != self.state {
             self.message = msg;
         }
@@ -242,17 +255,48 @@ impl AgentTracker {
 
     /// The pane title changed (OSC 0/2).
     pub fn on_title(&mut self, title: &str, now: Instant) -> Option<Transition> {
-        if self.exited() || self.has_report {
+        if self.exited() {
             return None;
         }
         let (state, rest) = title_state(&self.kind, title)?;
         self.has_title = true;
         let edge = self.last_title_state != Some(state);
         self.last_title_state = Some(state);
+        let animated = self.last_title.as_deref() != Some(title);
+        if animated {
+            self.last_title = Some(title.to_string());
+        }
+        if self.has_report {
+            return self.title_over_report(state, rest, edge, animated, now);
+        }
         if !edge {
             if self.state == state && !rest.is_empty() {
                 self.message = Some(rest.to_string());
             }
+            return None;
+        }
+        self.message = (!rest.is_empty()).then(|| rest.to_string());
+        self.set_state(state, StateSource::Title, now)
+    }
+
+    /// A title that contradicts the last report (see the module docs).
+    fn title_over_report(
+        &mut self,
+        state: AgentState,
+        rest: &str,
+        edge: bool,
+        animated: bool,
+        now: Instant,
+    ) -> Option<Transition> {
+        if self.last_report.is_some_and(|r| now.saturating_duration_since(r) < REPORT_GRACE) {
+            return None;
+        }
+        let overrides = match (self.state, state) {
+            (AgentState::Idle, AgentState::Working) => edge || animated,
+            (AgentState::Working, AgentState::Idle) => edge,
+            _ => false,
+        };
+        if !overrides {
             return None;
         }
         self.message = (!rest.is_empty()).then(|| rest.to_string());
@@ -415,6 +459,38 @@ mod tests {
         assert_eq!(a.message(), None);
         // Same state again: no transition.
         assert_eq!(a.on_report(AgentState::Idle, None, None, at(t0, 4_000)), None);
+    }
+
+    #[test]
+    fn claude_title_corrects_missed_hooks() {
+        let t0 = Instant::now();
+        let mut a = AgentTracker::new("claude", t0);
+        assert_eq!(a.on_report(AgentState::Working, None, None, at(t0, 0)).unwrap().to, AgentState::Working);
+        assert_eq!(a.on_title("◐ Copy config", at(t0, 100)), None);
+        // `Stop`; a trailing spinner frame inside the grace period doesn't count.
+        assert_eq!(a.on_report(AgentState::Idle, None, None, at(t0, 5_000)).unwrap().to, AgentState::Idle);
+        assert_eq!(a.on_title("◑ Copy config", at(t0, 5_100)), None);
+        assert_eq!(a.on_title("✳ Copy config", at(t0, 5_200)), None);
+        assert_eq!(a.state(), AgentState::Idle);
+        // Claude resumes after a background task without `UserPromptSubmit`.
+        let tr = a.on_title("◐ Copy config", at(t0, 30_000)).unwrap();
+        assert_eq!((tr.from, tr.to), (AgentState::Idle, AgentState::Working));
+        assert_eq!(a.source(), StateSource::Title);
+        assert_eq!(a.message(), Some("Copy config"));
+        // A stale idle report: the still-animating spinner wins once the grace period is over.
+        assert_eq!(a.on_report(AgentState::Idle, None, None, at(t0, 31_000)).unwrap().to, AgentState::Idle);
+        assert_eq!(a.on_title("◓ Copy config", at(t0, 32_000)), None);
+        assert_eq!(a.on_title("◓ Copy config", at(t0, 33_500)), None, "not animating");
+        assert_eq!(a.on_title("◑ Copy config", at(t0, 33_600)).unwrap().to, AgentState::Working);
+        // Esc interrupts the turn: no `Stop`, but the title goes idle.
+        let tr = a.on_title("✳ Copy config", at(t0, 40_000)).unwrap();
+        assert_eq!(tr.to, AgentState::Idle);
+        assert_eq!(tr.turn_duration, Some(Duration::from_millis(6_400)), "the stale report ended a turn");
+        // Needs input from a report is never overridden by titles.
+        a.on_report(AgentState::NeedsInput, Some("Permission".into()), None, at(t0, 50_000)).unwrap();
+        assert_eq!(a.on_title("◐ Copy config", at(t0, 60_000)), None);
+        assert_eq!(a.on_title("◒ Copy config", at(t0, 60_100)), None);
+        assert_eq!(a.state(), AgentState::NeedsInput);
     }
 
     #[test]
