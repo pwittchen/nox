@@ -1567,9 +1567,9 @@ shell ◀───────────────────────�
   always holds the latest released version. A tag that isn't valid SemVer fails the release.
 - `CHANGELOG.md`: changes for the next release go into the `## [Unreleased]` section at the top
   (optional). On release, `scripts/release/changelog.sh` takes the notes from that section if it
-  has content, else from an existing `## [X.Y.Z]` section, else from the commit subjects since
-  the previous `v*` tag (`Release …` commits excluded), and replaces both sections with an empty
-  `## [Unreleased]` and `## [X.Y.Z] — YYYY-MM-DD` above older ones. Re-releasing the current
+  has content, else from an existing `## X.Y.Z` section (brackets optional), else from the commit
+  subjects since the previous `v*` tag (`Release …` commits excluded), and replaces both sections with an empty
+  `## [Unreleased]` and `## X.Y.Z — YYYY-MM-DD` above older ones. Re-releasing the current
   version works the same way (the version bump is then a no-op). Pre-releases get notes but leave `CHANGELOG.md` and `master` untouched.
 - `CFBundleShortVersionString` = `X.Y.Z`; `CFBundleVersion` = a monotonically increasing build
   number (`github.run_number` of the release workflow), which is what Sparkle compares.
