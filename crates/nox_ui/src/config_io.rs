@@ -26,6 +26,15 @@ pub fn remove_value(cx: &mut App, key: &str) {
     }
 }
 
+/// Remove several keys (each as path segments) in one write and apply once.
+pub fn remove_values(cx: &mut App, keys: &[&[&str]]) {
+    let path = nox_config::config_path();
+    match nox_config::remove_values_at(&path, keys) {
+        Ok(()) => reload_from_disk(cx),
+        Err(e) => crate::toast::show(cx, format!("Couldn't update config.toml: {e}")),
+    }
+}
+
 pub fn reload_from_disk(cx: &mut App) {
     match nox_config::load_from_path(&nox_config::config_path()) {
         Ok((config, notices)) => apply(cx, config, &notices),

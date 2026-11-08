@@ -717,18 +717,51 @@ impl SettingsView {
                             set_value(cx, &format!("keys.{n2}"), "");
                         },
                     ))
-                    .when(custom, |d| {
+                    // A fixed slot for "Default", so the recorder column lines up on every row.
+                    .child(div().w(px(58.)).flex().justify_end().when(custom, |d| {
                         d.child(
                             button(SharedString::from(format!("default-{name}")), "Default", &theme)
                                 .on_click(move |_, _, cx| {
                                     remove_value(cx, &format!("keys.{n3}"));
                                 }),
                         )
-                    })
+                    }))
                     .into_any_element()
             })
             .collect();
-        div().flex().flex_col().w_full().children(rows).into_any_element()
+        // Action overrides in `[keys]` (custom shortcuts and unbinds); `{ send = … }` bindings on
+        // other keys have no default and are left alone.
+        let overrides: Vec<String> =
+            keys.keys().filter(|k| defaults.iter().any(|(n, ..)| n == k)).cloned().collect();
+        let any = !overrides.is_empty();
+        let reset_all = div().flex().justify_end().pb(px(6.)).child(
+            button("keys-reset-all", "Reset All to Defaults…", &theme)
+                .when(!any, |d| d.opacity(0.4).cursor_default())
+                .when(any, |d| {
+                    d.on_click(move |_, window, cx| {
+                        let names = overrides.clone();
+                        let n = names.len();
+                        crate::dialog::confirm(
+                            window,
+                            cx,
+                            "Reset all shortcuts?",
+                            format!(
+                                "{n} changed or unbound shortcut{} will go back to the default. \
+                                 Key bindings that send text are kept.",
+                                if n == 1 { "" } else { "s" }
+                            ),
+                            "Reset All",
+                            move |_, cx| {
+                                let paths: Vec<[&str; 2]> =
+                                    names.iter().map(|k| ["keys", k.as_str()]).collect();
+                                let refs: Vec<&[&str]> = paths.iter().map(<[&str; 2]>::as_slice).collect();
+                                crate::config_io::remove_values(cx, &refs);
+                            },
+                        );
+                    })
+                }),
+        );
+        div().flex().flex_col().w_full().child(reset_all).children(rows).into_any_element()
     }
 }
 

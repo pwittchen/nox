@@ -441,7 +441,10 @@ keeps the toggle and the buttons.
   sliders with a numeric field for numbers, text inputs (see 5.8) for strings, font pickers
   (see 5.10), a theme picker with live preview, key-value tables for
   `[icons]` and `[shell.env]`, and a shortcut recorder for `[keys]` (click, press the
-  combination; conflicts are flagged).
+  combination; conflicts are flagged). Above the shortcut list, **Reset All to Defaults…** asks
+  for confirmation (a sheet with the number of changed shortcuts) and then removes every action
+  override from `[keys]` in one write; `{ send = … }` bindings are kept. Disabled while nothing
+  is overridden.
 - Changes apply immediately (no Save button) and are written to `config.toml` at once.
 - Settings that differ from the default show a small "reset" control; resetting removes the key
   from the file, so it falls back to the default again.
