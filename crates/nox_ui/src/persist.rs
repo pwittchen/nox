@@ -80,6 +80,24 @@ pub fn plan_resume(
         .collect()
 }
 
+/// `a` as a resume candidate whatever its `resume_on_restore` (the sheet, Resume All).
+fn forced(p: PaneId, a: &AgentSnapshot) -> (PaneId, AgentSnapshot) {
+    (p, AgentSnapshot { resume_on_restore: true, ..a.clone() })
+}
+
+/// Resume actions for every saved agent pane, planned together so each (kind, directory) group
+/// without session ids gets `resume_last` only once: panes marked for resume first (they're the
+/// ones started on restore), then the others.
+fn plan_all(cfg: &nox_config::Config, agents: &[(PaneId, AgentSnapshot)]) -> HashMap<PaneId, ResumeAction> {
+    let ordered: Vec<(PaneId, AgentSnapshot)> = agents
+        .iter()
+        .filter(|(_, a)| a.resume_on_restore)
+        .cloned()
+        .chain(agents.iter().filter(|(_, a)| !a.resume_on_restore).map(|(p, a)| forced(*p, a)))
+        .collect();
+    plan_resume(cfg, &ordered)
+}
+
 fn startup_for(action: &ResumeAction) -> Option<Startup> {
     match action {
         ResumeAction::Run(cmd) => Some(Startup::Run(cmd.clone())),
@@ -100,11 +118,7 @@ impl Root {
         let agents: Vec<(PaneId, AgentSnapshot)> =
             panes.iter().filter_map(|p| p.snapshot.agent.clone().map(|a| (p.new, a))).collect();
         let restore_mode = cfg.agents.restore;
-        let actions = if restore_mode == nox_config::AgentRestore::Resume {
-            plan_resume(&cfg, &agents)
-        } else {
-            HashMap::new()
-        };
+        let actions = plan_all(&cfg, &agents);
         let mut ask: Vec<(PaneId, AgentSnapshot)> = Vec::new();
         let mut unknown: Vec<(PaneId, AgentSnapshot)> = Vec::new();
 
@@ -126,7 +140,7 @@ impl Root {
                 self.saved_agents.insert(rp.new, a.clone());
                 match restore_mode {
                     nox_config::AgentRestore::Resume => {
-                        if let Some(action) = actions.get(&rp.new) {
+                        if let Some(action) = actions.get(&rp.new).filter(|_| a.resume_on_restore) {
                             spawn.startup = startup_for(action);
                             if matches!(action, ResumeAction::SessionUnknown) {
                                 unknown.push((rp.new, a.clone()));
@@ -154,6 +168,7 @@ impl Root {
             let _ = has_agent;
             self.pending.insert(rp.new, spawn);
         }
+        self.resume_actions = actions;
 
         // Start the active workspace, workspaces with agents to resume, or all of them.
         let lazy = cfg.workspaces.lazy_restore;
@@ -194,6 +209,23 @@ impl Root {
         }
     }
 
+    /// The actions decided at restore for `agents` (see [`Root::resume_actions`]); agents
+    /// without one are planned together, each as if marked for resume.
+    fn actions_for(
+        &self,
+        cfg: &nox_config::Config,
+        agents: &[(PaneId, AgentSnapshot)],
+    ) -> HashMap<PaneId, ResumeAction> {
+        let unplanned: Vec<(PaneId, AgentSnapshot)> = agents
+            .iter()
+            .filter(|(p, _)| !self.resume_actions.contains_key(p))
+            .map(|(p, a)| forced(*p, a))
+            .collect();
+        let mut out = plan_resume(cfg, &unplanned);
+        out.extend(agents.iter().filter_map(|(p, _)| self.resume_actions.get(p).map(|a| (*p, a.clone()))));
+        out
+    }
+
     /// The "Resume agents" sheet (SPEC §7.12, `agents.restore = "ask"`).
     pub fn show_resume_sheet(
         &mut self,
@@ -216,13 +248,7 @@ impl Root {
             })
             .collect();
         by_ws.sort_by(|a, b| a.0.cmp(&b.0));
-        let actions = plan_resume(
-            &cfg,
-            &agents
-                .iter()
-                .map(|(p, a)| (*p, AgentSnapshot { resume_on_restore: true, ..a.clone() }))
-                .collect::<Vec<_>>(),
-        );
+        let actions = self.actions_for(&cfg, agents);
         for (ws, p, a) in &by_ws {
             let unknown = matches!(actions.get(p), Some(ResumeAction::SessionUnknown));
             let detail = format!(
@@ -254,13 +280,9 @@ impl Root {
         cx: &mut Context<Self>,
     ) {
         let cfg = Settings::global(cx).config.clone();
-        let agents: Vec<(PaneId, AgentSnapshot)> = panes
-            .iter()
-            .filter_map(|p| {
-                self.saved_agents.get(p).map(|a| (*p, AgentSnapshot { resume_on_restore: true, ..a.clone() }))
-            })
-            .collect();
-        let actions = plan_resume(&cfg, &agents);
+        let agents: Vec<(PaneId, AgentSnapshot)> =
+            panes.iter().filter_map(|p| self.saved_agents.get(p).map(|a| (*p, a.clone()))).collect();
+        let actions = self.actions_for(&cfg, &agents);
         for (p, a) in agents {
             let cmd = match actions.get(&p) {
                 Some(ResumeAction::Run(c)) => Some((c.clone(), true)),
@@ -660,7 +682,7 @@ mod tests {
         file.workspaces[0].tabs[0].panes.insert(old, s.clone());
         tab2.panes.insert(old, s);
         file.workspaces[0].tabs.push(tab2);
-        let (_r2, cx) = restore_into(cx, file);
+        let (r2, cx) = restore_into(cx, file);
         assert_eq!(dialog_title(cx).as_deref(), Some("Resume agents?"));
         let checks = cx.update(|_, cx| {
             let v = cx.global::<crate::dialog::ActiveDialog>().0.as_ref().unwrap().0.clone();
@@ -670,12 +692,38 @@ mod tests {
                 .map(|c| (c.on, c.detail.as_ref().map(ToString::to_string)))
                 .collect::<Vec<_>>()
         });
-        // Only the second `last` agent is listed. (It shows checked and without "session
-        // unknown": the sheet re-plans the subset alone, see the report.)
+        // Only the second `last` agent is listed: unchecked, with "session unknown".
         assert_eq!(checks.len(), 1);
-        // "Start Shells" (cancel).
-        cx.simulate_keystrokes("escape");
+        assert!(!checks[0].0, "unknown session is unchecked");
+        assert!(checks[0].1.as_deref().is_some_and(|d| d.ends_with(" · session unknown")), "{checks:?}");
+        let (first, second) = r2.read_with(cx, |r, _| {
+            let mut ps: Vec<(PaneId, ResumeAction)> =
+                r.resume_actions.iter().map(|(p, a)| (*p, a.clone())).collect();
+            ps.sort_by_key(|(_, a)| matches!(a, ResumeAction::SessionUnknown));
+            assert_eq!(
+                ps.iter().map(|(_, a)| a.clone()).collect::<Vec<_>>(),
+                vec![ResumeAction::Run("true --continue".into()), ResumeAction::SessionUnknown]
+            );
+            (r.panes[&ps[0].0].clone(), r.panes[&ps[1].0].clone())
+        });
+        // Checking it and pressing Resume starts a fresh session there, not `resume_last` again.
+        cx.update(|_, cx| {
+            let v = cx.global::<crate::dialog::ActiveDialog>().0.as_ref().unwrap().0.clone();
+            v.update(cx, |v, _| v.checks[0].on = true);
+        });
+        cx.simulate_keystrokes("enter");
         assert_eq!(dialog_title(cx), None);
+        crate::pane::tests::wait_until(cx, |cx| {
+            crate::pane::tests::screen(&second, cx).contains("true last")
+                && crate::pane::tests::screen(&first, cx).contains("true --continue")
+        });
+        assert!(!crate::pane::tests::screen(&second, cx).contains("--continue"));
+        // Resume All later doesn't run `resume_last` in it either.
+        r2.update_in(cx, Root::resume_all_agents);
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        cx.run_until_parked();
+        assert!(!crate::pane::tests::screen(&second, cx).contains("--continue"));
     }
 
     #[gpui::test]

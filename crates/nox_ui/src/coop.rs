@@ -361,8 +361,8 @@ impl Root {
                 let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
                 match self.try_claim(p, ws, &paths, reason.clone(), cx) {
                     Ok(claimed) => reply.ok_typed(&ClaimResult { claimed }),
-                    Err(conflict) if wait => {
-                        let _ = conflict;
+                    // Conflict: wait for the paths to be released (see `resolve_waiters`).
+                    Err(_) if wait => {
                         if let Some(ipc) = &mut self.ipc {
                             ipc.waiters.push(Waiter {
                                 kind: WaitKind::Claim { pane: p, ws, paths, reason },
@@ -751,6 +751,9 @@ impl Root {
                 }
             }
         }
+        if todo.is_empty() {
+            return;
+        }
         for (p, msgs) in todo {
             if let Some(e) = self.panes.get(&p) {
                 e.update(cx, |e, cx| {
@@ -764,6 +767,8 @@ impl Root {
                 });
             }
         }
+        // The messages are read now: refresh the unread badges in the pane headers.
+        self.coop_changed(cx);
     }
 }
 
@@ -1575,6 +1580,14 @@ mod tests {
         assert_eq!(h.pane(b, |p| p.from_banner.as_ref().map(|(n, _)| n.clone())), Some(h_name(&mut h, a)));
         assert_eq!(unread(&mut h, c), 1);
         assert!(h.pane(c, |p| p.from_banner.is_none()));
+        // The pane headers' unread badges follow.
+        assert_eq!(h.pane(b, |p| p.unread), 0);
+        assert_eq!(h.pane(c, |p| p.unread), 1);
+        // When the busy one turns idle, it gets the message and its badge clears.
+        h.status(c, AgentStateWire::Idle);
+        assert_eq!(unread(&mut h, c), 0);
+        assert_eq!(h.pane(c, |p| p.unread), 0);
+        assert!(h.pane(c, |p| p.from_banner.is_some()));
     }
 
     #[gpui::test]

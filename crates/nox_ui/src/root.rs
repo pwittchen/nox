@@ -86,6 +86,9 @@ pub struct Root {
     pub attention: crate::attention::Attention,
     pub rate: RateLimiter,
     pub saved_agents: HashMap<PaneId, nox_layout::AgentSnapshot>,
+    /// How each saved agent comes back, decided once for all of them at restore (SPEC §7.12):
+    /// the sheet and Resume All use it, so `resume_last` never opens one conversation twice.
+    pub resume_actions: HashMap<PaneId, nox_agents::ResumeAction>,
     pub session_task: Option<Task<()>>,
     pub session_soft_task: Option<Task<()>>,
     pub next_agent_cursor: Vec<PaneId>,
@@ -148,6 +151,7 @@ impl Root {
             attention: crate::attention::Attention::default(),
             rate: RateLimiter::new(),
             saved_agents: HashMap::new(),
+            resume_actions: HashMap::new(),
             session_task: None,
             session_soft_task: None,
             next_agent_cursor: vec![],
@@ -482,6 +486,7 @@ impl Root {
         }
         self.pending.remove(&pane);
         self.saved_agents.remove(&pane);
+        self.resume_actions.remove(&pane);
         self.rate.forget(pane.0);
         self.coop_changed(cx);
     }
