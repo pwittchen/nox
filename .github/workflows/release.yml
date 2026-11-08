@@ -22,7 +22,7 @@ jobs:
     # Build + tests take ~15 min; cap it so a stuck Apple notary queue can't burn runner minutes.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-darwin
@@ -94,7 +94,7 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
           rm -f "$RUNNER_TEMP/devid.p12"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nox-macos-aarch64
           path: |
@@ -107,11 +107,11 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: nox-macos-aarch64
           path: dist
