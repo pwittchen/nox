@@ -361,7 +361,7 @@ impl Default for TerminalConfig {
             cursor_style: CursorStyle::Block,
             cursor_blink: false,
             padding: [8, 6],
-            copy_on_select: false,
+            copy_on_select: true,
             confirm_multiline_paste: true,
             word_separators: " ()[]{}',\"`│".into(),
             option_as_meta: OptionAsMeta::Left,

@@ -1090,11 +1090,11 @@ impl Pane {
             return;
         }
         let _ = window;
-        self.selecting = None;
+        let selected = self.selecting.take().is_some();
         self.pending_selection = None;
         self.autoscroll = None;
-        if Settings::global(cx).config.terminal.copy_on_select {
-            self.copy_selection(cx);
+        if selected && Settings::global(cx).config.terminal.copy_on_select && self.copy_selection(cx) {
+            crate::toast::show(cx, "Copied to clipboard");
         }
         cx.notify();
     }

@@ -697,7 +697,9 @@ corner or a divider.
   rectangular block (`Block`); `⇧`-click extends. With mouse reporting on, `⇧` forces selection.
 - Dragging past the top or bottom edge auto-scrolls, faster the further the pointer is.
 - `⌘C` copies (when there is a selection; otherwise nothing), `⌘V` pastes (bracketed if the
-  program asked). `terminal.copy_on_select = false`. Trailing whitespace is trimmed on copy.
+  program asked). `terminal.copy_on_select = true`: finishing a selection (drag, double- or
+  triple-click) copies it and shows a "Copied to clipboard" toast; a plain click copies
+  nothing. Trailing whitespace is trimmed on copy.
 - Paste safety: pasting text with several lines into a shell outside bracketed mode asks first
   (`terminal.confirm_multiline_paste = true`).
 - `⌘A` selects all scrollback.
@@ -1245,7 +1247,7 @@ scroll_on_input = true
 cursor_style = "block"       # "block" | "bar" | "underline"
 cursor_blink = false
 padding = [8, 6]             # [horizontal, vertical] px
-copy_on_select = false
+copy_on_select = true
 confirm_multiline_paste = true
 word_separators = " ()[]{}',\"`│"
 option_as_meta = "left"      # "left" | "right" | "both" | "none"
