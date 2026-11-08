@@ -250,7 +250,11 @@ so they carry over unchanged.
 ### 4.8 Agent
 - An **agent pane** is a pane whose foreground program is a coding agent: one of the AI coding
   agents of 4.6, or an executable configured in `[agents.<name>]` (see 11). Detection reuses the
-  process lookup of 4.6, at no extra cost.
+  process lookup of 4.6, at no extra cost. The agent **exits** when the shell is back in the
+  foreground (or the pane's process exits). An agent nox launched itself (a new agent, a resumed
+  session) is an agent pane from the launch on; until its process has shown up in the foreground
+  once, the shell in the foreground doesn't count as an exit for the first 10 s (the shell is
+  still reading the command).
 - An agent belongs to the workspace of its pane. It has a **state** (working, needs input, idle,
   exited — see 7.12), a **name** (the pane's name, set by renaming the pane or by `nox name`,
   otherwise the agent kind, e.g. `claude`, suffixed when it repeats in a workspace: `claude-2`)
@@ -716,7 +720,9 @@ corner or a divider.
 - `alacritty_terminal` selections: click-drag selects (`Simple`); double-click a word
   (`Semantic`, `terminal.word_separators`); triple-click a line (`Lines`); `⌥`-drag a
   rectangular block (`Block`); `⇧`-click extends. With mouse reporting on, `⇧` forces selection.
-- Dragging past the top or bottom edge auto-scrolls, faster the further the pointer is.
+- Dragging past the top or bottom edge auto-scrolls, faster the further the pointer is (also when
+  the pointer leaves the pane or the window while the button is held; releasing it anywhere ends
+  the selection).
 - `⌘C` copies (when there is a selection; otherwise nothing), `⌘V` pastes (bracketed if the
   program asked). `terminal.copy_on_select = true`: finishing a selection (drag, double- or
   triple-click) copies it and shows a "Copied to clipboard" toast; a plain click copies
@@ -734,6 +740,8 @@ corner or a divider.
 ### 7.8 Find
 - `⌘F` opens a compact find bar at the top-right of the focused pane: query field, match count
   (`3/17`), previous / next (`⇧↵` / `↵`, `⌘G` / `⌘⇧G`), case-sensitive and regex toggles.
+  The case toggle alone decides case (off by default): no smart case, so with it on a lowercase
+  query doesn't match uppercase text.
   Search uses `alacritty_terminal`'s `RegexSearch` over the whole scrollback, run off the main
   thread for large buffers. Matches are highlighted with the theme's selection color, the current
   one in accent. `Esc` closes and returns focus to the terminal.

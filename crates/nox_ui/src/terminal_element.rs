@@ -12,10 +12,10 @@
 use std::time::Instant;
 
 use gpui::{
-    App, Bounds, ContentMask, Element, ElementId, ElementInputHandler, Entity, Font, FontFeatures, FontStyle,
-    FontWeight, GlobalElementId, Hsla, LayoutId, Pixels, Point, ShapedLine, SharedString, Size,
-    StrikethroughStyle, Style, TextRun, UnderlineStyle, Window, fill, point, prelude::*, px, quad, relative,
-    size, transparent_black,
+    App, Bounds, ContentMask, DispatchPhase, Element, ElementId, ElementInputHandler, Entity, Font,
+    FontFeatures, FontStyle, FontWeight, GlobalElementId, Hsla, LayoutId, MouseMoveEvent, Pixels, Point,
+    ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextRun, UnderlineStyle, Window, fill, point,
+    prelude::*, px, quad, relative, size, transparent_black,
 };
 use nox_terminal::GridSize;
 use nox_terminal::alacritty_terminal::grid::Dimensions;
@@ -624,6 +624,16 @@ impl Element for TerminalElement {
     ) {
         let focus = self.pane.read(cx).focus_handle.clone();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.pane.clone()), cx);
+        if self.pane.read(cx).is_selecting() {
+            // The grid only hears mouse moves over it; a selection drag needs them everywhere to
+            // auto-scroll past the edges (mouse-up outside goes through `on_mouse_up_out`).
+            let pane = self.pane.clone();
+            window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                if phase == DispatchPhase::Bubble && !bounds.contains(&ev.position) {
+                    pane.update(cx, |p, cx| p.on_drag_outside(ev, cx));
+                }
+            });
+        }
 
         let geom = pre.geom.clone();
         let theme = Theme::global(cx).clone();

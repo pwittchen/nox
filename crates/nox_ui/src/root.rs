@@ -1381,7 +1381,14 @@ pub(crate) mod tests {
                 let now = Instant::now();
                 let mut tracker = AgentTracker::new(kind, now);
                 tracker.on_report(state, Some(format!("{kind} msg")), Some("sess-1".into()), now);
-                p.agent = Some(AgentInfo { kind: kind.into(), tracker, launch: None, cmdline: kind.into() });
+                p.agent = Some(AgentInfo {
+                    kind: kind.into(),
+                    tracker,
+                    launch: None,
+                    cmdline: kind.into(),
+                    seen: true,
+                    created: now,
+                });
             });
         });
     }

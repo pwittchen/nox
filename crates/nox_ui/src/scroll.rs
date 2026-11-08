@@ -42,8 +42,17 @@ impl ScrollState {
     pub fn apply_pixels(&mut self, dy: f32, line_h: f32, offset: usize, max_offset: usize) -> Applied {
         self.last_scroll = Some(Instant::now());
         let total = self.frac + dy;
-        let mut lines = (total / line_h).floor() as i32;
-        let mut frac = total - lines as f32 * line_h;
+        // Snap to a whole line when within rounding error of one: float steps (e.g. eased wheel
+        // animation frames) that should sum to N lines can land a hair short, which would leave
+        // N − 1 lines plus a near-full line of fraction.
+        let exact = total / line_h;
+        let nearest = exact.round();
+        let (mut lines, mut frac) = if (exact - nearest).abs() < 1e-3 {
+            (nearest as i32, 0.0)
+        } else {
+            let lines = exact.floor() as i32;
+            (lines, total - lines as f32 * line_h)
+        };
         // Clamp to history bounds.
         let target = offset as i64 + i64::from(lines);
         if target <= 0 && (target < 0 || frac < 0.0) {
@@ -154,6 +163,26 @@ mod tests {
         total += s.animation_step(start + Duration::from_millis(200)).unwrap();
         assert!((total - 30.0).abs() < 0.01);
         assert!(s.animation_step(start + Duration::from_millis(300)).is_none());
+    }
+
+    #[test]
+    fn animated_steps_land_on_whole_lines() {
+        // Eased frames of a 3-line scroll: the float steps don't sum to exactly 3 lines.
+        let line_h = 17.3;
+        let mut s = ScrollState::default();
+        s.animate_lines(3.0, line_h, Duration::from_millis(100));
+        let start = Instant::now();
+        let mut offset = 0usize;
+        for ms in (7..=140).step_by(7) {
+            let Some(step) = s.animation_step(start + Duration::from_millis(ms)) else { break };
+            offset = (offset as i64 + i64::from(s.apply_pixels(step, line_h, offset, 100).lines)) as usize;
+        }
+        assert!(!s.animating());
+        assert_eq!((offset, s.frac), (3, 0.0));
+        // Just short of a line (beyond rounding error) still keeps the fraction.
+        let mut s = ScrollState::default();
+        assert_eq!(s.apply_pixels(line_h - 0.5, line_h, 0, 100).lines, 0);
+        assert!((s.frac - (line_h - 0.5)).abs() < 1e-3);
     }
 
     #[test]

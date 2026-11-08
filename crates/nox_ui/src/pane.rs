@@ -118,6 +118,20 @@ pub struct AgentInfo {
     pub tracker: AgentTracker,
     pub launch: Option<AgentLaunch>,
     pub cmdline: String,
+    /// The agent's process has been seen in the foreground. A launched agent isn't there yet
+    /// right after the launch (the shell is still reading the command), so the shell in the
+    /// foreground only means it exited once it was seen, or after [`AGENT_LAUNCH_GRACE`].
+    pub seen: bool,
+    pub created: Instant,
+}
+
+/// How long a launched agent that was never seen in the foreground is kept alive (SPEC §4.8).
+const AGENT_LAUNCH_GRACE: Duration = Duration::from_secs(10);
+
+impl AgentInfo {
+    fn left_foreground_means_exit(&self) -> bool {
+        self.seen || self.created.elapsed() >= AGENT_LAUNCH_GRACE
+    }
 }
 
 pub struct Pane {
@@ -338,6 +352,8 @@ impl Pane {
                         tracker: AgentTracker::new(launch.kind.clone(), now),
                         cmdline: launch.command.clone(),
                         launch: Some(launch),
+                        seen: false,
+                        created: now,
                     });
                 }
                 self.session = Some(session);
@@ -545,6 +561,8 @@ impl Pane {
         if let Some(fg) = &fg {
             let proc = ProcessInfo { exe: fg.exe.clone(), args: fg.args.clone() };
             let is_shell = fg.pid == shell_pid;
+            // The command that just ended is the one seen in the foreground before this refresh.
+            let previous = self.process.as_ref().map(|p| p.exe.clone());
             if self.process.as_ref() != Some(&proc) || self.process_is_shell != is_shell {
                 self.process = Some(proc);
                 self.process_is_shell = is_shell;
@@ -566,15 +584,13 @@ impl Pane {
                     (true, None) => self.running_since = Some(Instant::now()),
                     (false, Some(start)) => {
                         self.running_since = None;
-                        let command = self.process.as_ref().map(|p| p.exe.clone()).unwrap_or_default();
-                        finished = Some((command, start.elapsed()));
+                        finished = Some((previous.unwrap_or_default(), start.elapsed()));
                     }
                     _ => {}
                 }
             }
         }
         let proc_for_icon = if self.process_is_shell { None } else { self.process.as_ref() };
-        let _ = &finished;
         let icon = match &self.custom_icon {
             Some(name) => registry.custom_icon(name),
             None => registry.table.icon_for(
@@ -608,11 +624,16 @@ impl Pane {
                             .join(" ")
                     },
                 );
-                self.agent = Some(AgentInfo { kind, tracker, launch: None, cmdline });
+                self.agent =
+                    Some(AgentInfo { kind, tracker, launch: None, cmdline, seen: true, created: now });
                 changed = true;
                 cx.emit(PaneEvent::AgentChanged { transition: None });
             }
-            (Some(a), None) if self.process_is_shell && a.tracker.state() != AgentState::Exited => {
+            (Some(a), None)
+                if self.process_is_shell
+                    && a.tracker.state() != AgentState::Exited
+                    && a.left_foreground_means_exit() =>
+            {
                 // The agent left the foreground: it exited.
                 let t = a.tracker.on_exit(Instant::now());
                 cx.emit(PaneEvent::AgentChanged { transition: t });
@@ -622,9 +643,11 @@ impl Pane {
                 let now = Instant::now();
                 a.kind.clone_from(&kind);
                 a.tracker = AgentTracker::new(kind, now);
+                a.seen = true;
                 changed = true;
                 cx.emit(PaneEvent::AgentChanged { transition: None });
             }
+            (Some(a), Some(_)) => a.seen = true,
             _ => {}
         }
         if Settings::global(cx).config.ui.show_git_branch {
@@ -681,6 +704,9 @@ impl Pane {
                 tracker: AgentTracker::new(kind.clone(), now),
                 launch: None,
                 cmdline: kind,
+                // It reported itself, so it is running.
+                seen: true,
+                created: now,
             });
         }
         if let Some(a) = &mut self.agent {
@@ -1113,14 +1139,34 @@ impl Pane {
             self.hovered_link = link;
             cx.notify();
         }
-        let pressed = ev.pressed_button;
         if self.selecting.is_none() {
-            let button = pressed.map_or(mouse::MouseButton::None, button_of);
+            let button = ev.pressed_button.map_or(mouse::MouseButton::None, button_of);
             self.report_mouse(button, MouseAction::Motion, ev.modifiers, ev.position);
             return;
         }
-        if pressed != Some(MouseButton::Left) {
+        self.drag_selection(ev, cx);
+    }
+
+    /// A mouse move anywhere in the window while a selection drag is active. GPUI calls the
+    /// grid's `on_mouse_move` only while the pointer is over it, so the element registers a
+    /// window-level listener for moves outside the grid (SPEC §7.6: dragging past the edges).
+    pub fn on_drag_outside(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if self.selecting.is_some() {
+            self.drag_selection(ev, cx);
+        }
+    }
+
+    #[must_use]
+    pub fn is_selecting(&self) -> bool {
+        self.selecting.is_some()
+    }
+
+    fn drag_selection(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if ev.pressed_button != Some(MouseButton::Left) {
+            // Released where no mouse-up reached us.
             self.selecting = None;
+            self.pending_selection = None;
+            self.autoscroll = None;
             return;
         }
         self.update_selection(ev.position, cx);
@@ -1423,10 +1469,10 @@ impl Pane {
             cx.notify();
             return;
         }
-        let mut pattern = if find.regex { query.clone() } else { regex_escape(&query) };
-        if !find.case_sensitive {
-            pattern = format!("(?i){pattern}");
-        }
+        let pattern = if find.regex { query.clone() } else { regex_escape(&query) };
+        // Explicit flags: alacritty's `RegexSearch` is smart-case (a query without uppercase is
+        // case-insensitive), but the "Aa" toggle decides alone (SPEC §7.8).
+        let pattern = format!("{}{pattern}", if find.case_sensitive { "(?-i)" } else { "(?i)" });
         let Ok(mut re) = RegexSearch::new(&pattern) else {
             cx.notify();
             return;
@@ -2976,11 +3022,9 @@ pub(crate) mod tests {
             cx.run_until_parked();
             !pane.read_with(cx, |p, _| p.scroll.animating())
         });
-        // 3 lines in pixels; the eased steps can sum to a hair under a whole line, which
-        // leaves 2 lines + a fraction of ~1 line (see the report), so compare in pixels.
-        let h = f32::from(geom(&pane, cx).cell_h);
-        let scrolled = offset(&pane, cx) as f32 * h + pane.read_with(cx, |p, _| p.scroll.frac);
-        assert!((scrolled - 3. * h).abs() < 0.01, "scrolled {scrolled} px");
+        // Lands exactly on 3 lines (1 notch × 3), no leftover fraction.
+        assert_eq!(offset(&pane, cx), 3);
+        assert_eq!(pane.read_with(cx, |p, _| p.scroll.frac), 0.0);
     }
 
     #[gpui::test]
@@ -3113,15 +3157,12 @@ pub(crate) mod tests {
         let g = geom(&pane, cx);
         let at = cell(&pane, cx, 2, 2);
         mouse_down(cx, at, 1, Modifiers::none());
-        // GPUI only delivers `on_mouse_move` while the pointer is over the grid, so a move past
-        // the edge is fed to the handler directly (see the report: the wiring never does it).
-        let above = point(g.origin.x + px(20.), g.bounds.top() - px(40.));
-        let drag = |pos: Point<Pixels>| MouseMoveEvent {
-            position: pos,
-            pressed_button: Some(MouseButton::Left),
-            modifiers: Modifiers::none(),
+        // Real mouse moves outside the grid (the grid's own handler only hears moves over it).
+        let drag = |cx: &mut VisualTestContext, pos: Point<Pixels>| {
+            cx.simulate_mouse_move(pos, MouseButton::Left, Modifiers::none());
         };
-        pane.update_in(cx, |p, window, cx| p.on_mouse_move(&drag(above), window, cx));
+        let above = point(g.origin.x + px(20.), g.bounds.top() - px(40.));
+        drag(cx, above);
         assert!(pane.read_with(cx, |p, _| p.autoscroll.is_some()));
         cx.executor().advance_clock(Duration::from_millis(100));
         cx.run_until_parked();
@@ -3131,16 +3172,25 @@ pub(crate) mod tests {
         assert!(s.lines().count() > 3, "the selection grew with the scroll: {s:?}");
         // Back inside: autoscroll stops.
         let inside = cell(&pane, cx, 3, 3);
-        pane.update_in(cx, |p, window, cx| p.on_mouse_move(&drag(inside), window, cx));
+        drag(cx, inside);
         assert!(pane.read_with(cx, |p, _| p.autoscroll.is_none()));
         // Below the bottom edge it scrolls back down.
         let below = point(g.origin.x + px(20.), g.bounds.bottom() + px(30.));
-        pane.update_in(cx, |p, window, cx| p.on_mouse_move(&drag(below), window, cx));
+        drag(cx, below);
+        assert!(pane.read_with(cx, |p, _| p.autoscroll.is_some()));
         cx.executor().advance_clock(Duration::from_millis(100));
         cx.run_until_parked();
         assert!(offset(&pane, cx) < off);
-        mouse_up(cx, inside);
+        // Releasing outside the grid ends the drag.
+        mouse_up(cx, below);
         assert!(pane.read_with(cx, |p, _| p.autoscroll.is_none() && p.selecting.is_none()));
+        let off = offset(&pane, cx);
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        assert_eq!(offset(&pane, cx), off, "no more scrolling");
+        // Without a drag, moves outside the grid do nothing.
+        cx.simulate_mouse_move(above, None, Modifiers::none());
+        assert!(pane.read_with(cx, |p, _| p.autoscroll.is_none()));
     }
 
     // ---- find -----------------------------------------------------------------------------
@@ -3175,15 +3225,21 @@ pub(crate) mod tests {
         cx.simulate_keystrokes("enter");
         assert_eq!(find_state(&pane, cx).1, Some(0), "↵ = next");
 
-        // (A lowercase query stays case-insensitive even with "Aa" on: alacritty's smart case;
-        // see the report.) An uppercase query honours the toggle.
+        // "Aa" decides the case alone, for lowercase and uppercase queries alike.
+        let set_case = |pane: &Entity<Pane>, cx: &mut VisualTestContext, on: bool| {
+            pane.update(cx, |p, cx| {
+                p.find.as_mut().unwrap().case_sensitive = on;
+                p.run_search(cx);
+            });
+        };
         set_query(&pane, cx, "FOO");
         assert_eq!(find_state(&pane, cx).0, 3, "case-insensitive by default");
-        pane.update(cx, |p, cx| {
-            p.find.as_mut().unwrap().case_sensitive = true;
-            p.run_search(cx);
-        });
+        set_case(&pane, cx, true);
         assert_eq!(find_state(&pane, cx).0, 1);
+        set_query(&pane, cx, "foo");
+        assert_eq!(find_state(&pane, cx).0, 2, "a lowercase query is case-sensitive too");
+        set_case(&pane, cx, false);
+        assert_eq!(find_state(&pane, cx).0, 3);
 
         // Literal by default: `.` and `+` are not regex syntax.
         set_query(&pane, cx, "foo.");
@@ -3325,6 +3381,8 @@ pub(crate) mod tests {
                 resumed: true,
             }),
             cmdline: command.into(),
+            seen: false,
+            created: Instant::now(),
         }
     }
 
@@ -3403,10 +3461,12 @@ pub(crate) mod tests {
             assert_eq!(a.cmdline, "codex");
         });
         pane.update(cx, |p, cx| {
-            // Focusing the pane refreshed the process info, which sees the shell (`cat`) in the
-            // foreground, not codex: the agent counts as exited until its process shows up.
-            // Start over with a live tracker; only events that don't refresh are fed.
-            p.agent.as_mut().unwrap().tracker = AgentTracker::new("codex", Instant::now());
+            // Refreshing (e.g. on focus) sees the shell (`cat`) in the foreground, not codex,
+            // which hasn't started yet: that isn't an exit.
+            p.refresh_info(cx);
+            assert!(p.process_is_shell);
+            assert_ne!(p.agent_state(), Some(AgentState::Exited));
+            assert!(p.is_agent());
             p.handle_event(
                 TerminalEvent::Osc(OscEvent::Notify { title: None, body: "needs you".into() }),
                 cx,
@@ -3414,6 +3474,19 @@ pub(crate) mod tests {
             assert_eq!(p.agent_state(), Some(AgentState::NeedsInput));
             p.send_bytes(b"y", cx);
             assert_eq!(p.agent_state(), Some(AgentState::Working), "input resumes the turn");
+            p.refresh_info(cx);
+            assert_eq!(p.agent_state(), Some(AgentState::Working));
+            // Once it was seen in the foreground, the shell coming back means it exited.
+            p.agent.as_mut().unwrap().seen = true;
+            p.refresh_info(cx);
+            assert_eq!(p.agent_state(), Some(AgentState::Exited));
+            // Never seen after the grace period: it didn't start (or exited unnoticed).
+            let a = p.agent.as_mut().unwrap();
+            a.tracker = AgentTracker::new("codex", Instant::now());
+            a.seen = false;
+            a.created = Instant::now().checked_sub(AGENT_LAUNCH_GRACE).unwrap();
+            p.refresh_info(cx);
+            assert_eq!(p.agent_state(), Some(AgentState::Exited));
         });
         cx.run_until_parked();
         assert!(events.borrow().iter().any(|e| matches!(e, PaneEvent::AgentChanged { transition: Some(_) })));
@@ -3450,12 +3523,16 @@ pub(crate) mod tests {
         refresh_until(&pane, cx, |p| p.process_is_shell);
         assert!(pane.read_with(cx, |p, _| p.running_since.is_none()));
         cx.run_until_parked();
-        // (The event names the process that is in the foreground *after* the command, here
-        // `cat`, not `sleep`; see the report.)
-        assert!(events.borrow().iter().any(|e| matches!(
-            e,
-            PaneEvent::CommandFinished { exit: None, duration, .. } if *duration >= Duration::from_millis(400)
-        )));
+        // The event names the command that ended, not the shell back in the foreground.
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                PaneEvent::CommandFinished { command, exit: None, duration }
+                    if command == "sleep" && *duration >= Duration::from_millis(400)
+            )),
+            "{:?}",
+            events.borrow()
+        );
     }
 
     /// Helper process for [`agents_are_detected_from_the_foreground_process`]: a copy of this
