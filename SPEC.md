@@ -365,6 +365,14 @@ keeps the toggle and the buttons.
 - `tabs.sidebar_workspaces = "all"` lists every workspace as a collapsible group (header row +
   its tabs) instead: one column showing all projects and all their agents. Clicking a tab of
   another workspace switches to it. Default `"active"`.
+- Pinned to the bottom of the sidebar, under a 1 px line, an **Agents** section (`Agents · n`)
+  lists every running agent of every workspace, one row each: process icon, agent name (see
+  4.8), a muted second line with its workspace and state (needs input / idle · unseen /
+  working / idle), and its status dot. Sorted like the agents panel (see 7.12): needs input
+  first, then idle-unseen, working, idle; workspace order within each. The focused agent's row
+  has the background pill; clicking a row jumps to that pane (switching workspace and tab). The
+  section takes at most 45 % of the sidebar height and scrolls; it is not shown when no agent
+  runs.
 - Drag to reorder, double-click to rename, context menu as for pills (see 5.5).
 - Sidebar width: drag its 1px divider, min 160 px, max 360 px, default 220 px; persisted.
 - `⌘\` or the sidebar toggle `[◧]` in the title bar hides and shows it; the state is persisted.

@@ -1151,6 +1151,29 @@ impl Root {
         v.into_iter().map(|(_, _, p)| p).collect()
     }
 
+    /// Every running agent of every workspace with its workspace index: needs input first, then
+    /// idle-unseen, working, idle; workspace order within a rank (SPEC §5.4).
+    pub fn live_agents(&self, cx: &App) -> Vec<(usize, PaneId)> {
+        let mut v: Vec<(u8, usize, PaneId)> = Vec::new();
+        for (wi, w) in self.ws.list.iter().enumerate() {
+            for p in w.tabs.iter().flat_map(nox_layout::Tab::panes) {
+                let Some(e) = self.panes.get(&p) else { continue };
+                let e = e.read(cx);
+                let Some(a) = &e.agent else { continue };
+                let rank = match a.tracker.state() {
+                    AgentState::Exited => continue,
+                    AgentState::NeedsInput => 0,
+                    AgentState::Idle if e.done_unseen => 1,
+                    AgentState::Working => 2,
+                    AgentState::Idle => 3,
+                };
+                v.push((rank, wi, p));
+            }
+        }
+        v.sort_by_key(|(r, w, _)| (*r, *w));
+        v.into_iter().map(|(_, w, p)| (w, p)).collect()
+    }
+
     // ---- session ----------------------------------------------------------------------------
 
     /// A structural change: save within 1 s.

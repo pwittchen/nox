@@ -605,6 +605,109 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
         .into_any_element()
 }
 
+/// One running agent in the sidebar's bottom section: icon, name, workspace and state.
+fn sidebar_agent_row(root: &Root, ws_idx: usize, pane: PaneId, cx: &mut Context<Root>) -> Option<AnyElement> {
+    let theme = Theme::global(cx).clone();
+    let e = root.panes.get(&pane)?.read(cx);
+    let state = match e.agent_state()? {
+        nox_agents::AgentState::NeedsInput => "needs input",
+        nox_agents::AgentState::Working => "working",
+        nox_agents::AgentState::Idle if e.done_unseen => "idle · unseen",
+        _ => "idle",
+    };
+    let dot = status_dot(&theme, e.status());
+    let icon = e.icon.clone();
+    let focused = ws_idx == root.ws.active && root.ws.active().active().is_some_and(|t| t.focused == pane);
+    let second = format!("{} · {state}", root.ws.list[ws_idx].name);
+    Some(
+        div()
+            .id(SharedString::from(format!("side-agent-{pane}")))
+            .mx(px(6.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .flex()
+            .gap_2()
+            .items_start()
+            .cursor_pointer()
+            .text_size(px(12.))
+            .when(focused, |d| d.bg(theme.text.opacity(0.08)).text_color(theme.text))
+            .when(!focused, |d| d.text_color(theme.text_muted).hover(|s| s.bg(theme.text.opacity(0.04))))
+            .child(div().pt(px(1.)).child(icon_element(
+                &icon,
+                14.,
+                if focused { theme.text } else { theme.text_muted },
+                cx,
+            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(root.pane_name(pane, cx)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.text_muted)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(second),
+                    ),
+            )
+            .children(dot.map(|c| div().mt(px(5.)).size(px(7.)).rounded_full().bg(c).flex_none()))
+            .on_click(cx.listener(move |root, _, window, cx| root.reveal_pane(pane, window, cx)))
+            .into_any_element(),
+    )
+}
+
+/// The sidebar's bottom section: every running agent across all workspaces (SPEC 5.4); none
+/// when no agent runs.
+fn render_sidebar_agents(root: &Root, cx: &mut Context<Root>) -> Option<AnyElement> {
+    let theme = Theme::global(cx).clone();
+    let rows: Vec<AnyElement> =
+        root.live_agents(cx).into_iter().filter_map(|(w, p)| sidebar_agent_row(root, w, p, cx)).collect();
+    if rows.is_empty() {
+        return None;
+    }
+    let header = div()
+        .px(px(14.))
+        .pt(px(8.))
+        .pb(px(4.))
+        .text_size(px(11.))
+        .text_color(theme.text_muted)
+        .child(format!("Agents · {}", rows.len()));
+    Some(
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .max_h(gpui::relative(0.45))
+            .border_t_1()
+            .border_color(theme.border)
+            .child(header)
+            .child(
+                div()
+                    .id("sidebar-agents-scroll")
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .pb(px(8.))
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .children(rows),
+            )
+            .into_any_element(),
+    )
+}
+
 fn render_sidebar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     let theme = Theme::global(cx).clone();
     let width = root.sidebar_width(cx);
@@ -630,6 +733,7 @@ fn render_sidebar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
             rows.push(sidebar_row(root, w, i, cx));
         }
     }
+    let agents = render_sidebar_agents(root, cx);
     div()
         .flex()
         .flex_none()
@@ -639,14 +743,23 @@ fn render_sidebar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         .bg(theme.bg_sidebar)
         .child(
             div()
-                .id("sidebar-scroll")
                 .flex()
                 .flex_col()
-                .gap(px(2.))
-                .w_full()
-                .pb(px(8.))
-                .overflow_y_scroll()
-                .children(rows),
+                .size_full()
+                .child(
+                    div()
+                        .id("sidebar-scroll")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h(px(0.))
+                        .gap(px(2.))
+                        .w_full()
+                        .pb(px(8.))
+                        .overflow_y_scroll()
+                        .children(rows),
+                )
+                .children(agents),
         )
         .child(
             div()
