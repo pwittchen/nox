@@ -1526,9 +1526,10 @@ scripts/release/notarize.sh dist/nox.app`, `SIGN_IDENTITY=… scripts/release/ma
 
 `ci.yml` (PRs and `master`) first runs `cargo audit --deny warnings` (accepted advisories in
 `.cargo/audit.toml`); only when that passes does it check formatting, run `cargo lint`
-(clippy::pedantic, warnings denied), build and test, and produce an **unsigned** (ad-hoc signed)
-`nox.app` artifact. A failing audit fails the run. A newer run for the same branch or PR cancels
-the one still in progress. It has no access to signing secrets.
+(clippy::pedantic, warnings denied), build and test, and build an **unsigned** (ad-hoc signed)
+`nox.app` to check that bundling works; it uploads no artifacts. A failing audit fails the run.
+A newer run for the same branch or PR cancels the one still in progress. It has no access to
+signing secrets.
 
 ### 15.3 Automatic updates
 Updates are delivered with **Sparkle 2**, the de-facto standard for non-App-Store Mac apps:

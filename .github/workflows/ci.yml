@@ -1,5 +1,6 @@
 # PRs and master: cargo audit (ignored advisories in .cargo/audit.toml) first; only if it passes:
-# fmt, lint (clippy::pedantic), tests, benches (regression gate) and the unsigned app bundle.
+# fmt, lint (clippy::pedantic), tests, benches (regression gate) and an unsigned app
+# bundle build (not uploaded).
 # No access to signing secrets (SPEC §15.2).
 #
 # Skipped when:
@@ -61,7 +62,3 @@ jobs:
           cargo bench -p nox_terminal --bench throughput -- --save-baseline pr --warm-up-time 1 --measurement-time 3
       - name: bundle (ad-hoc signed)
         run: scripts/bundle.sh
-      - uses: actions/upload-artifact@v7
-        with:
-          name: nox.app
-          path: dist/nox.app
