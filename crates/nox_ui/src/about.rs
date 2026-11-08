@@ -33,7 +33,7 @@ pub fn open_about_window(cx: &mut App) {
     if crate::util::activate_if_open(existing, cx) {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(340.), px(400.)), cx);
+    let bounds = Bounds::centered(None, size(px(360.), px(430.)), cx);
     let opts = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -164,6 +164,7 @@ impl Render for AboutView {
             .font_family(settings.ui_font.clone())
             .text_size(px(12.))
             .child(header(&theme))
+            .child(div().mt(px(14.)).child(crate::updater::status_row(&theme, cx)))
             .child(div().flex_1())
             .child(details(&theme))
     }

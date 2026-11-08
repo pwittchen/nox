@@ -2,9 +2,9 @@
 
 ## Not done yet (v1 spec items)
 
-- **Sparkle auto-update** (SPEC §15.3): the `updater` cargo feature, Info.plist keys, appcast
-  script and release workflow are in place, but Sparkle.framework is not embedded or driven
-  yet. Off by design until the repository is public (§15.4).
+- **Remove Sparkle leftovers** (SPEC §15.4): the built-in updater replaced Sparkle; the
+  `updater` cargo feature, the `SUFeedURL` / `SUPublicEDKey` keys in `scripts/bundle.sh` and the
+  `ci.yml` check for them can go.
 - **Homebrew cask** (§15.2 step 12): `release.yml` starts the tap's `update-formulae.yml` with
   `formula=nox` once the repo is public, but `pwittchen/homebrew-tap` has no `Casks/nox.rb` (nor
   a `nox` choice in that workflow) and the `HOMEBREW_TAP_TOKEN` secret isn't set on nox yet.

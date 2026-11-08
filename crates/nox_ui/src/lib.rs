@@ -46,6 +46,7 @@ pub mod terminal_element;
 pub mod text_input;
 pub mod theme;
 pub mod toast;
+pub mod updater;
 pub mod util;
 pub mod util_keys;
 pub mod window_bg;

@@ -286,6 +286,7 @@ pub fn menus() -> Vec<Menu> {
             name: "nox".into(),
             items: vec![
                 MenuItem::action("About nox", About),
+                MenuItem::action("Check for Updates…", CheckForUpdates),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::action("Open Config File", OpenConfigFile),
@@ -455,6 +456,7 @@ pub fn palette_commands() -> Vec<(&'static str, Box<dyn Action>)> {
         ("Font Smaller", Box::new(FontSmaller)),
         ("Font Reset", Box::new(FontReset)),
         ("Settings…", Box::new(OpenSettings)),
+        ("Check for Updates", Box::new(CheckForUpdates)),
         ("Open config.toml", Box::new(OpenConfigFile)),
         ("Toggle Full Screen", Box::new(ToggleFullScreen)),
         ("Quit", Box::new(Quit)),

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- nox updates itself: nox → Check for Updates…, the palette, the About window and Settings check
+  GitHub Releases, then download, verify (SHA-256 + Developer ID signature) and install the
+  update with a relaunch. A daily automatic check is on by default (`app.check_for_updates`).
 - Quitting asks "Quit nox?" first, also when nothing is running; turn it off with
   `app.confirm_quit` (Settings → General). The window's close button now quits like `⌘Q`.
 

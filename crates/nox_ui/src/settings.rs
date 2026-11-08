@@ -252,6 +252,9 @@ impl SettingsView {
     fn extra_for(key: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = Theme::global(cx).clone();
         match key {
+            "app.check_for_updates" => {
+                Some(div().flex().child(crate::updater::status_row(&theme, cx)).into_any_element())
+            }
             "terminal.notifications" if nox_mac::notifications_denied() => Some(
                 div()
                     .flex()
@@ -844,7 +847,11 @@ impl SettingsView {
     }
 }
 
-fn button(id: impl Into<SharedString>, label: &'static str, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+pub(crate) fn button(
+    id: impl Into<SharedString>,
+    label: &'static str,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id.into())
         .px(px(8.))
@@ -994,7 +1001,8 @@ impl Render for SettingsView {
                 .pt(px(36.))
                 .text_size(px(12.))
                 .child(crate::about::header(&theme))
-                .child(div().w(px(340.)).mt(px(28.)).child(crate::about::details(&theme)))
+                .child(div().mt(px(16.)).child(crate::updater::status_row(&theme, cx)))
+                .child(div().w(px(340.)).mt(px(24.)).child(crate::about::details(&theme)))
         });
         let _ = section_of_key;
         let dialog = crate::dialog::render_overlay(window, cx);

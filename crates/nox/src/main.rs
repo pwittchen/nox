@@ -255,8 +255,10 @@ fn main() {
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
         cx.on_action(|_: &About, cx| nox_ui::about::open_about_window(cx));
         cx.on_action(|_: &CheckForUpdates, cx| {
-            nox_ui::toast::show(cx, "Updates are disabled in this build (SPEC §15.4).");
+            nox_ui::updater::check(cx, nox_ui::updater::Origin::Menu);
         });
+        cx.set_global(nox_ui::updater::MainWindow(window));
+        nox_ui::updater::start_automatic(cx);
 
         // The window's close button quits like `⌘Q` (with its confirmations).
         let _ = window.update(cx, |_, w, cx| {
@@ -286,6 +288,7 @@ fn main() {
                     let _ = nox_config::set_value(&path, "window.y", f32::from(b.origin.y).round() as i64);
                 }
                 nox_mac::set_keep_awake(false, "");
+                nox_ui::updater::on_quit(cx);
                 async {}
             })
             .detach();
