@@ -17,7 +17,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 	<key>CFBundleDisplayName</key>
 	<string>nox</string>
 	<key>CFBundleExecutable</key>
-	<string>nox-app</string>
+	<string>nox</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>NSHighResolutionCapable</key>
@@ -25,6 +25,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 </dict>
 </plist>
 EOF
-ln -f target/debug/nox-app "$APP/Contents/MacOS/nox-app"
+rm -f "$APP/Contents/MacOS/nox-app"
+ln -f target/debug/nox-app "$APP/Contents/MacOS/nox"
 ln -f target/debug/nox "$APP/Contents/Resources/bin/nox"
-exec "$APP/Contents/MacOS/nox-app" "$@"
+exec "$APP/Contents/MacOS/nox" "$@"

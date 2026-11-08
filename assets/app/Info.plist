@@ -9,7 +9,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.pwittchen.nox</string>
 	<key>CFBundleExecutable</key>
-	<string>nox-app</string>
+	<string>nox</string>
 	<key>CFBundleIconFile</key>
 	<string>nox</string>
 	<key>CFBundlePackageType</key>

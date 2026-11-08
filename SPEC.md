@@ -160,7 +160,9 @@ so they carry over unchanged.
 - Environment: inherits the app's environment plus `TERM=xterm-256color`,
   `COLORTERM=truecolor`, `TERM_PROGRAM=nox`, `TERM_PROGRAM_VERSION=<version>`, `LANG` defaulted
   to `en_US.UTF-8` if unset. Extra variables from `[shell.env]`. (A `nox` terminfo entry is a
-  ROADMAP item; v1 uses `xterm-256color`.)
+  ROADMAP item; v1 uses `xterm-256color`.) The app's executable in the bundle is
+  `nox.app/Contents/MacOS/nox`, so tools that name the terminal after the parent process
+  (fastfetch, neofetch) show `nox <version>`.
 - New tabs and new panes start in the working directory of the focused pane
   (`shell.inherit_cwd = true`), otherwise in `shell.working_directory` (default `~`).
 - Shell integration (optional, `shell.integration = true`): nox injects a small snippet for zsh

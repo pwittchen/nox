@@ -19,7 +19,7 @@ cargo build --release --target "$TARGET" -p nox -p nox_cli ${FEATURES:+--feature
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin" "$APP/Contents/Resources/assets"
-cp "target/$TARGET/release/nox-app" "$APP/Contents/MacOS/nox-app"
+cp "target/$TARGET/release/nox-app" "$APP/Contents/MacOS/nox"
 cp "target/$TARGET/release/nox" "$APP/Contents/Resources/bin/nox"
 
 # Bundled assets: fonts (with licenses), sounds. Icons are compiled into the binary.

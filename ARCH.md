@@ -144,6 +144,10 @@ PTY ─▶ reader thread: poll + read 64 KiB ─▶ OscSniffer (OSC 7/133/9/777,
   build from a dev bundle, `target/debug/nox.app` (hard links to `nox-app` and the `nox` CLI,
   no bundle identifier, so it doesn't share defaults or notification permissions with the
   release app).
+- The cargo binary is `nox-app` (the CLI owns the name `nox` in `target/`), but both bundles
+  install it as `Contents/MacOS/nox` (`CFBundleExecutable = nox`): fastfetch and similar tools
+  name the terminal after the parent process's executable and would otherwise print
+  `nox-app <version>`. The CLI lives in `Contents/Resources/bin/nox`, so the names don't clash.
 
 ## Differences from the spec
 
