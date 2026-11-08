@@ -279,7 +279,9 @@ precedence where details differ):
   floating panels. Content inside a rounded card is kept within its padding (GPUI clips to
   rectangles), so the grid never touches a rounded corner.
 - Motion: 120–150 ms ease-out fades and slides via GPUI's `Animation` API
-  (`with_animation`); no bounce. Disabled under Reduce Motion. Hover states are instant (no
+  (`with_animation`); no bounce. Disabled under Reduce Motion. The command palette and sheets
+  fade in over 140 ms while sliding down 8 px (a sheet's backdrop fades with it); closing is
+  instant. Hover states are instant (no
   transitions), as in native controls.
 - No hardcoded colors in components: every color comes from the active `Theme` (a GPUI
   `Global`, see 9).

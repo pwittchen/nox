@@ -9,6 +9,34 @@ use gpui::{
 
 use crate::theme::Theme;
 
+/// How long overlays (palette, sheets) take to appear (SPEC §5.1 Motion).
+pub const APPEAR_DURATION: Duration = Duration::from_millis(140);
+/// How far they slide down while fading in.
+pub const APPEAR_SLIDE: f32 = 8.;
+
+/// Fades `el` in while sliding it down by [`APPEAR_SLIDE`]: `slide(el, offset)` applies an
+/// offset that goes from `-APPEAR_SLIDE` to 0 (ease-out). The animation restarts whenever the
+/// element appears again (GPUI drops the state of an element that isn't rendered). Under Reduce
+/// Motion, `el` is shown as is (offset 0).
+pub fn fade_slide_in(
+    id: impl Into<gpui::ElementId>,
+    reduce_motion: bool,
+    el: gpui::Div,
+    slide: impl Fn(gpui::Div, f32) -> gpui::Div + 'static,
+) -> gpui::AnyElement {
+    use gpui::AnimationExt as _;
+    if reduce_motion {
+        return slide(el, 0.).into_any_element();
+    }
+    let anim = gpui::Animation::new(APPEAR_DURATION).with_easing(ease_out_cubic);
+    el.with_animation(id, anim, move |el, d| slide(el, -APPEAR_SLIDE * (1. - d)).opacity(d))
+        .into_any_element()
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    1. - (1. - t).powi(3)
+}
+
 /// For single-instance windows (Settings, About): brings `handle`'s window to the front if it is
 /// still open and returns whether it was. Activation is deferred, because the action that asks
 /// for it may be dispatched while that very window is being updated (it's the key window), and

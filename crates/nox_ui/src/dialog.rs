@@ -441,18 +441,28 @@ pub fn render_overlay(window: &Window, cx: &App) -> Option<AnyElement> {
         return None;
     }
     let theme = Theme::global(cx);
+    let backdrop = gpui::black().opacity(if theme.dark { 0.35 } else { 0.18 });
+    // The backdrop fades in with the sheet; the sheet also slides down a little (SPEC §5.1).
+    let sheet = crate::util::fade_slide_in(
+        "dialog-appear",
+        crate::settings_state::Settings::global(cx).reduce_motion(),
+        div().child(view),
+        |el, dy| el.mt(px(dy)),
+    );
+    let fade = crate::util::fade_slide_in(
+        "dialog-backdrop-appear",
+        crate::settings_state::Settings::global(cx).reduce_motion(),
+        div().absolute().inset_0().bg(backdrop),
+        |el, _| el,
+    );
     Some(
         div()
             .id("dialog-backdrop")
             .absolute()
             .inset_0()
-            .bg(gpui::black().opacity(if theme.dark { 0.35 } else { 0.18 }))
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt(px(80.))
+            .child(fade)
+            .child(div().absolute().inset_0().flex().items_start().justify_center().pt(px(80.)).child(sheet))
             .occlude()
-            .child(view)
             .into_any_element(),
     )
 }

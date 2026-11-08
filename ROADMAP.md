@@ -23,7 +23,6 @@
   (`tabs.sidebar_workspaces = "all"`).
 - **Draggable overlay scrollbar**; the tab strip doesn't auto-scroll to keep the active tab in
   view when it overflows.
-- **Settings window**: fade/slide animations of palette and sheets.
 - **Iosevka** is not bundled (size, see ARCH.md).
 - **Mode 2027** (grapheme clustering query, §7.1): emoji clusters are merged, but `DECRQM ?2027`
   isn't answered, so programs can't detect it and adjust their width tables.
