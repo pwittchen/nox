@@ -1357,6 +1357,9 @@ panes = [{ command = "cargo watch -x check" }, { command = "git log --oneline -2
   running app and not reloaded.
 - A file that fails to parse keeps the last good config and shows a notice with the line and
   error; invalid individual values fall back to their default with a notice.
+  This includes `[keys]`: a shortcut that doesn't parse (e.g. `"hyper-k"`) falls back to the
+  action's default binding; a `{ send = … }` entry whose key doesn't parse has no default and
+  is skipped.
 
 ## 12. Performance Targets
 

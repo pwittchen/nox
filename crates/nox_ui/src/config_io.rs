@@ -62,7 +62,9 @@ pub fn apply(cx: &mut App, config: Config, notices: &[nox_config::Notice]) {
     let changed = |f: &dyn Fn(&Config) -> String| old.as_ref().is_none_or(|o| f(o) != f(&config));
 
     if changed(&|c| format!("{:?}", c.keys)) {
-        crate::actions::bind_keys(cx, &config.keys);
+        for n in crate::actions::bind_keys(cx, &config.keys) {
+            crate::toast::show(cx, format!("config.toml: {} — {}", n.key, n.message));
+        }
     }
     if changed(&|c| format!("{:?}{:?}{}", c.icons, c.agents.defs, c.tabs.icons)) {
         cx.set_global(crate::icons::IconRegistry::from_config(&config));
@@ -205,6 +207,29 @@ pub(crate) mod tests {
             let new_tab: Vec<_> = keymap.bindings_for_action(&crate::actions::NewTab).collect();
             assert_eq!(new_tab.len(), 1);
             assert_eq!(new_tab[0].keystrokes()[0].inner().key, "y");
+        });
+    }
+
+    #[gpui::test]
+    fn apply_falls_back_on_an_invalid_shortcut(cx: &mut TestAppContext) {
+        crate::test_support::init(cx);
+        let mut config = crate::test_support::config();
+        config.keys.insert("new_tab".into(), nox_config::KeyBinding::Shortcut("hyper-k".into()));
+        cx.update(|cx| {
+            // A live reload with a typo in [keys] must not panic.
+            apply(cx, config, &[]);
+            let m = messages(cx);
+            assert!(
+                m.contains(
+                    &"config.toml: keys.new_tab — invalid shortcut \"hyper-k\", using the default".into()
+                ),
+                "{m:?}"
+            );
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let new_tab: Vec<_> = keymap.bindings_for_action(&crate::actions::NewTab).collect();
+            assert_eq!(new_tab.len(), 1);
+            assert_eq!(new_tab[0].keystrokes()[0].inner().key, "t");
         });
     }
 

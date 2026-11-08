@@ -449,9 +449,20 @@ impl EntityInputHandler for TextInput {
             .unwrap_or(self.selected.clone());
         self.content = format!("{}{}{}", &self.content[..r.start], text, &self.content[r.end..]);
         self.marked = (!text.is_empty()).then(|| r.start..r.start + text.len());
-        self.selected = new_sel.as_ref().map(|s| self.range_from_utf16(s)).map_or_else(
+        // The IME's selection is in UTF-16 units relative to the new marked text.
+        let in_text = |u16o: usize| {
+            let mut u16_seen = 0;
+            text.char_indices()
+                .find(|(_, ch)| {
+                    let before = u16_seen;
+                    u16_seen += ch.len_utf16();
+                    before >= u16o
+                })
+                .map_or(text.len(), |(i, _)| i)
+        };
+        self.selected = new_sel.map_or_else(
             || r.start + text.len()..r.start + text.len(),
-            |s| s.start + r.start..s.end + r.start,
+            |s| r.start + in_text(s.start)..r.start + in_text(s.end),
         );
         cx.notify();
     }
@@ -479,7 +490,7 @@ impl EntityInputHandler for TextInput {
     ) -> Option<usize> {
         let local = self.last_bounds?.localize(&p)?;
         let layout = self.last_layout.as_ref()?;
-        let idx = layout.index_for_x(p.x - local.x)?;
+        let idx = layout.index_for_x(local.x)?;
         Some(self.utf8_to_utf16(idx))
     }
 }
@@ -928,8 +939,7 @@ mod tests {
 
     #[gpui::test]
     fn ime_selection_inside_marked_text(cx: &mut TestAppContext) {
-        // The IME's selection is relative to the marked text. (Only ASCII before the mark here:
-        // the conversion currently goes through the whole content, see the coverage report.)
+        // The IME's selection is relative to the marked text.
         let (input, cx, _) = input(cx, "ab");
         input.update_in(cx, |i, window, cx| {
             i.replace_and_mark_text_in_range(Some(1..1), "xyz", Some(1..2), window, cx);
@@ -940,6 +950,26 @@ mod tests {
             i.replace_and_mark_text_in_range(None, "q", Some(1..1), window, cx);
             assert_eq!(i.content, "aqb");
             assert_eq!(i.selected, 2..2);
+        });
+    }
+
+    #[gpui::test]
+    fn ime_selection_with_non_ascii_text(cx: &mut TestAppContext) {
+        // Non-ASCII before the mark: the selection is offset by the mark's byte start.
+        let (input, cx, _) = input(cx, "é");
+        input.update_in(cx, |i, window, cx| {
+            i.replace_and_mark_text_in_range(None, "ab", Some(1..2), window, cx);
+            assert_eq!(i.content, "éab");
+            assert_eq!(i.marked, Some(2..4));
+            assert_eq!(i.selected, 3..4);
+            assert_eq!(&i.content[i.selected.clone()], "b");
+            // Non-ASCII inside the mark: UTF-16 offsets map to char boundaries of the new text.
+            i.replace_and_mark_text_in_range(None, "か😀な", Some(1..3), window, cx);
+            assert_eq!(i.content, "éか😀な");
+            assert_eq!(&i.content[i.selected.clone()], "😀");
+            // A selection past the end of the marked text clamps to its end.
+            i.replace_and_mark_text_in_range(None, "x", Some(5..9), window, cx);
+            assert_eq!(i.selected, 3..3);
         });
     }
 
@@ -965,10 +995,11 @@ mod tests {
             let b = i.bounds_for_range(1..3, bounds, window, cx).unwrap();
             assert_eq!(b.left(), bounds.left() + layout.x_for_index(1));
             assert_eq!(b.right(), bounds.left() + layout.x_for_index(3));
-            let p = point(bounds.left() + layout.x_for_index(2) + px(1.), bounds.top() + px(2.));
-            // Inside the field there is an index (its value is off, see the coverage report:
-            // it always answers for x = the field's left edge).
-            assert!(i.character_index_for_point(p, window, cx).is_some());
+            // Inside the field: the character under the point.
+            for idx in 0..4 {
+                let p = point(bounds.left() + layout.x_for_index(idx) + px(1.), bounds.top() + px(2.));
+                assert_eq!(i.character_index_for_point(p, window, cx), Some(idx));
+            }
             // Outside the field: no index.
             assert_eq!(i.character_index_for_point(point(px(-50.), px(-50.)), window, cx), None);
         });

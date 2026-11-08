@@ -227,15 +227,35 @@ pub fn default_bindings() -> Vec<(&'static str, BindFn, &'static str, Option<&'s
 #[action(namespace = nox, no_json)]
 pub struct SendText(pub String);
 
-/// Install the key bindings: defaults, overridden / unbound by `[keys]`.
-pub fn bind_keys(cx: &mut App, keys: &BTreeMap<String, CfgKey>) {
+/// Records a notice for `keys.<key>` (ending in `outcome`) and returns `true` when `shortcut`
+/// doesn't parse (`KeyBinding::new` would panic on it).
+fn invalid(key: &str, shortcut: &str, outcome: &str, notices: &mut Vec<nox_config::Notice>) -> bool {
+    let Some(e) = shortcut.split_whitespace().find_map(|k| gpui::Keystroke::parse(k).err()) else {
+        return false;
+    };
+    notices.push(nox_config::Notice {
+        key: format!("keys.{key}"),
+        message: format!("invalid shortcut \"{}\", {outcome}", e.keystroke),
+    });
+    true
+}
+
+/// Install the key bindings: defaults, overridden / unbound by `[keys]`. An override that
+/// doesn't parse falls back to the action's default, a `{ send = … }` entry whose key doesn't
+/// parse is skipped; both are returned as notices (SPEC §11), so a typo in a live-reloaded
+/// config can't take the app down.
+pub fn bind_keys(cx: &mut App, keys: &BTreeMap<String, CfgKey>) -> Vec<nox_config::Notice> {
     cx.clear_key_bindings();
     crate::text_input::bind_keys(cx);
     crate::palette::bind_keys(cx);
     crate::dialog::bind_keys(cx);
     let mut bindings = Vec::new();
+    let mut notices = Vec::new();
     for (name, make, default, ctx) in default_bindings() {
         let shortcut = match keys.get(name) {
+            Some(CfgKey::Shortcut(s)) if invalid(name, s, "using the default", &mut notices) => {
+                default.to_string()
+            }
             Some(CfgKey::Shortcut(s)) => s.clone(),
             Some(CfgKey::Send { .. }) => continue,
             None => default.to_string(),
@@ -248,10 +268,14 @@ pub fn bind_keys(cx: &mut App, keys: &BTreeMap<String, CfgKey>) {
     for (key, b) in keys {
         if let CfgKey::Send { send } = b {
             // Key names here are shortcuts like "alt-left".
+            if key.trim().is_empty() || invalid(key, key, "ignored", &mut notices) {
+                continue;
+            }
             bindings.push(KeyBinding::new(key, SendText(send.clone()), Some(TERMINAL)));
         }
     }
     cx.bind_keys(bindings);
+    notices
 }
 
 /// The native menu bar (SPEC §10): nox, Shell, Edit, View, Window, Help.
@@ -514,6 +538,35 @@ mod tests {
             bind_keys(cx, &BTreeMap::new());
             assert_eq!(shortcuts(cx, &NewTab), ["cmd-t"]);
             assert!(shortcuts(cx, &SendText("\x1bb".into())).is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn invalid_shortcuts_fall_back_with_a_notice(cx: &mut TestAppContext) {
+        let mut keys = BTreeMap::new();
+        keys.insert("new_tab".to_string(), CfgKey::Shortcut("hyper-k".into()));
+        keys.insert("find".to_string(), CfgKey::Shortcut("cmd-k foo-x".into()));
+        keys.insert("bogus-left".to_string(), CfgKey::Send { send: "x".into() });
+        keys.insert("alt-left".to_string(), CfgKey::Send { send: "\x1bb".into() });
+        cx.update(|cx| {
+            let notices = bind_keys(cx, &keys);
+            let got: Vec<_> = notices.iter().map(|n| (n.key.as_str(), n.message.as_str())).collect();
+            assert_eq!(
+                got,
+                [
+                    ("keys.new_tab", "invalid shortcut \"hyper-k\", using the default"),
+                    ("keys.find", "invalid shortcut \"foo-x\", using the default"),
+                    ("keys.bogus-left", "invalid shortcut \"bogus-left\", ignored"),
+                ]
+            );
+            // A bad override falls back to the default; a bad send entry is skipped.
+            assert_eq!(shortcuts(cx, &NewTab), ["cmd-t"]);
+            assert_eq!(shortcuts(cx, &Find), ["cmd-f"]);
+            assert!(shortcuts(cx, &SendText("x".into())).is_empty());
+            // Valid entries and untouched defaults still bind.
+            assert_eq!(shortcuts(cx, &SendText("\x1bb".into())), ["alt-left"]);
+            assert_eq!(shortcuts(cx, &SplitVertical), ["cmd-d"]);
+            assert!(bind_keys(cx, &BTreeMap::new()).is_empty());
         });
     }
 

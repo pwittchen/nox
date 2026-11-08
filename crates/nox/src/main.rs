@@ -78,7 +78,7 @@ fn main() {
         if let Err(e) = nox_config::ensure_default_file(&config_path) {
             log::error!("creating {}: {e}", config_path.display());
         }
-        let (config, notices, parse_error) = match nox_config::load_from_path(&config_path) {
+        let (config, mut notices, parse_error) = match nox_config::load_from_path(&config_path) {
             Ok((c, n)) => (c, n, None),
             Err(e) => (nox_config::Config::default(), vec![], Some(e.to_string())),
         };
@@ -100,7 +100,7 @@ fn main() {
         if let Err(e) = nox_terminal::shell::install(&integration_dir) {
             log::warn!("shell integration: {e}");
         }
-        nox_ui::actions::bind_keys(cx, &config.keys);
+        notices.extend(nox_ui::actions::bind_keys(cx, &config.keys));
         cx.set_menus(nox_ui::actions::menus());
 
         // Restore or start fresh.
