@@ -410,6 +410,8 @@ impl Default for ShellConfig {
 pub struct AppConfig {
     pub restore_session: bool,
     pub confirm_close: bool,
+    /// Ask before quitting nox even when nothing is running.
+    pub confirm_quit: bool,
     pub quit_when_last_tab_closed: bool,
     pub dock_bounce_on_bell: bool,
     pub check_for_updates: bool,
@@ -423,6 +425,7 @@ impl Default for AppConfig {
         Self {
             restore_session: true,
             confirm_close: true,
+            confirm_quit: true,
             quit_when_last_tab_closed: true,
             dock_bounce_on_bell: true,
             check_for_updates: true,

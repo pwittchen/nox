@@ -258,6 +258,16 @@ fn main() {
             nox_ui::toast::show(cx, "Updates are disabled in this build (SPEC §15.4).");
         });
 
+        // The window's close button quits like `⌘Q` (with its confirmations).
+        let _ = window.update(cx, |_, w, cx| {
+            w.on_window_should_close(cx, move |w, cx| {
+                w.defer(cx, move |_, cx| {
+                    let _ = window.update(cx, nox_ui::root_actions::request_quit);
+                });
+                false
+            });
+        });
+
         // Save the session and window geometry on quit.
         {
             let root = root.clone();

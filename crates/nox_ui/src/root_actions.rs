@@ -340,7 +340,19 @@ fn font_step(r: &mut Root, delta: f32, _w: &mut Window, cx: &mut Context<Root>) 
     cx.notify();
 }
 
+/// Quit nox (`⌘Q`, menu, Dock, the window's close button): asks first when processes or agents
+/// are running (`app.confirm_close`), otherwise when `app.confirm_quit` is on (SPEC §6.4).
 pub fn request_quit(r: &mut Root, w: &mut Window, cx: &mut Context<Root>) {
+    quit_with(r, w, cx, true);
+}
+
+/// Quit to install an update: only running processes / agents ask first (the user already chose
+/// "Install and Relaunch").
+pub fn request_quit_for_update(r: &mut Root, w: &mut Window, cx: &mut Context<Root>) {
+    quit_with(r, w, cx, false);
+}
+
+fn quit_with(r: &mut Root, w: &mut Window, cx: &mut Context<Root>, ask_always: bool) {
     let busy: Vec<String> = r
         .panes
         .values()
@@ -356,6 +368,22 @@ pub fn request_quit(r: &mut Root, w: &mut Window, cx: &mut Context<Root>) {
         if agents > 0 {
             let _ = write!(msg, "{agents} agent(s) are working; they'll be resumed next time.");
         }
+        let this = cx.entity().downgrade();
+        crate::dialog::confirm(w, cx, "Quit nox?", msg, "Quit", move |_, cx| {
+            let _ = this.update(cx, |r, cx| {
+                r.save_session_now(cx);
+                cx.quit();
+            });
+        });
+        return;
+    }
+    let app = &Settings::global(cx).config.app;
+    if ask_always && app.confirm_quit {
+        let msg = if app.restore_session {
+            "Your workspaces, tabs and panes will be restored next time."
+        } else {
+            "All workspaces, tabs and panes will be closed."
+        };
         let this = cx.entity().downgrade();
         crate::dialog::confirm(w, cx, "Quit nox?", msg, "Quit", move |_, cx| {
             let _ = this.update(cx, |r, cx| {
@@ -1264,10 +1292,20 @@ mod tests {
 
     #[gpui::test]
     fn quitting_saves_nothing_after_quit_started(cx: &mut TestAppContext) {
+        let mut c = quiet_config();
+        c.app.confirm_quit = false;
+        let (root, cx) = open(cx, c);
+        root.update(cx, |r, _| r.quitting = true);
+        cx.dispatch_action(a::Quit);
+        assert_eq!(dialog_title(cx), None, "nothing runs, confirm_quit off: no confirmation");
+    }
+
+    #[gpui::test]
+    fn confirm_quit_asks_even_when_idle(cx: &mut TestAppContext) {
         let (root, cx) = open(cx, quiet_config());
         root.update(cx, |r, _| r.quitting = true);
         cx.dispatch_action(a::Quit);
-        assert_eq!(dialog_title(cx), None, "nothing runs: no confirmation");
+        assert_eq!(dialog_title(cx).as_deref(), Some("Quit nox?"));
     }
 
     /// Run `sleep` in the focused pane's shell and wait (bounded) until it is in the foreground.

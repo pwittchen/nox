@@ -112,6 +112,7 @@ integration = true           # inject OSC 7 / OSC 133 snippets for zsh, bash, fi
 [app]
 restore_session = true
 confirm_close = true
+confirm_quit = true           # ask before quitting nox, even when nothing is running
 quit_when_last_tab_closed = true
 dock_bounce_on_bell = true
 check_for_updates = true      # daily check against GitHub Releases (SPEC.md §15)

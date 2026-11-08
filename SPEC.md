@@ -565,6 +565,11 @@ Two independent settings: the terminal font (`font.family`) and the interface fo
   with a muted `[process exited with code N — press ↵ to close, ⌘R to restart]` line).
 - A process other than the shell running in the pane (or any pane of the tab / app) asks first
   (see 5.7); `app.confirm_close = false` disables it.
+- **Quitting** (`⌘Q`, nox → Quit nox, the Dock, the window's close button) always asks first
+  ("Quit nox?" — `Cancel` / `Quit`; the message says whether the session will be restored), even
+  when nothing runs; `app.confirm_quit = false` (Settings → General → Confirm quit) turns that
+  off. When processes or agents are running, the `confirm_close` sheet listing them is shown
+  instead. Quitting to install an update ("Install and Relaunch") skips the plain quit question.
 
 ### 6.5 Tabs
 - Tabs, their order and their indices are per workspace: `⌘1` is the first tab of the active
@@ -1340,6 +1345,7 @@ integration = true           # inject OSC 7 / OSC 133 snippets for zsh, bash, fi
 [app]
 restore_session = true
 confirm_close = true
+confirm_quit = true           # ask before quitting nox, even when nothing is running
 quit_when_last_tab_closed = true
 dock_bounce_on_bell = true
 check_for_updates = true      # daily check against GitHub Releases (see 15)

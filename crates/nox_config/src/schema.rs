@@ -135,6 +135,13 @@ fn build() -> Vec<SettingMeta> {
         ),
         m(
             General,
+            "app.confirm_quit",
+            "Confirm quit",
+            "Ask before quitting nox, even when nothing is running.",
+            Bool,
+        ),
+        m(
+            General,
             "app.quit_when_last_tab_closed",
             "Quit with last tab",
             "Quit nox when the last tab is closed.",

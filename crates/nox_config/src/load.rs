@@ -441,6 +441,7 @@ fn from_table(root: &Table, notices: &mut Vec<Notice>) -> Config {
         let mut s = Sec::new(root, "app", notices);
         s.bool("restore_session", &mut a.restore_session);
         s.bool("confirm_close", &mut a.confirm_close);
+        s.bool("confirm_quit", &mut a.confirm_quit);
         s.bool("quit_when_last_tab_closed", &mut a.quit_when_last_tab_closed);
         s.bool("dock_bounce_on_bell", &mut a.dock_bounce_on_bell);
         s.bool("check_for_updates", &mut a.check_for_updates);
