@@ -118,8 +118,16 @@ pub fn remove_value(path: &Path, key: &str) -> Result<(), WriteError> {
 
 /// Like [`remove_value`] with explicit path segments.
 pub fn remove_value_at(path: &Path, segments: &[&str]) -> Result<(), WriteError> {
+    remove_values_at(path, &[segments])
+}
+
+/// Removes several keys (each given as path segments) in one write. Missing keys are not an
+/// error.
+pub fn remove_values_at(path: &Path, keys: &[&[&str]]) -> Result<(), WriteError> {
     edit(path, |doc| {
-        remove_in_doc(doc, segments);
+        for segments in keys {
+            remove_in_doc(doc, segments);
+        }
         Ok(())
     })
 }
@@ -204,5 +212,37 @@ fn remove_in_doc(doc: &mut DocumentMut, segments: &[&str]) {
             None => return,
         }
     }
-    cur.remove(last);
+    // Comment lines above a key belong to its prefix in `toml_edit`; keep them by handing them
+    // to whatever comes next instead of deleting them with the key.
+    let comments = cur
+        .key_mut(last)
+        .and_then(|mut k| k.leaf_decor_mut().prefix().and_then(|p| p.as_str()).map(str::to_string))
+        .filter(|p| p.contains('#'));
+    let next = cur.iter().map(|(k, _)| k.to_string()).skip_while(|k| k != last).nth(1);
+    if cur.remove(last).is_none() {
+        return;
+    }
+    let Some(comments) = comments else { return };
+    if let Some(next) = next
+        && let Some(mut k) = cur.key_mut(&next)
+    {
+        let decor = k.leaf_decor_mut();
+        let rest = decor.prefix().and_then(|p| p.as_str()).unwrap_or("").to_string();
+        decor.set_prefix(comments + &rest);
+    } else if let [table] = parents {
+        // The table's last key: the comments go before the next top-level table, or to the end.
+        let pos = doc.get(table).and_then(Item::as_table).and_then(Table::position);
+        let following = doc
+            .iter_mut()
+            .filter_map(|(_, item)| item.as_table_mut())
+            .filter(|t| t.position() > pos)
+            .min_by_key(|t| t.position());
+        if let Some(t) = following {
+            let rest = t.decor().prefix().and_then(|p| p.as_str()).unwrap_or("").to_string();
+            t.decor_mut().set_prefix(comments + &rest);
+        } else {
+            let rest = doc.trailing().as_str().unwrap_or("").to_string();
+            doc.set_trailing(rest + &comments);
+        }
+    }
 }

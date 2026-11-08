@@ -445,6 +445,7 @@ keeps the toggle and the buttons.
 - Changes apply immediately (no Save button) and are written to `config.toml` at once.
 - Settings that differ from the default show a small "reset" control; resetting removes the key
   from the file, so it falls back to the default again.
+  Comment lines above a removed key are kept (moved to the next key or table).
 - A search field at the top filters settings across all sections by label, description and key.
 - Footer: **Open config.toml** (opens the file in the external editor, see 11) and **Reveal in
   Finder**.

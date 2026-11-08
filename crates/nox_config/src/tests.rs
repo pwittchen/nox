@@ -204,6 +204,31 @@ fn set_and_remove_preserve_comments_and_unknown_keys() {
     let (c, _) = load_from_path(&path).unwrap();
     assert_eq!(c.tabs.position, TabsPosition::Top);
 
+    // Several keys in one write; the rest of the table stays.
+    set_value(&path, "keys.new_tab", "cmd-y").unwrap();
+    set_value(&path, "keys.close_tab", "").unwrap();
+    set_value(&path, "keys.split_right", "cmd-e").unwrap();
+    remove_values_at(&path, &[&["keys", "new_tab"], &["keys", "close_tab"], &["keys", "missing"]]).unwrap();
+    let (c, _) = load_from_path(&path).unwrap();
+    assert_eq!(c.keys.len(), 1);
+    assert!(c.keys.contains_key("split_right"));
+    assert!(std::fs::read_to_string(&path).unwrap().contains("mystery = 42"));
+
+    // Comments above a removed key stay: on the next key, or before the next table.
+    let path3 = dir.path().join("c3.toml");
+    std::fs::write(
+        &path3,
+        "[keys]\n# keep me\nnew_tab = \"cmd-y\"\nclose_tab = \"\"\n\"alt-left\" = { send = \"x\" }\n\n[window]\nwidth = 900\n",
+    )
+    .unwrap();
+    remove_values_at(&path3, &[&["keys", "new_tab"], &["keys", "close_tab"]]).unwrap();
+    let out = std::fs::read_to_string(&path3).unwrap();
+    assert_eq!(out, "[keys]\n# keep me\n\"alt-left\" = { send = \"x\" }\n\n[window]\nwidth = 900\n", "{out}");
+    remove_value(&path3, "keys.alt-left").unwrap();
+    let out = std::fs::read_to_string(&path3).unwrap();
+    assert!(out.contains("# keep me"), "{out}");
+    assert!(load_from_path(&path3).unwrap().0.keys.is_empty());
+
     // Writing to the default file keeps its comments.
     let path2 = dir.path().join("c2.toml");
     ensure_default_file(&path2).unwrap();

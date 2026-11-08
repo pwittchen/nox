@@ -41,7 +41,7 @@ pub use schema::{
 pub use watch::{ChangeFilter, DEBOUNCE, WatchError, WatchHandle, watch};
 pub use write::{
     ConfigWriter, WriteError, atomic_write, content_hash, is_self_write, record_self_write, remove_value,
-    remove_value_at, set_value, set_value_at,
+    remove_value_at, remove_values_at, set_value, set_value_at,
 };
 
 /// Re-exported so callers can build values for [`set_value`].
