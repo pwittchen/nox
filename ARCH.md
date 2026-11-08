@@ -85,6 +85,12 @@ PTY ─▶ reader thread: poll + read 64 KiB ─▶ OscSniffer (OSC 7/133/9/777,
   square to Apple's icon grid, 824 px with a 100 px margin on 1024, so it matches other Dock
   icons in size; regenerate the smaller sizes from its 1024 px output). The bundle script
   builds `nox.icns` from it, and the binary also sets it as the Dock icon at runtime.
+- The app's name outside `dist/nox.app`: `crates/nox/build.rs` embeds a minimal `Info.plist`
+  (`__TEXT,__info_plist`) so even a bare `cargo run` shows "nox" in the menu bar. The Dock
+  still names a bare executable after its file (`nox-app`), so `scripts/run.sh` runs the debug
+  build from a dev bundle, `target/debug/nox.app` (hard links to `nox-app` and the `nox` CLI,
+  no bundle identifier, so it doesn't share defaults or notification permissions with the
+  release app).
 
 ## Differences from the spec
 
