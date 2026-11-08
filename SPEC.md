@@ -1374,7 +1374,7 @@ nox/
 │       ├── dialog.rs, toast.rs
 │       └── theme.rs            #   Theme global (Hsla), applying nox_theme output
 ├── .github/workflows/
-│   ├── ci.yml                  # PRs + master: fmt, lint, test, bench, unsigned bundle, audit
+│   ├── ci.yml                  # PRs + master: audit, then fmt, lint, test, bench, bundle
 │   └── release.yml             # tag v*: build, sign, notarize, staple, appcast, release, cask
 ├── assets/
 │   ├── icons/                  # SVG line icons (1.5px stroke)
@@ -1524,10 +1524,10 @@ from a Mac with the certificate in the login keychain, if CI is unavailable:
 scripts/release/notarize.sh dist/nox.app`, `SIGN_IDENTITY=… scripts/release/make_dmg.sh`, then
 `notarize.sh dist/nox-macos-aarch64.dmg`.
 
-`ci.yml` (PRs and `master`) checks formatting, runs `cargo lint` (clippy::pedantic, warnings
-denied), builds and tests, produces an **unsigned** (ad-hoc signed) `nox.app` artifact, and
-runs `cargo audit --deny warnings` (accepted advisories in `.cargo/audit.toml`); it has no
-access to signing secrets.
+`ci.yml` (PRs and `master`) first runs `cargo audit --deny warnings` (accepted advisories in
+`.cargo/audit.toml`); only when that passes does it check formatting, run `cargo lint`
+(clippy::pedantic, warnings denied), build and test, and produce an **unsigned** (ad-hoc signed)
+`nox.app` artifact. A failing audit fails the run. It has no access to signing secrets.
 
 ### 15.3 Automatic updates
 Updates are delivered with **Sparkle 2**, the de-facto standard for non-App-Store Mac apps:

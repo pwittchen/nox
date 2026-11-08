@@ -1,5 +1,5 @@
-# PRs and master: fmt, lint (clippy::pedantic), tests, benches (regression gate), unsigned app
-# bundle, and cargo audit (ignored advisories in .cargo/audit.toml).
+# PRs and master: cargo audit (ignored advisories in .cargo/audit.toml) first; only if it passes:
+# fmt, lint (clippy::pedantic), tests, benches (regression gate) and the unsigned app bundle.
 # No access to signing secrets (SPEC §15.2).
 #
 # Skipped when:
@@ -14,7 +14,23 @@ on:
     paths-ignore: ['**.md']
 
 jobs:
+  audit:
+    if: >-
+      ${{ !contains(github.event.head_commit.message || '', '#no-deploy')
+      && !contains(github.event.pull_request.title || '', '#no-deploy') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit (fails on vulnerabilities and on advisories not ignored in .cargo/audit.toml)
+        # Called directly so rust-toolchain.toml does not make rustup install the toolchain.
+        run: cargo-audit audit --deny warnings
+
   check:
+    # Runs only after a passing audit; a failing audit fails the whole run.
+    needs: audit
     if: >-
       ${{ !contains(github.event.head_commit.message || '', '#no-deploy')
       && !contains(github.event.pull_request.title || '', '#no-deploy') }}
@@ -44,17 +60,3 @@ jobs:
         with:
           name: nox.app
           path: dist/nox.app
-
-  audit:
-    if: >-
-      ${{ !contains(github.event.head_commit.message || '', '#no-deploy')
-      && !contains(github.event.pull_request.title || '', '#no-deploy') }}
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
-      - name: cargo audit (fails on vulnerabilities and on advisories not ignored in .cargo/audit.toml)
-        # Called directly so rust-toolchain.toml does not make rustup install the toolchain.
-        run: cargo-audit audit --deny warnings
