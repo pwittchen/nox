@@ -13,12 +13,27 @@ use crate::settings_state::Settings;
 pub fn nox_home() -> PathBuf {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| {
+        raise_fd_limit();
         let dir = tempfile::Builder::new().prefix("noxt").tempdir().expect("temp NOX_HOME").keep();
         // SAFETY: set once, before any test reads it (every test goes through here first).
         unsafe { std::env::set_var("NOX_HOME", &dir) };
         dir
     })
     .clone()
+}
+
+/// Tests run in parallel in one process and each pane holds a PTY, pipes and a socket or two,
+/// so macOS's default soft `ulimit -n` of 256 runs out (`EMFILE`). Raise the soft limit to the
+/// hard one, capped at 10240 (macOS's `OPEN_MAX`: `setrlimit` refuses more, e.g. `unlimited`).
+fn raise_fd_limit() {
+    // SAFETY: plain libc calls on a stack-allocated `rlimit`.
+    unsafe {
+        let mut lim: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut lim) == 0 {
+            lim.rlim_cur = lim.rlim_max.min(10_240);
+            libc::setrlimit(libc::RLIMIT_NOFILE, &raw const lim);
+        }
+    }
 }
 
 /// The test default config: defaults, but no IPC socket (tests opt in) and a plain `/bin/sh`

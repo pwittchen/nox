@@ -26,3 +26,4 @@ rust-embed = "8"
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
+libc.workspace = true
