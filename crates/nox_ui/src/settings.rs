@@ -49,6 +49,8 @@ pub struct SettingsView {
     section: Section,
     search: Entity<TextInput>,
     inputs: BTreeMap<String, Entity<TextInput>>,
+    /// The "add entry" name / value fields under each map editor (`[icons]`, `[shell.env]`).
+    map_new: BTreeMap<&'static str, (Entity<TextInput>, Entity<TextInput>)>,
     recording: Option<String>,
     expanded: Option<String>,
     /// The About page (bottom of the sidebar) instead of a config section.
@@ -86,6 +88,7 @@ impl SettingsView {
             section: Section::General,
             search,
             inputs: BTreeMap::new(),
+            map_new: BTreeMap::new(),
             recording: None,
             expanded: None,
             about: false,
@@ -410,7 +413,7 @@ impl SettingsView {
                     .child(input)
                     .into_any_element()
             }
-            SettingKind::Map => self.map_editor(key, value, cx),
+            SettingKind::Map => self.map_editor(key, value, window, cx),
             SettingKind::Agents => Self::agents_editor(cx),
         }
     }
@@ -551,10 +554,72 @@ impl SettingsView {
         div().flex().flex_col().child(head).children(list).into_any_element()
     }
 
+    /// The name / value inputs of a map editor's "add" row, created on first use. Enter in the
+    /// name moves to the value, Enter in the value adds the entry.
+    fn map_new_inputs(
+        &mut self,
+        key: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<TextInput>, Entity<TextInput>) {
+        if let Some(pair) = self.map_new.get(key) {
+            return pair.clone();
+        }
+        let (name_hint, value_hint) = match key {
+            "shell.env" => ("NAME", "value"),
+            _ => ("executable", "icon name or SVG path"),
+        };
+        let name = cx.new(|cx| TextInput::new(cx, name_hint));
+        let value = cx.new(|cx| TextInput::new(cx, value_hint));
+        let v = value.clone();
+        self.subs.push(cx.subscribe_in(&name, window, move |_, _, ev: &InputEvent, window, cx| {
+            if matches!(ev, InputEvent::Submit) {
+                v.read(cx).focus(window);
+            }
+        }));
+        self.subs.push(cx.subscribe_in(
+            &value,
+            window,
+            move |this: &mut Self, _, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::Submit) {
+                    this.add_map_entry(key, window, cx);
+                }
+            },
+        ));
+        self.map_new.insert(key, (name.clone(), value.clone()));
+        (name, value)
+    }
+
+    /// Writes the "add" row of a map editor as `<key>.<name> = "<value>"` (an existing name is
+    /// overwritten), then clears the row and puts the cursor back into the name.
+    fn add_map_entry(&mut self, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((name_in, value_in)) = self.map_new.get(key).cloned() else { return };
+        let name = name_in.read(cx).text().trim().to_string();
+        let value = value_in.read(cx).text().to_string();
+        if let Err(e) = validate_map_entry(key, &name, &value) {
+            crate::toast::show(cx, e);
+            return;
+        }
+        let mut parts: Vec<&str> = key.split('.').collect();
+        parts.push(&name);
+        match nox_config::set_value_at(&nox_config::config_path(), &parts, value.as_str()) {
+            Ok(()) => crate::config_io::reload_from_disk(cx),
+            Err(e) => {
+                crate::toast::show(cx, format!("Couldn't write {key}.{name} to config.toml: {e}"));
+                return;
+            }
+        }
+        name_in.update(cx, |i, cx| i.set_text("", cx));
+        value_in.update(cx, |i, cx| i.set_text("", cx));
+        name_in.read(cx).focus(window);
+        cx.notify();
+    }
+
     fn map_editor(
         &mut self,
         key: &'static str,
         value: Option<toml::Value>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::global(cx).clone();
@@ -587,18 +652,30 @@ impl SettingsView {
                     .into_any_element()
             })
             .collect();
-        div()
+        let (name_in, value_in) = self.map_new_inputs(key, window, cx);
+        let field = |input: Entity<TextInput>, w: f32| {
+            div()
+                .w(px(w))
+                .px(px(6.))
+                .py(px(2.))
+                .rounded(px(5.))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.bg)
+                .text_size(px(12.))
+                .child(input)
+        };
+        let add = div()
             .flex()
-            .flex_col()
-            .gap_1()
-            .children(rows)
+            .gap_2()
+            .items_center()
+            .child(field(name_in, 120.))
+            .child(field(value_in, 160.))
             .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme.text_muted)
-                    .child("Add entries in config.toml (Open config.toml below)."),
-            )
-            .into_any_element()
+                button(SharedString::from(format!("add-{key}")), "Add", &theme)
+                    .on_click(cx.listener(move |this, _, window, cx| this.add_map_entry(key, window, cx))),
+            );
+        div().flex().flex_col().gap_1().children(rows).child(add).into_any_element()
     }
 
     fn agents_editor(cx: &mut Context<Self>) -> AnyElement {
@@ -814,6 +891,23 @@ fn stepper(
         .child(div().min_w(px(44.)).flex().justify_center().child(value))
         .child(b(format!("inc-{key}"), "+").when(!disabled, |d| d.on_click(move |_, _, cx| f2(cx, 1))))
         .into_any_element()
+}
+
+/// Checks a new `[icons]` / `[shell.env]` entry from the Settings "add" row.
+fn validate_map_entry(key: &str, name: &str, value: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Enter a name first.".into());
+    }
+    if key == "shell.env" {
+        let valid = !name.starts_with(|c: char| c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid {
+            return Err(format!("\"{name}\" isn't a valid environment variable name."));
+        }
+    } else if value.trim().is_empty() {
+        return Err("Enter an icon name or an SVG path.".into());
+    }
+    Ok(())
 }
 
 fn value_text(v: &toml::Value) -> String {

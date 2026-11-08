@@ -448,7 +448,10 @@ keeps the toggle and the buttons.
 - Controls by type: switches for booleans, segmented controls / popups for enums, steppers or
   sliders with a numeric field for numbers, text inputs (see 5.8) for strings, font pickers
   (see 5.10), a theme picker with live preview, key-value tables for
-  `[icons]` and `[shell.env]`, and a shortcut recorder for `[keys]` (click, press the
+  `[icons]` and `[shell.env]` (each entry with **Remove**; a name / value row below adds one —
+  `Enter` in the name moves to the value, `Enter` there or **Add** writes it, an existing name
+  is overwritten; `[shell.env]` names must be `[A-Za-z_][A-Za-z0-9_]*`, an icon needs a
+  value), and a shortcut recorder for `[keys]` (click, press the
   combination; conflicts are flagged). Above the shortcut list, **Reset All to Defaults…** asks
   for confirmation (a sheet with the number of changed shortcuts) and then removes every action
   override from `[keys]` in one write; `{ send = … }` bindings are kept. Disabled while nothing
