@@ -590,19 +590,6 @@ impl Pane {
                 }
             }
         }
-        let proc_for_icon = if self.process_is_shell { None } else { self.process.as_ref() };
-        let icon = match &self.custom_icon {
-            Some(name) => registry.custom_icon(name),
-            None => registry.table.icon_for(
-                self.process.as_ref().filter(|_| !self.process_is_shell).or(proc_for_icon),
-                self.osc_title.as_deref(),
-                &login_shell,
-            ),
-        };
-        if icon != self.icon {
-            self.icon = icon;
-            changed = true;
-        }
         // Agent detection.
         let kind = if self.process_is_shell {
             None
@@ -649,6 +636,25 @@ impl Pane {
             }
             (Some(a), Some(_)) => a.seen = true,
             _ => {}
+        }
+        // Icon, after agent detection: a running agent shows its own icon even while its process
+        // and title don't identify it (e.g. Claude Code's working spinner title).
+        let registry = cx.global::<IconRegistry>();
+        let live_agent = self.agent.as_ref().filter(|a| {
+            a.tracker.state() != AgentState::Exited && !self.process_is_shell && a.kind != "agent"
+        });
+        let icon = match (&self.custom_icon, live_agent) {
+            (Some(name), _) => registry.custom_icon(name),
+            (None, Some(a)) => registry.table.icon_for_kind(&a.kind),
+            (None, None) => registry.table.icon_for(
+                self.process.as_ref().filter(|_| !self.process_is_shell),
+                self.osc_title.as_deref(),
+                &login_shell,
+            ),
+        };
+        if icon != self.icon {
+            self.icon = icon;
+            changed = true;
         }
         if Settings::global(cx).config.ui.show_git_branch {
             let b = self.cwd.as_deref().and_then(nox_agents::git_branch);

@@ -179,9 +179,13 @@ so they carry over unchanged.
   1. a user override for the tab / pane (context menu: Set Icon…, also in the palette),
   2. the foreground process of the PTY (`tcgetpgrp` + `proc_pidinfo` / `proc_pidpath`), matched
      by executable name; for interpreters (`node`, `python`, `java`, `bun`, `deno`, `ruby`) also
-     by their arguments, so `node …/claude` resolves to Claude and `java -jar app.jar` to Java,
+     by their arguments, so `node …/claude` resolves to Claude and `java -jar app.jar` to Java;
+     an executable named after a version takes the name of its install directory
+     (`~/.local/share/claude/versions/2.1.319` → `claude`),
   3. the title set via OSC 0/2, matched by known prefixes (e.g. `✳ Claude Code`),
   4. otherwise the default terminal icon `>_`.
+  While an agent is detected in the pane (see 4.8) and running, its icon is kept even when later
+  process / title checks don't identify it (e.g. Claude Code's working spinner title).
   Refreshed together with the title (see 4.4): on prompt marks, focus and at most every 500 ms
   while output flows; a lookup is a map hit, never a filesystem scan.
 - Built-in set (bundled SVGs, monochrome line style matching 5.1, optionally tinted with the

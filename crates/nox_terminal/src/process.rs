@@ -37,7 +37,7 @@ pub fn process_info(pid: i32) -> Option<ForegroundProcess> {
         None => (None, vec![]),
     };
     let exe_path = proc_path(pid).or(path_exe)?;
-    let exe = basename(&exe_path);
+    let exe = program_name(&exe_path);
     // argv[0] of login shells is `-zsh`; normalize.
     let exe = exe.trim_start_matches('-').to_string();
     Some(ForegroundProcess { pid, exe, args, cwd: proc_cwd(pid) })
@@ -45,6 +45,27 @@ pub fn process_info(pid: i32) -> Option<ForegroundProcess> {
 
 fn basename(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_string()
+}
+
+/// `2.1.319`, `1.0.0-beta.2`: a file or directory named after a version.
+fn is_version(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_digit())
+        && name.contains('.')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+' | '_'))
+}
+
+/// The program name of an executable path: its basename, except for self-updating tools that
+/// install versioned binaries (`~/.local/share/claude/versions/2.1.319` → `claude`), where it is
+/// the nearest ancestor that isn't a version or a `versions` / `bin` directory.
+fn program_name(path: &str) -> String {
+    let base = basename(path);
+    if !is_version(&base) {
+        return base;
+    }
+    path.rsplit('/')
+        .skip(1)
+        .find(|c| !c.is_empty() && !is_version(c) && !matches!(*c, "versions" | "bin"))
+        .map_or(base, str::to_string)
 }
 
 #[must_use]
@@ -178,6 +199,16 @@ pub fn dirs_home() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versioned_binaries_are_named_after_their_tool() {
+        assert_eq!(program_name("/Users/pw/.local/share/claude/versions/2.1.319"), "claude");
+        assert_eq!(program_name("/opt/tool/1.2.0/bin/1.2.0"), "tool");
+        assert_eq!(program_name("/usr/bin/python3.12"), "python3.12");
+        assert_eq!(program_name("/bin/zsh"), "zsh");
+        assert_eq!(program_name("/x/v8"), "v8");
+        assert_eq!(program_name("2.1.3"), "2.1.3");
+    }
 
     #[test]
     fn parses_procargs2() {
