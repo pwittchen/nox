@@ -20,6 +20,10 @@
 - `~/.nox/config.toml`, applied live; a Settings window over the same file
 - 17 bundled themes, JetBrains Mono by default, plus other bundled fonts
 
+Terminal emulation (VT parsing, grid, scrollback) is based on
+[alacritty_terminal](https://github.com/alacritty/alacritty), the core of the Alacritty
+terminal; nox adds its own GPUI rendering, UI and agent features on top.
+
 The full behaviour is specified in [SPEC.md](SPEC.md); [ARCH.md](ARCH.md) explains the code and
 [ROADMAP.md](ROADMAP.md) lists what's left.
 
