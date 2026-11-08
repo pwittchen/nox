@@ -5,6 +5,11 @@
 # the nox crates depends on them directly and no compatible update removes them. `instant` and
 # the zbus / zvariant crates are Linux-only and not compiled into the macOS app. Revisit (and
 # drop entries `cargo audit` no longer reports) whenever GPUI is upgraded.
+#
+# The two `git2` "unsound" notices come only from the `nox_ui` dev-dependency on GPUI's
+# `test-support` feature (-> `gpui_util/test-support` -> `git2 ^0.20`): test builds only, not in
+# the app, and neither `Remote::list` nor `Blame::blame_buffer` is called. The fix (git2 0.21)
+# isn't allowed by `gpui_util` 0.2.2.
 
 [advisories]
 ignore = [
@@ -19,4 +24,6 @@ ignore = [
     "RUSTSEC-2026-0371", # zbus_names: unmaintained (Linux-only, via oo7 / ashpd)
     "RUSTSEC-2026-0370", # zvariant: unmaintained (Linux-only, via oo7 / ashpd)
     "RUSTSEC-2026-0372", # zvariant_derive: unmaintained (Linux-only, via oo7 / ashpd)
+    "RUSTSEC-2026-0183", # git2: unsound Remote::list (dev-only, gpui test-support)
+    "RUSTSEC-2026-0184", # git2: unsound BlameHunk signatures (dev-only, gpui test-support)
 ]
