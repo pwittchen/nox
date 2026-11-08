@@ -24,8 +24,19 @@ if [[ "$STATUS" != "Accepted" ]]; then
   [[ -n "$ID" ]] && xcrun notarytool log "$ID" "${AUTH[@]}"
   exit 1
 fi
-xcrun stapler staple "$TARGET"
-xcrun stapler validate "$TARGET"
+# stapler talks to Apple's CloudKit, which drops connections now and then (NSURLErrorDomain
+# -1005, exit 68); retry so a network blip doesn't fail an already accepted release.
+retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    "$@" && return 0
+    echo "attempt $attempt failed: $*" >&2
+    [[ $attempt -lt 5 ]] && sleep $((attempt * 10))
+  done
+  return 1
+}
+retry xcrun stapler staple "$TARGET"
+retry xcrun stapler validate "$TARGET"
 if [[ "$TARGET" == *.app ]]; then
   codesign --verify --strict --verbose=2 "$TARGET"
   spctl --assess --type execute -vv "$TARGET"
