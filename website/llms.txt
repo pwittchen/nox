@@ -1,0 +1,35 @@
+# nox
+
+> nox is a minimalistic, fast, native terminal for macOS (Apple Silicon, macOS 13+), built in
+> Rust with GPUI. Free and open source. No web view, no telemetry, no built-in AI.
+
+## Install
+
+- Homebrew: `brew install --cask pwittchen/tap/nox` (installs nox.app and the `nox` agent CLI)
+- DMG: https://github.com/pwittchen/nox/releases/latest/download/nox-macos-aarch64.dmg
+- Update: `brew upgrade --cask nox`
+
+## Features
+
+- Splits and tabs like iTerm; tabs on top, bottom or in a left sidebar
+- Workspaces: named groups of tabs per project, switched instantly (⌘P), restored on relaunch
+- Session restore: workspaces, tabs, splits and working directories come back; agents resume
+  their conversations
+- A host for AI coding agents (Claude Code, Codex, Gemini CLI): agent state per pane
+  (working / needs input / idle / exited), attention sounds and notifications, agents panel
+  (⌘⇧A), jump to the next agent needing you (⌘J)
+- Agent cooperation through the `nox` CLI or `nox mcp` (MCP server): `nox ls`, `nox name`,
+  `nox status`, `nox msg`, `nox inbox`, `nox wait`, `nox read`, `nox send`, `nox claim`,
+  `nox spawn`; local Unix socket only, never a network port
+- Configuration in `~/.nox/config.toml`, applied live; a Settings window (⌘,) edits the same file
+- 17 bundled themes plus the built-in `nox` palette, light and dark; JetBrains Mono by default
+- Terminal emulation based on alacritty_terminal; rendering by GPUI on Metal, text by Core Text
+
+## Links
+
+- Full description (features, agent CLI, shortcuts, config): /llms-full.txt
+
+- Source: https://github.com/pwittchen/nox
+- Specification: https://github.com/pwittchen/nox/blob/master/SPEC.md
+- Releases: https://github.com/pwittchen/nox/releases
+- Author: Piotr Wittchen, https://wittchen.io

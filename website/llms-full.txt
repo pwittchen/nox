@@ -1,0 +1,190 @@
+# nox
+
+> nox is a minimalistic, fast, native terminal for macOS (Apple Silicon, macOS 13 or newer), built in Rust with GPUI. The prompt and its output are the only things that matter on screen; chrome is thin, neutral and out of the way. It splits panes and manages tabs like iTerm, groups work into workspaces, and is a host for AI coding agents. It is free and open source under the Apache License 2.0, with no paid tiers, no telemetry and no built-in AI.
+
+- Source code: https://github.com/pwittchen/nox
+- Download (Apple Silicon): https://github.com/pwittchen/nox/releases/latest/download/nox-macos-aarch64.dmg
+- Homebrew: `brew install --cask pwittchen/tap/nox` (installs `nox.app` and the `nox` agent CLI)
+- Update: `brew upgrade --cask nox`, or download the latest release and replace the app
+- Specification: https://raw.githubusercontent.com/pwittchen/nox/master/SPEC.md
+- Changelog: https://github.com/pwittchen/nox/blob/master/CHANGELOG.md
+- Roadmap: https://github.com/pwittchen/nox/blob/master/ROADMAP.md
+
+## Features
+
+- **Native.** No web view. The UI and the terminal grid are drawn by GPUI on Metal, text is shaped and rasterized with Core Text, and menus, context menus, notifications and accessibility settings go through AppKit. A usable prompt appears in well under 150 ms after launch.
+- **Proven emulation core.** VT parsing, the grid and scrollback come from `alacritty_terminal` (the core of Alacritty); rendering, UI and the agent features are nox's own.
+- **Splits and tabs, like iTerm.** Split right (`⌘D`) or below (`⌘⇧D`), nested arbitrarily; resize, equalize, maximize and focus panes from the keyboard. Inactive panes are dimmed slightly. Each pane has a thin header with its process icon, title, git branch and split / maximize / close buttons.
+- **Tabs on top, bottom or in a sidebar.** `tabs.position = "top" | "bottom" | "left"`. Tab pills show a process icon (vim, git, cargo, claude, …), the index and the title, and a status dot: yellow running, green done, red failed, blue waiting for you. `⌘\` swaps the tab bar for the sidebar.
+- **Workspaces.** Named groups of tabs, usually tied to a project folder, each with its own tabs, splits and agents, switched instantly within the one window (`⌘P`, `⌃⌘1…9`, `⌃⌘[` / `⌃⌘]`). Open a folder as a workspace with `⌘O` or `nox .`. A `.nox/workspace.toml` project file can define a workspace's tabs and startup commands.
+- **Session restore.** Quit, crash or reboot: every workspace returns with its tabs, splits, names and working directories, and every coding agent resumes its conversation in the pane it ran in. Scrollback and other processes are not restored.
+- **Smooth scrolling and resizing.** Pixel-precise scrolling with trackpad momentum; live window resize without flicker, stretching or garbled content.
+- **Command palette.** `⌘K` lists every command with its shortcut, fuzzy filtered; also Switch Theme…, Switch Tab…, Switch Workspace… and agent commands.
+- **Find, links and prompts.** Search the scrollback (`⌘F`), open URLs and paths with a click, jump between prompts (`⌘↑` / `⌘↓`, with shell integration), copy the last command's output (`⌥⌘C`).
+- **Attention.** When a long command finishes or a program waits for you in a pane you aren't looking at, nox plays a soft chime and posts a macOS notification (each can be turned off). Quick commands stay quiet.
+- **Shell integration.** OSC 7 / OSC 133 snippets are injected for zsh, bash and fish, so nox knows the working directory and where commands start and end.
+- **Themes and fonts.** The built-in `nox` palette plus 17 bundled themes, each light and dark where available: 1984, ayu, bluloco, catppuccin, everforest, flexoki, github, gruvbox, kanagawa, modus, nord (dark only), rose-pine, solarized, tokyo-night, vitesse, white, zenwritten. More are TOML files in `~/.nox/themes/`. Follows the system appearance live. JetBrains Mono by default; Cascadia Code, Commit Mono, Fira Code, Geist Mono, Hack, IBM Plex Mono, MesloLGS NF and Source Code Pro are bundled too.
+- **Configuration in plain text.** `~/.nox/config.toml`, applied live on save. The Settings window (`⌘,`) edits the same file and keeps your comments.
+- **Privacy.** No account, no telemetry. nox runs no model, holds no API keys and sends nothing to any AI service. The only network request is an optional daily update check against GitHub Releases.
+
+## Coding agents
+
+nox detects panes running a coding agent (Claude Code, Codex, Gemini CLI, and any executable configured under `[agents.<name>]`).
+
+- **Agent state.** Working, needs input, idle or exited — from explicit reports (`nox status`, usually via the agent's hooks), OSC 9 / 777 notifications, known title patterns, or output activity as a fallback. Shown in the tab dot, the pane header (`working · 2m`) and the agents panel.
+- **Agents panel** (`⌘⇧A`): every agent of every workspace, those needing input first, with an Activity log of messages, sends, spawns and claims. `⌘J` jumps to the next agent needing attention.
+- **Install Agent Hooks…** (command palette or Settings → Agents) shows the exact change to Claude Code's, Codex's or Gemini CLI's settings as a diff and writes it only after you confirm.
+- **Resuming.** With the agent's session id known (from the hooks), nox resumes the right conversation after a restart (`agents.restore = "resume" | "ask" | "off"`).
+- **New Agent Tab** (`⌥⌘T`) and **New Agent in Worktree…** start an agent in a new tab or a fresh git worktree.
+- **Keep awake.** The Mac doesn't sleep while an agent is working (`agents.keep_awake`).
+
+## Agent cooperation: the `nox` CLI and MCP server
+
+Agents in different tabs, panes and workspaces can see each other, exchange messages, wait for each other, start helpers and avoid editing the same files. Everything goes through a local Unix socket (`~/.nox/run/nox.sock`, current user only, never a network port) and stays visible to the user. Every pane has `nox` on its `PATH` and its own identity; by default a workspace is a team (`agents.scope = "workspace"`).
+
+| Command | What it does |
+|---|---|
+| `nox ls [--all]` | workspaces, tabs and panes: id, name, program, agent state, cwd, branch |
+| `nox name <name>` | name the calling pane |
+| `nox status <working\|needs-input\|idle> [-m msg]` | report the calling agent's state |
+| `nox read <pane> [--lines N \| --scrollback \| --last-output]` | text of another pane |
+| `nox send <pane> <text> [--submit]` | type text into another agent pane |
+| `nox msg <to> <text>` | message a pane (or `all`); read with `nox inbox` |
+| `nox inbox [--wait]` | read the calling pane's messages |
+| `nox wait <pane> [--state idle\|needs-input\|exited] [--timeout s]` | block until the pane reaches that state |
+| `nox claim <path…> [-m reason] [--wait]` | advisory file claims; exit code 3 on conflict |
+| `nox release [<path…>]` / `nox claims` | release own claims / list claims |
+| `nox spawn [--tab \| --split right\|below] -- <cmd>` | open a helper pane in the caller's workspace |
+| `nox notify <title> [body]` | chime + notification |
+| `nox open [path]`, `nox .` | open or switch to the workspace for a folder |
+| `nox mcp` | the same operations as MCP tools over stdio |
+
+Every command accepts `--json`. Exit codes: `0` ok, `1` error, `2` usage, `3` conflict, `4` timeout. MCP setup is one command, e.g. `claude mcp add nox -- nox mcp`; the MCP tools are `list_panes`, `read_pane`, `send_to_pane`, `send_message`, `read_inbox`, `wait_for_pane`, `claim_paths`, `release_paths`, `list_claims`, `spawn_pane` and `set_status`.
+
+Safety: `send` only targets agent panes unless `agents.allow_send_to_shell = true`; typed-in text is announced in the target's pane header; sends wait while the user is typing; a loop guard limits each pane to 20 messages / sends per 10 s.
+
+## Keyboard shortcuts
+
+| Action | Shortcut |
+|---|---|
+| New tab | `⌘T` |
+| Close pane (or tab if last) | `⌘W` |
+| Close tab | `⌘⇧W` |
+| Go to tab 1–8 / last | `⌘1`…`⌘8` / `⌘9` |
+| Previous / next tab | `⌘⇧[` / `⌘⇧]` |
+| Move tab left / right | `⌘⇧←` / `⌘⇧→` |
+| Rename tab | `⌘⇧I` |
+| Split vertically (right) | `⌘D` |
+| Split horizontally (below) | `⌘⇧D` |
+| Focus pane in direction | `⌘⌥←/→/↑/↓` |
+| Previous / next pane | `⌘[` / `⌘]` |
+| Resize pane | `⌘⌃←/→/↑/↓` |
+| Equalize panes | `⌘⌃=` |
+| Maximize / restore pane | `⌘⇧↵` |
+| Toggle sidebar / tab bar | `⌘\` |
+| New workspace | `⌘⇧N` |
+| Open folder as workspace | `⌘O` |
+| Switch workspace | `⌘P` |
+| Go to workspace 1–9 | `⌃⌘1`…`⌃⌘9` |
+| Previous / next workspace | `⌃⌘[` / `⌃⌘]` |
+| Last used workspace | `⌃⌘\` |
+| Close workspace | `⌃⌘W` |
+| New agent tab | `⌥⌘T` |
+| Agents panel | `⌘⇧A` |
+| Next agent needing attention | `⌘J` |
+| Copy last command output | `⌥⌘C` |
+| Send selection to pane | `⌘⇧S` |
+| Command palette | `⌘K` |
+| Find | `⌘F` |
+| Clear buffer | `⌘⇧K` |
+| Font bigger / smaller / reset | `⌘+` / `⌘-` / `⌘0` |
+| Previous / next prompt | `⌘↑` / `⌘↓` |
+| Restart exited pane | `⌘R` |
+| Switch appearance | `⌘⇧L` |
+| Settings window | `⌘,` |
+| Open config.toml in editor | `⌥⌘,` |
+| Full screen | `⌃⌘F` |
+
+Every shortcut is also in the menu bar, and any of them can be rebound or unbound in `[keys]`.
+
+## Configuration
+
+`~/.nox/config.toml`; every key is optional and a missing key uses its default. Changes apply live on save (shell settings to new panes only). `NOX_HOME=/some/dir` runs nox with a separate config, session and socket directory. The main sections and keys:
+
+```toml
+[ui]
+theme = "nox"                # "nox", a bundled theme or one from ~/.nox/themes/
+mode = "system"              # "system" | "light" | "dark"
+font_family = "system"       # interface font
+pane_header = true
+dim_inactive_panes = 0.15
+window_padding = 6
+show_git_branch = true
+
+[tabs]
+position = "top"             # "top" | "bottom" | "left"
+title = "auto"               # "auto" | "cwd" | "process"
+icons = true                 # process icons
+sidebar_workspaces = "all"   # "active" | "all"
+sidebar_agents = true
+
+[workspaces]
+new_tab_cwd = "inherit"      # "inherit" | "root"
+close_when_empty = true
+worktree_opens = "tab"       # "tab" | "workspace"
+lazy_restore = true
+
+[agents]
+keep_awake = true
+restore = "resume"           # "resume" | "ask" | "off"
+cooperation = true           # control socket, `nox` CLI and MCP server
+scope = "workspace"          # "workspace" | "all"
+deliver = "inbox"            # "inbox" | "type"
+allow_send_to_shell = false
+claim_ttl = 1800
+
+[agents.claude]
+command = "claude"
+resume = "claude --resume {session}"
+resume_last = "claude --continue"
+
+[font]
+family = "JetBrains Mono"
+size = 14
+line_height = 1.0            # × the font's natural line height
+
+[terminal]
+scrollback = 10000
+cursor_style = "block"       # "block" | "bar" | "underline"
+copy_on_select = true
+option_as_meta = "left"      # "left" | "right" | "both" | "none"
+bell = "visual"              # "visual" | "sound" | "none"
+attention_sound = true
+notifications = true
+attention_min_duration = 10  # s
+
+[shell]
+program = ""                 # empty: login shell from $SHELL
+args = ["-l"]
+integration = true           # OSC 7 / OSC 133 for zsh, bash, fish
+
+[app]
+restore_session = true
+check_for_updates = true
+
+[keys]
+# split_vertical = "cmd-d"
+# "alt-left" = { send = "\u001bb" }
+```
+
+The full reference is section 11 of the specification.
+
+## Requirements and limits
+
+- macOS 13 or newer on Apple Silicon. Intel Macs, Linux and Windows are not built or tested.
+- One terminal window; work is organized in workspaces, tabs and panes.
+- Not supported: plugins, tmux control mode, inline images (Sixel, Kitty graphics, iTerm `imgcat`), font ligatures.
+
+## Author
+
+Piotr Wittchen — https://wittchen.io, https://github.com/pwittchen, piotr@wittchen.io. Available for contracts, project development and consulting.

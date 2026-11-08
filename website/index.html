@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>nox — a minimalistic, fast, native terminal for macOS</title>
+  <meta name="description" content="nox is a quiet, fast, native terminal for macOS, built in Rust with GPUI. Splits, tabs, workspaces, and a home for your AI coding agents.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="nox">
+  <meta property="og:title" content="nox — a minimalistic, fast, native terminal for macOS">
+  <meta property="og:description" content="A quiet, fast, native terminal for macOS, built in Rust with GPUI. Splits, tabs, workspaces, and a home for your AI coding agents.">
+  <meta name="twitter:card" content="summary">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="alternate" type="text/markdown" href="/llms.txt" title="llms.txt">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;0,800;1,400&display=swap">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    document.documentElement.classList.add("js");
+    try {
+      const t = localStorage.getItem("nox-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch {}
+  </script>
+  <link rel="stylesheet" href="./style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"nox","description":"A minimalistic, fast, native terminal for macOS, built in Rust with GPUI.","applicationCategory":"DeveloperApplication","operatingSystem":"macOS 13+ (Apple Silicon)","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"downloadUrl":"https://github.com/pwittchen/nox/releases/latest/download/nox-macos-aarch64.dmg","author":{"@type":"Person","name":"Piotr Wittchen"}}</script>
+</head>
+<body>
+  <!-- The app's own icons (assets/icons/ui, assets/icons/process), stroked with currentColor. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-sidebar" viewBox="0 0 16 16"><rect x="2" y="2.75" width="12" height="10.5" rx="1.5"/><path d="M6 2.75v10.5"/><path d="M3.75 5.5h0.5"/><path d="M3.75 7.5h0.5"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 16 16"><path d="M6.9 2.1h2.2l.4 1.6 1.3.7 1.6-.5 1.1 1.9-1.2 1.2v1.5l1.2 1.2-1.1 1.9-1.6-.5-1.3.7-.4 1.6H6.9l-.4-1.6-1.3-.7-1.6.5-1.1-1.9 1.2-1.2V7.2L2.5 6l1.1-1.9 1.6.5 1.3-.7z"/><circle cx="8" cy="8" r="2"/></symbol>
+    <symbol id="i-command" viewBox="0 0 16 16"><path d="M6 6h4v4H6z"/><path d="M6 6V4.5A1.5 1.5 0 1 0 4.5 6H6"/><path d="M10 6V4.5A1.5 1.5 0 1 1 11.5 6H10"/><path d="M6 10v1.5A1.5 1.5 0 1 1 4.5 10H6"/><path d="M10 10v1.5a1.5 1.5 0 1 0 1.5-1.5H10"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10"/><path d="M3 8h10"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 16 16"><circle cx="4.5" cy="3.75" r="1.5"/><circle cx="4.5" cy="12.25" r="1.5"/><circle cx="11.5" cy="5.25" r="1.5"/><path d="M4.5 5.25v5.5"/><path d="M11.5 6.75c0 3-7 2.25-7 4"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 16 16"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M2.5 4.5 8 8.75l5.5-4.25"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3.25" y="7" width="9.5" height="6.75" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></symbol>
+    <symbol id="i-splitv" viewBox="0 0 16 16"><rect x="2" y="2.75" width="12" height="10.5" rx="1.5"/><path d="M8 2.75v10.5"/></symbol>
+    <symbol id="i-splith" viewBox="0 0 16 16"><rect x="2" y="2.75" width="12" height="10.5" rx="1.5"/><path d="M2 8h12"/></symbol>
+    <symbol id="i-max" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4"/><path d="M13.5 2.5 9 7"/><path d="M6.5 13.5h-4v-4"/><path d="M2.5 13.5 7 9"/></symbol>
+    <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8"/><path d="M12 4l-8 8"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="M10.25 10.25 13.5 13.5"/></symbol>
+    <symbol id="i-term" viewBox="0 0 16 16"><path d="M3 4.5L6.5 8 3 11.5M8.5 12H13"/></symbol>
+    <symbol id="i-claude" viewBox="0 0 16 16"><path d="M8 1.5v13M1.5 8h13M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2"/></symbol>
+    <symbol id="i-codex" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><path d="M5.5 6.3L7.5 8l-2 1.7M8.8 10h2"/></symbol>
+    <symbol id="i-rust" viewBox="0 0 16 16"><circle cx="8" cy="8" r="4.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></symbol>
+  </svg>
+
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <header class="nav">
+    <a class="nav-brand" href="#top">
+      <img src="icon.png" alt="" width="22" height="22">
+      <span>nox</span>
+    </a>
+    <nav class="nav-links">
+      <a href="#features"><span class="slash">./</span>features</a>
+      <a href="#agents"><span class="slash">./</span>agents</a>
+      <a href="#keys"><span class="slash">./</span>keys</a>
+      <a href="#config"><span class="slash">./</span>config</a>
+      <a href="#download"><span class="slash">./</span>install</a>
+      <a href="https://github.com/pwittchen/nox" aria-label="GitHub"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <button class="theme-toggle" type="button" aria-label="Theme: System" title="Theme: System">
+        <svg class="i-system" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none"/></svg>
+        <svg class="i-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>
+        <svg class="i-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-grid" aria-hidden="true"></div>
+      <img class="hero-icon reveal" src="icon.png" alt="nox app icon" width="128" height="128">
+      <h1 class="reveal glitch" data-text="nox">nox</h1>
+      <p class="hero-lead reveal"><span class="typed-wrap"><span class="typed" data-type="stay in command">stay in command</span><span class="block-cursor" aria-hidden="true"></span></span></p>
+      <p class="hero-sub reveal">A minimalistic, fast, native terminal for macOS.<br>Rust + GPUI on Metal. No web view. No telemetry. No noise.</p>
+      <div class="hero-cta reveal">
+        <a class="btn btn-primary" href="https://github.com/pwittchen/nox/releases/latest/download/nox-macos-aarch64.dmg"><svg class="apple" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>Download for Mac</a>
+        <button class="install-cmd" type="button" aria-label="Copy the Homebrew install command"><span class="dollar">$</span><code>brew install --cask pwittchen/tap/nox</code><svg class="icon-copy" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5"/></svg><svg class="icon-check" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3.5 3.5L13 4.5"/></svg></button>
+      </div>
+      <p class="note reveal">macOS 13+ · Apple Silicon · free &amp; open source</p>
+      <a class="scroll-hint" href="#preview" aria-label="Scroll to the preview"><span>scroll</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M4 9l4 4 4-4"/></svg></a>
+    </section>
+
+    <!-- Mirrors the app (crates/nox_ui chrome.rs / pane.rs): 38px title bar, workspace chip, tab
+         pills, a pane card inset 6px with 28px pane headers; colors are the active theme's. -->
+    <section id="preview" class="showcase" aria-label="nox window preview">
+      <div class="nw" id="term">
+        <div class="nw-bar">
+          <span class="lights"><i></i><i></i><i></i></span>
+          <span class="nw-btn"><svg class="ic"><use href="#i-sidebar"/></svg></span>
+          <span class="nw-chip"><i></i>nox</span>
+          <div class="nw-tabs">
+            <span class="nw-tab active"><span class="nw-ti"><svg class="ic tint-claude"><use href="#i-claude"/></svg><em class="tdot" id="tab1-dot"></em></span><span class="nw-tl">1 Stream PTY output in chunks</span></span>
+            <span class="nw-tab"><span class="nw-ti"><svg class="ic"><use href="#i-codex"/></svg><em class="tdot waiting"></em></span><span class="nw-tl">2 Fix the flaky API test</span></span>
+            <span class="nw-tab nw-tab-3"><span class="nw-ti"><svg class="ic"><use href="#i-term"/></svg></span><span class="nw-tl">3 pw@mbp:~/notes</span></span>
+          </div>
+          <span class="nw-grab"></span>
+          <span class="nw-btn"><svg class="ic"><use href="#i-settings"/></svg></span>
+          <span class="nw-btn"><svg class="ic"><use href="#i-command"/></svg></span>
+          <span class="nw-btn"><svg class="ic"><use href="#i-plus"/></svg></span>
+        </div>
+        <div class="nw-card">
+          <div class="pane focused pane-agent">
+            <div class="ph"><span class="ph-l"><svg class="ic tint-claude"><use href="#i-claude"/></svg><span class="ph-title">Stream PTY output in chunks</span><span class="ph-meta"><span><svg class="ic"><use href="#i-branch"/></svg>feat/stream</span><span class="ag-state" id="agent-state">working · 2m 4s</span></span></span><span class="ph-ctl"><svg class="ic"><use href="#i-splitv"/></svg><svg class="ic"><use href="#i-splith"/></svg><svg class="ic"><use href="#i-max"/></svg><svg class="ic"><use href="#i-close"/></svg></span></div>
+            <pre class="pane-out" data-script="agent"></pre>
+          </div>
+          <div class="pane-col">
+            <div class="pane">
+              <div class="ph"><span class="ph-l"><svg class="ic"><use href="#i-rust"/></svg><span class="ph-title">cargo</span><span class="ph-meta"><span><svg class="ic"><use href="#i-branch"/></svg>feat/stream</span></span></span><span class="ph-ctl"><svg class="ic"><use href="#i-splitv"/></svg><svg class="ic"><use href="#i-splith"/></svg><svg class="ic"><use href="#i-max"/></svg><svg class="ic"><use href="#i-close"/></svg></span></div>
+              <pre class="pane-out" data-script="cargo"></pre>
+            </div>
+            <div class="pane">
+              <div class="ph"><span class="ph-l"><svg class="ic"><use href="#i-term"/></svg><span class="ph-title">pw@mbp:~/dev/nox</span><span class="ph-meta"><span><svg class="ic"><use href="#i-branch"/></svg>feat/stream</span><span class="mail" id="mail" hidden><svg class="ic"><use href="#i-mail"/></svg>1</span></span></span><span class="ph-ctl"><svg class="ic"><use href="#i-splitv"/></svg><svg class="ic"><use href="#i-splith"/></svg><svg class="ic"><use href="#i-max"/></svg><svg class="ic"><use href="#i-close"/></svg></span></div>
+              <pre class="pane-out" data-script="shell"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="theme-picker">
+        <button class="anim-toggle" type="button" aria-pressed="false" aria-label="Pause or resume the animation"><svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9"/></svg><svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2v9.6L12.5 8z"/></svg><span>pause animation</span></button>
+      </div>
+    </section>
+
+    <section id="features" class="features">
+      <p class="eyebrow reveal">~/nox $ ls features/</p>
+      <h2 class="reveal">Fast. Native. Quiet.</h2>
+      <div class="grid">
+        <article class="card reveal">
+          <span class="card-no">01</span>
+          <h3>Native to the metal</h3>
+          <p>Drawn by GPUI on Metal, text shaped by Core Text, menus by AppKit. A usable prompt in well under 150&nbsp;ms.</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-no">02</span>
+          <h3>Splits &amp; tabs, like iTerm</h3>
+          <p>Split right with <kbd>⌘D</kbd>, below with <kbd>⌘⇧D</kbd>, nest them as deep as you like. Tabs on top, bottom or in a sidebar.</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-no">03</span>
+          <h3>Workspaces</h3>
+          <p>Named groups of tabs per project, switched instantly with <kbd>⌘P</kbd>. Each keeps its own tabs, splits and agents.</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-no">04</span>
+          <h3>Comes back after a reboot</h3>
+          <p>Quit, restart, reboot: every workspace returns with its tabs, splits and working directories — and every agent resumes its conversation.</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-no">05</span>
+          <h3>Smooth everything</h3>
+          <p>Pixel-precise scrolling with trackpad momentum. Live window resize without flicker, stretching or garbled output.</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-no">06</span>
+          <h3>Proven emulation core</h3>
+          <p>VT parsing, grid and scrollback from <code>alacritty_terminal</code>. Rendering, UI and the agent features are nox's own.</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-no">07</span>
+          <h3>18 themes, 9 mono fonts</h3>
+          <p>Catppuccin, gruvbox, Nord, Tokyo Night, Kanagawa, Rosé Pine and more, light &amp; dark. JetBrains Mono by default; Fira Code, Hack, Commit Mono and friends bundled.</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-no">08</span>
+          <h3>Find, links, prompts</h3>
+          <p>Search the scrollback with <kbd>⌘F</kbd>, open links with a click, jump between prompts with <kbd>⌘↑</kbd> <kbd>⌘↓</kbd>, copy the last command's output with <kbd>⌥⌘C</kbd>.</p>
+        </article>
+        <article class="card reveal">
+          <span class="card-no">09</span>
+          <h3>Nothing phones home</h3>
+          <p>No account, no telemetry, no built-in AI. nox runs no model and sends nothing anywhere. It hosts agents; it isn't one.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="agents" class="agents">
+      <p class="eyebrow reveal">~/nox $ nox ls --agents</p>
+      <h2 class="reveal">A home for your agents.</h2>
+      <p class="lead reveal">Claude Code, Codex, Gemini CLI — nox knows which panes run an agent and what it's doing, tells you when one needs you, and lets them work together.</p>
+      <div class="agents-grid">
+        <div class="np reveal" aria-label="Agents panel preview">
+          <div class="np-search"><svg class="ic"><use href="#i-search"/></svg><span class="np-ph">Agents…</span><span class="np-tabs"><span class="on">Agents</span><span>Activity</span></span></div>
+          <div class="np-list">
+            <div class="np-head">nox</div>
+            <div class="np-row sel"><i class="np-dot waiting"></i><span class="np-label">api</span><span class="np-detail">2 Fix the flaky API test · allow rm -rf target/? · ~/dev/nox/api</span><span class="np-hint">needs input · 12s</span></div>
+            <div class="np-row"><span class="np-label">reviewer</span><span class="np-detail">3 Review · ~/dev/nox · ✉ 1</span><span class="np-hint">idle · unseen</span></div>
+            <div class="np-row"><i class="np-dot running"></i><span class="np-label">backend</span><span class="np-detail">1 Stream PTY output · ~/dev/nox · ⎇ feat/stream · 1 claim(s)</span><span class="np-hint">working · 4m</span></div>
+            <div class="np-head">blog</div>
+            <div class="np-row"><span class="np-label">gemini</span><span class="np-detail">1 Draft release notes · ~/dev/blog</span><span class="np-hint">idle</span></div>
+          </div>
+          <div class="np-foot">↑↓ navigate &nbsp; ↵ jump &nbsp; ⇥ activity &nbsp; esc close</div>
+        </div>
+        <div class="cli-window reveal">
+          <div class="cli-bar"><span class="lights"><i></i><i></i><i></i></span><span class="cli-title">nox — agent CLI</span></div>
+<pre class="cli-code"><code><span class="c-com"># every pane has `nox` on its PATH and its own identity</span>
+<span class="c-prompt">$</span> nox name backend
+<span class="c-prompt">$</span> nox status working -m <span class="c-str">"refactoring"</span>
+<span class="c-prompt">$</span> nox msg reviewer <span class="c-str">"feat/x is ready"</span>
+<span class="c-prompt">$</span> nox wait backend          <span class="c-com"># block until its turn ends</span>
+<span class="c-prompt">$</span> nox claim src/parser/ -m <span class="c-str">"rewriting"</span>
+<span class="c-err">✗ claimed by backend: rewriting</span> <span class="c-com"># exit 3</span>
+<span class="c-prompt">$</span> nox spawn --split right -- cargo test
+<span class="c-ok">pane 7</span>
+<span class="c-prompt">$</span> claude mcp add nox -- nox mcp <span class="c-com"># same ops as MCP tools</span></code></pre>
+        </div>
+      </div>
+      <div class="notes reveal">
+        <p><strong>Knows the state.</strong> Working, needs input, idle, exited — from hooks, OSC notifications, titles or activity. Shown in tabs, pane headers and the agents panel.</p>
+        <p><strong>Taps you on the shoulder.</strong> A sound and a notification when an agent needs you and nox isn't in front. <kbd>⌘J</kbd> jumps straight to it.</p>
+        <p><strong>Cooperation, not chaos.</strong> Messages, waits and advisory file claims over a local Unix socket. Never a network port, always visible to you.</p>
+      </div>
+    </section>
+
+    <section id="palette" class="palette">
+      <p class="eyebrow reveal">~/nox $ ⌘K</p>
+      <h2 class="reveal">Every command, one keystroke away.</h2>
+      <p class="lead reveal">Press <kbd>⌘K</kbd>, type a few letters, hit <kbd>↵</kbd>. Every command shows its shortcut, so the palette doubles as a cheat sheet.</p>
+      <div class="np np-palette reveal" aria-hidden="true">
+        <div class="np-search"><svg class="ic"><use href="#i-search"/></svg><span class="np-q">sp<span class="caret"></span></span></div>
+        <div class="np-list">
+          <div class="np-row sel"><span class="np-label">Split Vertically</span><span class="np-detail"></span><span class="np-hint">⌘D</span></div>
+          <div class="np-row"><span class="np-label">Split Horizontally</span><span class="np-detail"></span><span class="np-hint">⇧⌘D</span></div>
+          <div class="np-row"><span class="np-label">Previous Pane</span><span class="np-detail"></span><span class="np-hint">⌘[</span></div>
+          <div class="np-row"><span class="np-label">Switch Appearance…</span><span class="np-detail"></span><span class="np-hint">⇧⌘L</span></div>
+          <div class="np-row"><span class="np-label">Send Selection to…</span><span class="np-detail"></span><span class="np-hint">⇧⌘S</span></div>
+        </div>
+        <div class="np-foot">↑↓ navigate &nbsp; ↵ run &nbsp; esc close</div>
+      </div>
+    </section>
+
+    <section id="keys" class="shortcuts">
+      <p class="eyebrow reveal">~/nox $ man nox-keys</p>
+      <h2 class="reveal">Hands on the keyboard.</h2>
+      <dl class="keys reveal">
+        <div><dt>Command palette</dt><dd><kbd>⌘</kbd><kbd>K</kbd></dd></div>
+        <div><dt>Split right / below</dt><dd><kbd>⌘</kbd><kbd>D</kbd><span class="or">/</span><kbd>⌘</kbd><kbd>⇧</kbd><kbd>D</kbd></dd></div>
+        <div><dt>Focus pane</dt><dd><kbd>⌘</kbd><kbd>⌥</kbd><kbd>←↑↓→</kbd></dd></div>
+        <div><dt>Maximize / restore pane</dt><dd><kbd>⌘</kbd><kbd>⇧</kbd><kbd>↵</kbd></dd></div>
+        <div><dt>New tab / agent tab</dt><dd><kbd>⌘</kbd><kbd>T</kbd><span class="or">/</span><kbd>⌥</kbd><kbd>⌘</kbd><kbd>T</kbd></dd></div>
+        <div><dt>Switch workspace</dt><dd><kbd>⌘</kbd><kbd>P</kbd></dd></div>
+        <div><dt>Open folder as workspace</dt><dd><kbd>⌘</kbd><kbd>O</kbd></dd></div>
+        <div><dt>Next agent needing you</dt><dd><kbd>⌘</kbd><kbd>J</kbd></dd></div>
+        <div><dt>Agents panel</dt><dd><kbd>⌘</kbd><kbd>⇧</kbd><kbd>A</kbd></dd></div>
+        <div><dt>Toggle sidebar</dt><dd><kbd>⌘</kbd><kbd>\</kbd></dd></div>
+        <div><dt>Previous / next prompt</dt><dd><kbd>⌘</kbd><kbd>↑</kbd><span class="or">/</span><kbd>↓</kbd></dd></div>
+        <div><dt>Switch appearance</dt><dd><kbd>⌘</kbd><kbd>⇧</kbd><kbd>L</kbd></dd></div>
+        <div><dt>Settings</dt><dd><kbd>⌘</kbd><kbd>,</kbd></dd></div>
+      </dl>
+      <p class="keys-note reveal">Every shortcut is in the menu bar and rebindable in <code>[keys]</code>.</p>
+    </section>
+
+    <section id="config" class="config">
+      <p class="eyebrow reveal">~/nox $ $EDITOR ~/.nox/config.toml</p>
+      <h2 class="reveal">Tuned in plain text.</h2>
+      <p class="lead reveal">One TOML file, applied live on save. Edit it by hand or in the Settings window (<kbd>⌘,</kbd>) — both stay in sync, and your comments survive.</p>
+      <div class="cli-window config-window reveal">
+        <div class="cli-bar"><span class="lights"><i></i><i></i><i></i></span><span class="cli-title">~/.nox/config.toml</span></div>
+<pre class="cli-code"><code><span class="c-sec">[ui]</span>
+theme = <span class="c-str">"nox"</span>                 <span class="c-com"># or any of the 17 bundled, or ~/.nox/themes/</span>
+mode = <span class="c-str">"system"</span>               <span class="c-com"># "system" | "light" | "dark"</span>
+dim_inactive_panes = <span class="c-num">0.15</span>
+
+<span class="c-sec">[tabs]</span>
+position = <span class="c-str">"top"</span>              <span class="c-com"># "top" | "bottom" | "left"</span>
+title = <span class="c-str">"auto"</span>                <span class="c-com"># "auto" | "cwd" | "process"</span>
+
+<span class="c-sec">[font]</span>
+family = <span class="c-str">"JetBrains Mono"</span>
+size = <span class="c-num">14</span>
+line_height = <span class="c-num">1.0</span>             <span class="c-com"># × natural line height</span>
+
+<span class="c-sec">[agents]</span>
+restore = <span class="c-str">"resume"</span>            <span class="c-com"># resume conversations on relaunch</span>
+keep_awake = <span class="c-num">true</span>             <span class="c-com"># no sleep while an agent works</span>
+scope = <span class="c-str">"workspace"</span>           <span class="c-com"># a workspace is a team</span>
+
+<span class="c-sec">[agents.claude]</span>
+command = <span class="c-str">"claude"</span>
+resume = <span class="c-str">"claude --resume {session}"</span></code></pre>
+      </div>
+    </section>
+
+    <section id="download" class="download">
+      <img class="reveal" src="icon.png" alt="" width="72" height="72">
+      <p class="download-version reveal"><a class="version-pill" href="https://github.com/pwittchen/nox/releases/tag/v0.1.2">v0.1.2</a></p>
+      <h2 class="reveal">Stay in command.</h2>
+      <p class="reveal">Free and open source. For Macs with Apple Silicon, macOS 13 or newer.</p>
+      <div class="reveal">
+        <a class="btn btn-primary" href="https://github.com/pwittchen/nox/releases/latest/download/nox-macos-aarch64.dmg"><svg class="apple" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>Download for Mac</a>
+        <button class="install-cmd" type="button" aria-label="Copy the Homebrew install command"><span class="dollar">$</span><code>brew install --cask pwittchen/tap/nox</code><svg class="icon-copy" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5"/></svg><svg class="icon-check" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3.5 3.5L13 4.5"/></svg></button>
+        <p class="note">Installs <code>nox.app</code> and the <code>nox</code> agent CLI. Update with <code>brew upgrade --cask nox</code>.<br><a href="https://github.com/pwittchen/nox/releases">Release notes &amp; previous versions</a> · <a href="https://github.com/pwittchen/nox">Source code</a></p>
+      </div>
+    </section>
+
+    <section id="contact" class="contact-section">
+      <p class="eyebrow reveal">~/nox $ whoami</p>
+      <h2 class="reveal">Support &amp; consulting.</h2>
+      <p class="lead reveal">nox is free and open source. No paid tiers, no feature gating, no telemetry.</p>
+      <div class="contact reveal">
+        <img class="contact-avatar" src="avatar.png" alt="Piotr Wittchen" width="120" height="120" loading="lazy">
+        <h3 class="contact-name">Piotr Wittchen</h3>
+        <p class="contact-role">developer · creator of nox</p>
+        <p class="contact-note">Available for contracts, project development and consulting.</p>
+        <a class="btn btn-primary contact-button" href="mailto:piotr@wittchen.io">Email piotr@wittchen.io</a>
+        <p class="contact-links">
+          <a href="https://wittchen.io" target="_blank" rel="noopener">wittchen.io</a>
+          <span aria-hidden="true">·</span>
+          <a href="https://github.com/pwittchen" target="_blank" rel="noopener">github.com/pwittchen</a>
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-cols">
+      <div class="footer-brand">
+        <a class="nav-brand" href="#top"><img src="icon.png" alt="" width="22" height="22"><span>nox</span></a>
+        <p>A minimalistic, fast, native terminal for macOS. Free and open source.</p>
+      </div>
+      <div class="footer-col">
+        <p class="footer-title">Product</p>
+        <ul>
+          <li><a href="#download">Download</a></li>
+          <li><a href="https://github.com/pwittchen/nox/blob/master/CHANGELOG.md">Changelog</a></li>
+          <li><a href="https://github.com/pwittchen/nox/blob/master/ROADMAP.md">Roadmap</a></li>
+          <li><a href="https://github.com/pwittchen/nox">GitHub</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <p class="footer-title">Docs</p>
+        <ul>
+          <li><a href="https://github.com/pwittchen/nox/blob/master/SPEC.md">Specification</a></li>
+          <li><a href="https://github.com/pwittchen/nox/blob/master/ARCH.md">Architecture</a></li>
+          <li><a href="https://github.com/pwittchen/nox/blob/master/LICENSE">License</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <p class="footer-title">For AI Agents</p>
+        <ul>
+          <li><a href="/llms.txt">llms.txt</a></li>
+          <li><a href="/llms-full.txt">llms-full.txt</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 <a href="https://wittchen.io" target="_blank" rel="noopener">Piotr Wittchen</a> · <a href="https://vcu.sh/" target="_blank" rel="noopener">VCU</a></span>
+      <span>made in Poland, Europe 🇵🇱 🇪🇺</span>
+    </div>
+  </footer>
+
+  <script type="module" src="./script.js"></script>
+</body>
+</html>
