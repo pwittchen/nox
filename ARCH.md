@@ -3,6 +3,59 @@
 How the code implements [SPEC.md](SPEC.md). The spec is the source of truth for behaviour; this
 file explains where things live and the few places where the implementation differs.
 
+## Overview
+
+At runtime nox is one process, `nox-app`. GPUI owns the main thread; every pane's PTY has its own
+I/O threads; agents running inside panes talk back to the app through the `nox` CLI over a
+Unix control socket.
+
+```
++---------------------------------- nox-app (one process) ---------------------------------+
+|                                                                                          |
+|  main thread: GPUI                                                                       |
+|  +------------------------------------------------------------------------------------+  |
+|  | Root  (root.rs, chrome.rs, root_actions.rs)                                        |  |
+|  |   workspaces -> tabs -> split trees (nox_layout)    palette, dialogs, toasts       |  |
+|  |                                                     Settings + About windows       |  |
+|  |   +----------------------+  +----------------------+                               |  |
+|  |   | Pane                 |  | Pane                 |  Coop per workspace (coop.rs):|  |
+|  |   |  TerminalElement     |  |  TerminalElement     |  message bus, claims, waiters |  |
+|  |   |  agent tracker       |  |  agent tracker       |                               |  |
+|  |   +----------^-----------+  +----------^-----------+                ^              |  |
+|  +--------------|-------------------------|----------------------------|--------------+  |
+|                 | wakeups / events        |                            | requests        |
+|  +--------------+-----------+  +----------+-----------+  +-------------+------------+    |
+|  | Session  (nox_terminal)  |  | Session              |  | IPC server  (nox_ipc)    |    |
+|  | reader / writer / waiter |  | ...                  |  | token auth, deferred     |    |
+|  | / resize threads, Term   |  |                      |  | responders               |    |
+|  +--------------+-----------+  +----------+-----------+  +-------------^------------+    |
+|                 |                         |                            |                 |
+|  config.toml <-> watcher (nox_config); session file (nox_layout)       |                 |
++-----------------|-------------------------|----------------------------|-----------------+
+                  | PTY                     | PTY                        | Unix socket
+           +------v------+          +-------v-------+                    |
+           | zsh         |          | claude        |-- nox msg / wait --+
+           |             |          | (an agent)    |   claim / status   (nox CLI, nox_cli;
+           +-------------+          +---------------+                     also `nox mcp`)
+```
+
+Crates, top to bottom; arrows point at dependencies. Only `nox` and `nox_ui` use GPUI, and only
+`nox_mac` touches AppKit (through objc2); the rest is plain Rust, tested without either.
+`nox-app` also uses `nox_config`, `nox_theme`, `nox_terminal`, `nox_mac` and `nox_layout`
+directly (setup, menus, the config watcher), left out of the drawing.
+
+```
+                nox-app  (crates/nox)                                         nox  (crates/nox_cli)
+                    |                                                                     |
+                    v                                                                     |
+                 nox_ui   (GPUI)                                                          |
+                    |                                                                     |
+       +------------+-------------+------------+-----------+---------+-----------+        |
+       v            v             v            v           v         v           v        |
+ nox_terminal  nox_layout    nox_agents   nox_config   nox_theme  nox_mac     nox_ipc <---+
+ PTY, Term     tabs, splits  agents, bus  config.toml  colors     objc2 glue  socket
+```
+
 ## Crates
 
 ```
