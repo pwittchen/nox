@@ -248,9 +248,7 @@ fn main() {
         cx.on_action(|_: &HideApp, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
-        cx.on_action(|_: &About, cx| {
-            nox_ui::toast::show(cx, format!("nox {} — stay in command.", env!("CARGO_PKG_VERSION")));
-        });
+        cx.on_action(|_: &About, cx| nox_ui::about::open_about_window(cx));
         cx.on_action(|_: &CheckForUpdates, cx| {
             nox_ui::toast::show(cx, "Updates are disabled in this build (SPEC §15.4).");
         });

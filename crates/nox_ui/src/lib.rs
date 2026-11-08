@@ -21,6 +21,7 @@
     clippy::maybe_infinite_iter
 )]
 
+pub mod about;
 pub mod actions;
 pub mod assets;
 pub mod attention;

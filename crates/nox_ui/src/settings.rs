@@ -51,6 +51,8 @@ pub struct SettingsView {
     inputs: BTreeMap<String, Entity<TextInput>>,
     recording: Option<String>,
     expanded: Option<String>,
+    /// The About page (bottom of the sidebar) instead of a config section.
+    about: bool,
     subs: Vec<Subscription>,
 }
 
@@ -86,6 +88,7 @@ impl SettingsView {
             inputs: BTreeMap::new(),
             recording: None,
             expanded: None,
+            about: false,
             subs,
         }
     }
@@ -847,7 +850,7 @@ impl Render for SettingsView {
             .collect();
         let rows: Vec<AnyElement> = metas.iter().map(|m| self.row(m, disabled, window, cx)).collect();
         let sections = Section::ALL.iter().map(|s| {
-            let on = *s == self.section && query.is_empty();
+            let on = *s == self.section && !self.about && query.is_empty();
             let s2 = *s;
             div()
                 .id(SharedString::from(format!("sec-{}", s.label())))
@@ -862,11 +865,42 @@ impl Render for SettingsView {
                 .hover(|st| st.bg(theme.text.opacity(0.05)))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.section = s2;
+                    this.about = false;
                     this.expanded = None;
                     this.search.update(cx, |i, cx| i.set_text_cursor_end("", cx));
                     cx.notify();
                 }))
                 .child(s.label())
+        });
+        let show_about = self.about && query.is_empty();
+        let about_item = div()
+            .id("sec-about")
+            .px(px(10.))
+            .py(px(5.))
+            .mx(px(6.))
+            .mb(px(10.))
+            .rounded(px(6.))
+            .text_size(px(13.))
+            .cursor_pointer()
+            .text_color(if show_about { theme.text } else { theme.text_muted })
+            .when(show_about, |d| d.bg(theme.text.opacity(0.08)))
+            .hover(|st| st.bg(theme.text.opacity(0.05)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.about = true;
+                this.expanded = None;
+                this.search.update(cx, |i, cx| i.set_text_cursor_end("", cx));
+                cx.notify();
+            }))
+            .child("About");
+        let about_page = show_about.then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .pt(px(36.))
+                .text_size(px(12.))
+                .child(crate::about::header(&theme))
+                .child(div().w(px(340.)).mt(px(28.)).child(crate::about::details(&theme)))
         });
         let _ = section_of_key;
         let dialog = crate::dialog::render_overlay(window, cx);
@@ -891,7 +925,9 @@ impl Render for SettingsView {
                     .bg(theme.bg_sidebar)
                     .border_r_1()
                     .border_color(theme.border)
-                    .children(sections),
+                    .children(sections)
+                    .child(div().flex_1())
+                    .child(about_item),
             )
             .child(
                 div()
@@ -951,7 +987,8 @@ impl Render for SettingsView {
                             .overflow_y_scroll()
                             .px(px(20.))
                             .pb(px(20.))
-                            .children(rows),
+                            .when(!show_about, |d| d.children(rows))
+                            .children(about_page),
                     )
                     .child(
                         div()

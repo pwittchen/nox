@@ -432,7 +432,8 @@ keeps the toggle and the buttons.
 - Layout: a sidebar of sections mirroring the config tables — General (`[app]`), Appearance
   (`[ui]`, theme, mode), Tabs (`[tabs]`), Font (`[font]`), Terminal (`[terminal]`), Shell
   (`[shell]`, `[shell.env]`), Workspaces (`[workspaces]`), Agents (`[agents]`, the configured
-  agents and their commands), Icons (`[icons]`), Keys (`[keys]`) — and a scrollable form on the
+  agents and their commands), Icons (`[icons]`), Keys (`[keys]`), plus **About** pinned to the
+  bottom of the sidebar (the About window's content, see 5.11) — and a scrollable form on the
   right. Each setting shows a label, a one-line description and the matching config key in muted
   monospace (`tabs.position`), so the UI teaches the file: on the left with the control on the
   right, except for the Keys shortcut list, which has its label above it and takes the full
@@ -479,6 +480,14 @@ Two independent settings: the terminal font (`font.family`) and the interface fo
   rendered in its own face; the choice applies live, like every other setting.
 - A family that isn't found falls back to the default (JetBrains Mono / SF Pro) with a notice
   (see 5.7).
+
+### 5.11 About window
+- nox → **About nox** opens a small single-instance window (a second request brings it to the
+  front): the app icon, the name, the tagline ("stay in command."), `Version x.y.z` (the
+  crate version), then rows for the author (Piotr Wittchen) and links to the author's website
+  (`wittchen.io`) and the app's source repository (`github.com/pwittchen/nox`); links open in
+  the default browser. Not resizable; `Esc` or `⌘W` closes it. The same content is the About
+  page of Settings (see 5.9).
 
 ## 6. Panes, Tabs and Workspaces Behavior
 
