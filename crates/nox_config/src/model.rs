@@ -173,6 +173,7 @@ pub struct TabsConfig {
     pub title: TabTitle,
     pub icons: bool,
     pub sidebar_workspaces: SidebarWorkspaces,
+    pub sidebar_agents: bool,
 }
 
 impl Default for TabsConfig {
@@ -186,6 +187,7 @@ impl Default for TabsConfig {
             title: TabTitle::Auto,
             icons: true,
             sidebar_workspaces: SidebarWorkspaces::All,
+            sidebar_agents: true,
         }
     }
 }

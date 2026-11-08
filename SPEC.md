@@ -372,7 +372,7 @@ keeps the toggle and the buttons.
   first, then idle-unseen, working, idle; workspace order within each. The focused agent's row
   has the background pill; clicking a row jumps to that pane (switching workspace and tab). The
   section takes at most 45 % of the sidebar height and scrolls; it is not shown when no agent
-  runs.
+  runs, or when `tabs.sidebar_agents = false` (default `true`).
 - Drag to reorder, double-click to rename, context menu as for pills (see 5.5).
 - Sidebar width: drag its 1px divider, min 160 px, max 360 px, default 220 px; persisted.
 - `⌘\` or the sidebar toggle `[◧]` in the title bar hides and shows it; the state is persisted.
@@ -1182,6 +1182,7 @@ show_index = true            # "1 ~" vs "~"
 title = "auto"               # "auto" (see 4.4) | "cwd" | "process"
 icons = true                 # process icons in tabs and pane headers (see 4.6)
 sidebar_workspaces = "all"   # "active" | "all" (every workspace as a group, see 5.4)
+sidebar_agents = true        # running agents of all workspaces at the bottom of the sidebar
 
 [workspaces]
 new_tab_cwd = "inherit"      # "inherit" (focused pane's cwd) | "root" (workspace root, see 4.7)

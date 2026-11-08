@@ -270,6 +270,13 @@ fn build() -> Vec<SettingMeta> {
             "Show only the active workspace or all of them in the sidebar.",
             Enum(SidebarWorkspaces::NAMES),
         ),
+        m(
+            Tabs,
+            "tabs.sidebar_agents",
+            "Sidebar agents",
+            "List the running agents of all workspaces at the bottom of the sidebar.",
+            Bool,
+        ),
         // Font — [font]
         m(
             Font,

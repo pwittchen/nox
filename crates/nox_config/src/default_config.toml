@@ -24,6 +24,7 @@ show_index = true            # "1 ~" vs "~"
 title = "auto"               # "auto" (SPEC.md §4.4) | "cwd" | "process"
 icons = true                 # process icons in tabs and pane headers (SPEC.md §4.6)
 sidebar_workspaces = "all"   # "active" | "all" (every workspace as a group, SPEC.md §5.4)
+sidebar_agents = true        # running agents of all workspaces at the bottom of the sidebar
 
 [workspaces]
 new_tab_cwd = "inherit"      # "inherit" (focused pane's cwd) | "root" (workspace root, SPEC.md §4.7)

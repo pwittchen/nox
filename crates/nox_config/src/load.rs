@@ -319,6 +319,7 @@ fn from_table(root: &Table, notices: &mut Vec<Notice>) -> Config {
         s.enumeration("title", &mut t.title);
         s.bool("icons", &mut t.icons);
         s.enumeration("sidebar_workspaces", &mut t.sidebar_workspaces);
+        s.bool("sidebar_agents", &mut t.sidebar_agents);
         s.finish();
     }
     {

@@ -671,6 +671,9 @@ fn sidebar_agent_row(root: &Root, ws_idx: usize, pane: PaneId, cx: &mut Context<
 /// The sidebar's bottom section: every running agent across all workspaces (SPEC 5.4); none
 /// when no agent runs.
 fn render_sidebar_agents(root: &Root, cx: &mut Context<Root>) -> Option<AnyElement> {
+    if !Settings::global(cx).config.tabs.sidebar_agents {
+        return None;
+    }
     let theme = Theme::global(cx).clone();
     let rows: Vec<AnyElement> =
         root.live_agents(cx).into_iter().filter_map(|(w, p)| sidebar_agent_row(root, w, p, cx)).collect();
