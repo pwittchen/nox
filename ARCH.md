@@ -81,7 +81,9 @@ PTY ─▶ reader thread: poll + read 64 KiB ─▶ OscSniffer (OSC 7/133/9/777,
 - `scripts/bundle.sh` builds `dist/nox.app`; `scripts/release/*` sign, notarize, build the dmg and
   appcast; the workflows in `.github/workflows` call them.
 - The app icon lives in `Assets.xcassets` (transparent outside the rounded square;
-  `scripts/icon_deborder.swift` removes a white rim from a new source image). The bundle script
+  `scripts/icon_deborder.swift` removes a white rim from a new source image and scales the
+  square to Apple's icon grid, 824 px with a 100 px margin on 1024, so it matches other Dock
+  icons in size; regenerate the smaller sizes from its 1024 px output). The bundle script
   builds `nox.icns` from it, and the binary also sets it as the Dock icon at runtime.
 
 ## Differences from the spec
