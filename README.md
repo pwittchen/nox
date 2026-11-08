@@ -10,6 +10,26 @@
 
 <p align="center">a minimalistic, fast, native terminal for macOS, built in Rust with GPUI.</p>
 
+## Install
+
+Requires macOS 13 or newer on Apple Silicon.
+
+```sh
+brew install --cask pwittchen/tap/nox
+```
+
+This installs `nox.app` and the `nox` agent CLI. Alternatively, download
+`nox-macos-aarch64.dmg` from the [latest release](https://github.com/pwittchen/nox/releases/latest)
+and drag nox into Applications.
+
+## Update
+
+```sh
+brew upgrade --cask nox
+```
+
+If you installed from the dmg, download the latest release and replace the app in Applications.
+
 ## Features
 
 - Splits and tabs like iTerm; tabs on top, bottom or in a sidebar
