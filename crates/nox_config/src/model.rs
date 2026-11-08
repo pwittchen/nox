@@ -65,7 +65,7 @@ config_enum!(
 );
 config_enum!(
     /// `tabs.sidebar_workspaces`.
-    SidebarWorkspaces { Active => "active", All => "all" } default Active
+    SidebarWorkspaces { Active => "active", All => "all" } default All
 );
 config_enum!(
     /// `workspaces.new_tab_cwd`.
@@ -185,7 +185,7 @@ impl Default for TabsConfig {
             show_index: true,
             title: TabTitle::Auto,
             icons: true,
-            sidebar_workspaces: SidebarWorkspaces::Active,
+            sidebar_workspaces: SidebarWorkspaces::All,
         }
     }
 }

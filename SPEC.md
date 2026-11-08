@@ -364,7 +364,7 @@ keeps the toggle and the buttons.
   line, come the tabs of the active workspace.
 - `tabs.sidebar_workspaces = "all"` lists every workspace as a collapsible group (header row +
   its tabs) instead: one column showing all projects and all their agents. Clicking a tab of
-  another workspace switches to it. Default `"active"`.
+  another workspace switches to it. Default `"all"`.
 - Pinned to the bottom of the sidebar, under a 1 px line, an **Agents** section (`Agents · n`)
   lists every running agent of every workspace, one row each: process icon, agent name (see
   4.8), a muted second line with its workspace and state (needs input / idle · unseen /
@@ -1181,7 +1181,7 @@ sidebar_width = 220          # left mode only
 show_index = true            # "1 ~" vs "~"
 title = "auto"               # "auto" (see 4.4) | "cwd" | "process"
 icons = true                 # process icons in tabs and pane headers (see 4.6)
-sidebar_workspaces = "active" # left mode only: "active" | "all" (every workspace as a group, see 5.4)
+sidebar_workspaces = "all"   # "active" | "all" (every workspace as a group, see 5.4)
 
 [workspaces]
 new_tab_cwd = "inherit"      # "inherit" (focused pane's cwd) | "root" (workspace root, see 4.7)

@@ -267,7 +267,7 @@ fn build() -> Vec<SettingMeta> {
             Tabs,
             "tabs.sidebar_workspaces",
             "Sidebar workspaces",
-            "Show only the active workspace or all of them (left position only).",
+            "Show only the active workspace or all of them in the sidebar.",
             Enum(SidebarWorkspaces::NAMES),
         ),
         // Font — [font]
