@@ -1055,6 +1055,9 @@ text between them. Everything goes through nox and stays visible to the user.
 - **Closing a pane** sends SIGHUP to the shell's process group and never blocks: if the shell
   survives (it traps HUP, or was still starting), SIGTERM and then SIGKILL follow, 0.5 s apart,
   on a background thread.
+- **Open files**: every pane holds a PTY master, pipes and sockets, and apps started from
+  Finder get a soft `ulimit -n` of 256, so at launch nox raises the soft `RLIMIT_NOFILE` to the
+  hard limit, capped at macOS's `OPEN_MAX` (10240). Shells inherit the raised limit.
 - **Only visible panes render.** Hidden tabs keep parsing but don't paint.
 - **Idle is idle**: GPUI doesn't redraw without `notify`; the cursor-blink timer stops after 5 s;
   the cwd poll runs only while output flows. Target ~0% CPU idle.

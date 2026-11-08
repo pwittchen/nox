@@ -46,6 +46,10 @@ fn init_logging() {
 
 fn main() {
     init_logging();
+    // Before any pane opens: Finder / launchd start apps with a soft limit of 256 (SPEC §8).
+    if nox_terminal::limits::raise_fd_limit().is_none() {
+        log::warn!("could not raise the open-file limit");
+    }
     let args: Vec<String> = std::env::args().collect();
     // ⇧ held at launch or --no-restore skips restoring once (SPEC §6.6).
     let shift_held = nox_mac::shift_key_down();

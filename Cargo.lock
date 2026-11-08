@@ -3946,7 +3946,6 @@ dependencies = [
  "anyhow",
  "async-channel 2.5.0",
  "gpui",
- "libc",
  "log",
  "nox_agents",
  "nox_config",

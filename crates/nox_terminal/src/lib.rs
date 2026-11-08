@@ -2,7 +2,8 @@
 //!
 //! PTY spawn / resize / kill, the reader thread, the OSC sniffer, grapheme-aware input, the `Term`
 //! wrapper, the key
-//! encoder, process inspection (foreground process, cwd) and shell integration snippets.
+//! encoder, process inspection (foreground process, cwd), shell integration snippets and the
+//! open-file limit.
 
 // `cargo lint` runs clippy::pedantic. These lints are allowed on purpose: numeric casts are
 // bounded grid / pixel / color math, `# Errors` / `# Panics` sections would only restate the
@@ -27,6 +28,7 @@
 
 pub mod grapheme;
 pub mod keys;
+pub mod limits;
 pub mod mouse;
 pub mod osc;
 pub mod process;
