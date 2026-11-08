@@ -3,10 +3,26 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyView, App, AppContext as _, Context, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    AnyView, App, AppContext as _, Context, IntoElement, ParentElement, Render, Styled, Window, WindowHandle,
+    div, px,
 };
 
 use crate::theme::Theme;
+
+/// For single-instance windows (Settings, About): brings `handle`'s window to the front if it is
+/// still open and returns whether it was. Activation is deferred, because the action that asks
+/// for it may be dispatched while that very window is being updated (it's the key window), and
+/// a nested update would fail.
+pub fn activate_if_open<V: 'static>(handle: Option<WindowHandle<V>>, cx: &mut App) -> bool {
+    let Some(h) = handle else { return false };
+    if !cx.windows().iter().any(|w| w.window_id() == h.window_id()) {
+        return false;
+    }
+    cx.defer(move |cx| {
+        let _ = h.update(cx, |_, window, _| window.activate_window());
+    });
+    true
+}
 
 /// `4m 12s`, `30s`, `2h 5m`.
 #[must_use]

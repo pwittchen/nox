@@ -24,9 +24,8 @@ const DROPDOWN_W: f32 = 240.;
 impl Global for SettingsWindow {}
 
 pub fn open_settings_window(cx: &mut App) {
-    if let Some(h) = cx.try_global::<SettingsWindow>().and_then(|w| w.0)
-        && h.update(cx, |_, window, _| window.activate_window()).is_ok()
-    {
+    let existing = cx.try_global::<SettingsWindow>().and_then(|w| w.0);
+    if crate::util::activate_if_open(existing, cx) {
         return;
     }
     let bounds = Bounds::centered(None, size(px(820.), px(620.)), cx);
