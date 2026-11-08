@@ -1374,7 +1374,7 @@ nox/
 │       ├── dialog.rs, toast.rs
 │       └── theme.rs            #   Theme global (Hsla), applying nox_theme output
 ├── .github/workflows/
-│   ├── ci.yml                  # PRs + master: audit, then fmt, lint, test, bench, bundle
+│   ├── ci.yml                  # PRs + master: audit, then fmt, lint, test + coverage, bench, bundle
 │   └── release.yml             # tag v*: build, sign, notarize, staple, appcast, release, cask
 ├── assets/
 │   ├── icons/                  # SVG line icons (1.5px stroke)
@@ -1382,6 +1382,7 @@ nox/
 │   ├── sounds/                 # attention.caf (see 7.11)
 │   └── app/                    # .icns, Info.plist, nox.entitlements
 ├── scripts/
+│   ├── ci/                     # audit_summary.sh, coverage_summary.sh (CI run summary)
 │   └── release/                # sign.sh, notarize.sh, make_dmg.sh, appcast.sh (run by CI and locally)
 ├── themes/                     # bundled theme files (see 9)
 ├── SPEC.md
@@ -1526,10 +1527,12 @@ scripts/release/notarize.sh dist/nox.app`, `SIGN_IDENTITY=… scripts/release/ma
 
 `ci.yml` (PRs and `master`) first runs `cargo audit --deny warnings` (accepted advisories in
 `.cargo/audit.toml`); only when that passes does it check formatting, run `cargo lint`
-(clippy::pedantic, warnings denied), build and test, and build an **unsigned** (ad-hoc signed)
-`nox.app` to check that bundling works; it uploads no artifacts. A failing audit fails the run.
-A newer run for the same branch or PR cancels the one still in progress. It has no access to
-signing secrets.
+(clippy::pedantic, warnings denied), build and run the tests under `cargo llvm-cov`, and build an
+**unsigned** (ad-hoc signed) `nox.app` to check that bundling works; it uploads no artifacts. A
+failing audit fails the run. The run's summary page shows the audit result (vulnerabilities,
+warnings, ignored advisories) and test coverage per crate (`scripts/ci/*_summary.sh`). A newer
+run for the same branch or PR cancels the one still in progress. It has no access to signing
+secrets.
 
 ### 15.3 Automatic updates
 Updates are delivered with **Sparkle 2**, the de-facto standard for non-App-Store Mac apps:

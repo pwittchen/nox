@@ -1,6 +1,6 @@
 # PRs and master: cargo audit (ignored advisories in .cargo/audit.toml) first; only if it passes:
-# fmt, lint (clippy::pedantic), tests, benches (regression gate) and an unsigned app
-# bundle build (not uploaded).
+# fmt, lint (clippy::pedantic), tests with coverage, benches (regression gate) and an unsigned
+# app bundle build (not uploaded). Audit and coverage summaries go to the run's summary page.
 # No access to signing secrets (SPEC §15.2).
 #
 # Skipped when:
@@ -33,6 +33,11 @@ jobs:
       - name: cargo audit (fails on vulnerabilities and on advisories not ignored in .cargo/audit.toml)
         # Called directly so rust-toolchain.toml does not make rustup install the toolchain.
         run: cargo-audit audit --deny warnings
+      - name: audit summary
+        if: ${{ !cancelled() }}
+        run: |
+          cargo-audit audit --no-fetch --json > audit.json || true
+          scripts/ci/audit_summary.sh audit.json | tee -a "$GITHUB_STEP_SUMMARY"
 
   check:
     # Runs only after a passing audit; a failing audit fails the whole run.
@@ -45,15 +50,21 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       - name: fmt
         run: cargo fmt --all -- --check
       - name: lint (clippy::pedantic, alias in .cargo/config.toml)
         run: cargo lint
-      - name: test
-        run: cargo test --workspace
+      - name: test (with coverage)
+        run: cargo llvm-cov --workspace --json --summary-only --output-path coverage.json
+      - name: coverage summary
+        if: ${{ !cancelled() }}
+        run: scripts/ci/coverage_summary.sh coverage.json | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Info.plist has Sparkle keys only with the updater feature
         run: |
           ! grep -q SUFeedURL assets/app/Info.plist
