@@ -190,6 +190,7 @@ PTY ─▶ reader thread: poll + read 64 KiB ─▶ OscSniffer (OSC 7/133/9/777,
   subclass whose `-mouseDownCanMoveWindow` returns `NO` (Settings and About keep the native
   behaviour); the empty title-bar space calls `window_bg::start_move`
   (`performWindowDragWithEvent:`), and interactive items stop the mouse-down.
-- **Window close button** quits like `⌘Q` (`on_window_should_close` → `request_quit`), so the
-  quit confirmations (`app.confirm_quit`, `app.confirm_close`) apply to it too.
+- **Window close button** hides the app (`on_window_should_close` → `cx.hide()`, returning
+  `false` so the window is never destroyed); `Application::on_reopen` reactivates the main window
+  when the Dock icon is clicked. Only `⌘Q` / the menu / the Dock quit (`request_quit`).
 - See [ROADMAP.md](ROADMAP.md) for features not implemented yet.

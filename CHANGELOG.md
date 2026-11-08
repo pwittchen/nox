@@ -6,7 +6,8 @@
   GitHub Releases, then download, verify (SHA-256 + Developer ID signature) and install the
   update with a relaunch. A daily automatic check is on by default (`app.check_for_updates`).
 - Quitting asks "Quit nox?" first, also when nothing is running; turn it off with
-  `app.confirm_quit` (Settings → General). The window's close button now quits like `⌘Q`.
+  `app.confirm_quit` (Settings → General). The window's close button hides nox; the
+  Dock icon brings it back.
 
 ## [0.1.0] — unreleased
 

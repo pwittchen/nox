@@ -73,6 +73,13 @@ fn main() {
             }
         }
     });
+    // Clicking the Dock icon with no visible window brings the main window back.
+    app.on_reopen(|cx| {
+        cx.activate(true);
+        if let Some(main) = cx.try_global::<nox_ui::updater::MainWindow>().map(|m| m.0) {
+            let _ = main.update(cx, |_, window, _| window.activate_window());
+        }
+    });
     app.run(move |cx: &mut App| {
         // The app icon (Assets.xcassets) also when running as a bare binary.
         nox_mac::set_app_icon(include_bytes!("../../../Assets.xcassets/AppIcon.appiconset/1024-mac.png"));
@@ -260,12 +267,11 @@ fn main() {
         cx.set_global(nox_ui::updater::MainWindow(window));
         nox_ui::updater::start_automatic(cx);
 
-        // The window's close button quits like `⌘Q` (with its confirmations).
+        // The window's close button hides the app (like `⌘H`); the Dock icon brings it back.
+        // Quitting is `⌘Q` / nox → Quit nox / the Dock menu.
         let _ = window.update(cx, |_, w, cx| {
-            w.on_window_should_close(cx, move |w, cx| {
-                w.defer(cx, move |_, cx| {
-                    let _ = window.update(cx, nox_ui::root_actions::request_quit);
-                });
+            w.on_window_should_close(cx, |w, cx| {
+                w.defer(cx, |_, cx| cx.hide());
                 false
             });
         });

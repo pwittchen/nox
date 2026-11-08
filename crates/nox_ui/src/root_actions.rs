@@ -340,7 +340,7 @@ fn font_step(r: &mut Root, delta: f32, _w: &mut Window, cx: &mut Context<Root>) 
     cx.notify();
 }
 
-/// Quit nox (`⌘Q`, menu, Dock, the window's close button): asks first when processes or agents
+/// Quit nox (`⌘Q`, menu, Dock): asks first when processes or agents
 /// are running (`app.confirm_close`), otherwise when `app.confirm_quit` is on (SPEC §6.4).
 pub fn request_quit(r: &mut Root, w: &mut Window, cx: &mut Context<Root>) {
     quit_with(r, w, cx, true);
