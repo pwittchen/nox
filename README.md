@@ -10,6 +10,8 @@
 
 <p align="center">a minimalistic, fast, native terminal for macOS, built in Rust with GPUI.</p>
 
+## Features
+
 - Splits and tabs like iTerm; tabs on top, bottom or in a sidebar
 - Workspaces: named groups of tabs per project, switched instantly, restored on relaunch
 - A host for AI coding agents: knows which panes run an agent and what state it's in, tells you
