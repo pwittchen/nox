@@ -32,6 +32,7 @@ use alacritty_terminal::term::{Config as TermConfig, Osc52, Term};
 use alacritty_terminal::tty::{self, Options as PtyOptions, Shell};
 use alacritty_terminal::vte::ansi::{Processor, Rgb, StdSyncHandler};
 
+use crate::grapheme::GraphemeInput;
 use crate::osc::{OscEvent, OscSniffer};
 use crate::resize::{GridSize, ResizeCoalescer};
 
@@ -97,6 +98,9 @@ pub struct SpawnOptions {
     pub word_separators: String,
     pub kitty_keyboard: bool,
     pub osc52: ClipboardPolicy,
+    /// `terminal.grapheme_width = "unicode"`: emoji sequences form one cell (see
+    /// [`crate::grapheme`]); `false` is `"legacy"`.
+    pub grapheme_clusters: bool,
     pub cursor: CursorConfig,
     /// Directory with the shell integration files, when `shell.integration = true`.
     pub integration_dir: Option<PathBuf>,
@@ -114,6 +118,7 @@ impl Default for SpawnOptions {
             word_separators: " ()[]{}',\"`│".into(),
             kitty_keyboard: false,
             osc52: ClipboardPolicy::Write,
+            grapheme_clusters: true,
             cursor: CursorConfig::default(),
             integration_dir: None,
         }
@@ -248,6 +253,7 @@ pub struct TerminalSession {
     size: Arc<Mutex<GridSize>>,
     colors: Arc<RwLock<Vec<Rgb>>>,
     osc52: Arc<RwLock<ClipboardPolicy>>,
+    grapheme_clusters: Arc<AtomicBool>,
     clipboard_reply: ClipboardReply,
     marks: Arc<Mutex<Marks>>,
     exited: Arc<AtomicBool>,
@@ -299,6 +305,7 @@ impl TerminalSession {
         let size = Arc::new(Mutex::new(opts.size));
         let colors = Arc::new(RwLock::new(vec![Rgb { r: 0, g: 0, b: 0 }; COLOR_COUNT]));
         let osc52 = Arc::new(RwLock::new(opts.osc52));
+        let grapheme_clusters = Arc::new(AtomicBool::new(opts.grapheme_clusters));
         let clipboard_reply = Arc::new(Mutex::new(None));
         let listener = Listener {
             tx: tx.clone(),
@@ -329,8 +336,9 @@ impl TerminalSession {
             let exit_status = exit_status.clone();
             let reader_done = reader_done.clone();
             let last_output = last_output.clone();
+            let graphemes = grapheme_clusters.clone();
             thread::Builder::new().name(format!("nox-pty-reader-{pid}")).spawn(move || {
-                reader_loop(master, term, tx.clone(), dirty, marks, last_output);
+                reader_loop(master, term, tx.clone(), dirty, marks, last_output, &graphemes);
                 reader_done.store(true, Ordering::SeqCst);
                 // Give the waiter a moment to collect the status.
                 for _ in 0..50 {
@@ -432,6 +440,7 @@ impl TerminalSession {
             size,
             colors,
             osc52,
+            grapheme_clusters,
             clipboard_reply,
             marks,
             exited,
@@ -554,9 +563,11 @@ impl TerminalSession {
         word_separators: &str,
         kitty: bool,
         osc52: ClipboardPolicy,
+        grapheme_clusters: bool,
         cursor: CursorConfig,
     ) {
         *self.osc52.write().unwrap() = osc52;
+        self.grapheme_clusters.store(grapheme_clusters, Ordering::Relaxed);
         let opts = SpawnOptions {
             scrollback,
             word_separators: word_separators.to_string(),
@@ -748,6 +759,7 @@ fn reader_loop(
     dirty: Arc<AtomicBool>,
     marks: Arc<Mutex<Marks>>,
     last_output: Arc<AtomicU64>,
+    grapheme_clusters: &AtomicBool,
 ) {
     use std::io::Read;
     let fd = master.as_raw_fd();
@@ -779,7 +791,10 @@ fn reader_loop(
         }
         if rc == 0 {
             // Sync timeout expired: flush what was buffered.
-            processor.stop_sync(&mut *term.lock());
+            processor.stop_sync(&mut GraphemeInput::new(
+                &mut term.lock(),
+                grapheme_clusters.load(Ordering::Relaxed),
+            ));
             wake(&dirty);
             continue;
         }
@@ -797,9 +812,10 @@ fn reader_loop(
                     let chunk = &buf[..n];
                     let hits = sniffer.feed(chunk);
                     let mut t = term.lock();
+                    let clusters = grapheme_clusters.load(Ordering::Relaxed);
                     let mut pos = 0;
                     for hit in hits {
-                        processor.advance(&mut *t, &chunk[pos..hit.end]);
+                        processor.advance(&mut GraphemeInput::new(&mut t, clusters), &chunk[pos..hit.end]);
                         pos = hit.end;
                         let kind = match hit.event {
                             OscEvent::PromptStart => Some(MarkKind::Prompt),
@@ -814,7 +830,7 @@ fn reader_loop(
                         }
                         let _ = tx.try_send(TerminalEvent::Osc(hit.event));
                     }
-                    processor.advance(&mut *t, &chunk[pos..]);
+                    processor.advance(&mut GraphemeInput::new(&mut t, clusters), &chunk[pos..]);
                     drop(t);
                     if n < READ_BUF {
                         break;

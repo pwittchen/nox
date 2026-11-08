@@ -20,6 +20,7 @@ fn defaults_match_spec() {
     assert_eq!(c.terminal.padding, [8, 6]);
     assert_eq!(c.terminal.word_separators, " ()[]{}',\"`│");
     assert_eq!(c.terminal.osc52, Osc52::Write);
+    assert_eq!(c.terminal.grapheme_width, GraphemeWidth::Unicode);
     assert_eq!(c.shell.args, vec!["-l".to_string()]);
     assert_eq!(c.app.update_channel, "stable");
     assert_eq!(c.window.width, 1000);
@@ -48,6 +49,7 @@ sidebar_width = 300
 
 [terminal]
 osc52 = "read-write"
+grapheme_width = "legacy"
 padding = [2, 4]
 attention_sound_volume = 1
 
@@ -76,6 +78,7 @@ command_palette = ""
     assert_eq!(c.tabs.sidebar_width, 300);
     assert!(c.tabs.show_index);
     assert_eq!(c.terminal.osc52, Osc52::ReadWrite);
+    assert_eq!(c.terminal.grapheme_width, GraphemeWidth::Legacy);
     assert_eq!(c.terminal.padding, [2, 4]);
     assert_eq!(c.terminal.attention_sound_volume, 1.0);
     let claude = &c.agents.defs["claude"];

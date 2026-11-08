@@ -111,6 +111,10 @@ config_enum!(
     /// `terminal.osc52`.
     Osc52 { Write => "write", ReadWrite => "read-write", Off => "off" } default Write
 );
+config_enum!(
+    /// `terminal.grapheme_width`.
+    GraphemeWidth { Unicode => "unicode", Legacy => "legacy" } default Unicode
+);
 
 /// The whole `config.toml`.
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
@@ -338,6 +342,7 @@ pub struct TerminalConfig {
     pub attention_min_duration: u64,
     pub close_on_exit: CloseOnExit,
     pub osc52: Osc52,
+    pub grapheme_width: GraphemeWidth,
     pub kitty_keyboard: bool,
     pub minimum_contrast: f64,
 }
@@ -364,6 +369,7 @@ impl Default for TerminalConfig {
             attention_min_duration: 10,
             close_on_exit: CloseOnExit::Clean,
             osc52: Osc52::Write,
+            grapheme_width: GraphemeWidth::Unicode,
             kitty_keyboard: false,
             minimum_contrast: 1.0,
         }

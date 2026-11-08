@@ -10,7 +10,8 @@ crates/
 ├── nox/            binary `nox-app`: app setup, menus, config watcher, global actions, the window
 ├── nox_cli/        binary `nox`: CLI for agents + `nox mcp` (MCP over stdio); depends on nox_ipc only
 ├── nox_terminal/   PTY session (reader / waiter / writer / resize threads), OSC sniffer, key and
-│                   mouse encoders, resize coalescing, process inspection, shell integration
+│                   mouse encoders, resize coalescing, process inspection, shell integration,
+│                   grapheme-aware input (emoji clusters)
 ├── nox_layout/     workspaces → tabs → split trees, geometry, navigation, session file (pure data)
 ├── nox_agents/     process icons + agent detection, agent state machine, message bus, claims,
 │                   rate limiter, git HEAD / worktrees, project files + trust, hooks, resume plans
@@ -50,7 +51,9 @@ key ─▶ GPUI bindings (app actions) ─▶ else Pane::on_key_down ─▶ keys
 
 PTY ─▶ reader thread: poll + read 64 KiB ─▶ OscSniffer (OSC 7/133/9/777, offsets)
                      ─▶ vte Processor under FairMutex, segment by segment (marks get the
-                        cursor line at the exact point) ─▶ one Wakeup if none pending
+                        cursor line at the exact point), into `GraphemeInput` (forwards every
+                        Handler call to the Term, merges emoji clusters in `input`)
+                     ─▶ one Wakeup if none pending
      ─▶ async channel ─▶ Pane::handle_event ─▶ cx.notify() ─▶ TerminalElement paints next frame
 ```
 

@@ -4,8 +4,9 @@
 use std::sync::OnceLock;
 
 use crate::model::{
-    AgentRestore, AgentScope, Bell, CloseOnExit, Config, ConfigEnum, CursorStyle, Deliver, Mode, NewTabCwd,
-    OptionAsMeta, Osc52, SidebarWorkspaces, SizeAppliesTo, TabTitle, TabsPosition, WorktreeOpens,
+    AgentRestore, AgentScope, Bell, CloseOnExit, Config, ConfigEnum, CursorStyle, Deliver, GraphemeWidth,
+    Mode, NewTabCwd, OptionAsMeta, Osc52, SidebarWorkspaces, SizeAppliesTo, TabTitle, TabsPosition,
+    WorktreeOpens,
 };
 
 /// Sidebar sections of the Settings window, mirroring the config tables.
@@ -407,6 +408,13 @@ fn build() -> Vec<SettingMeta> {
             "Clipboard access (OSC 52)",
             "Let programs write (or also read) the clipboard.",
             Enum(Osc52::NAMES),
+        ),
+        m(
+            Terminal,
+            "terminal.grapheme_width",
+            "Emoji width",
+            "unicode: emoji sequences (flags, ZWJ, skin tones, VS16) take one 2-column cell; legacy: per code point.",
+            Enum(GraphemeWidth::NAMES),
         ),
         m(
             Terminal,

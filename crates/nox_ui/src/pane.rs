@@ -198,6 +198,7 @@ fn spawn_options(cfg: &nox_config::Config, spawn: &PaneSpawn) -> SpawnOptions {
         scrollback: cfg.terminal.scrollback as usize,
         word_separators: cfg.terminal.word_separators.clone(),
         kitty_keyboard: cfg.terminal.kitty_keyboard,
+        grapheme_clusters: cfg.terminal.grapheme_width == nox_config::GraphemeWidth::Unicode,
         osc52: match cfg.terminal.osc52 {
             nox_config::Osc52::Off => nox_terminal::ClipboardPolicy::Off,
             nox_config::Osc52::Write => nox_terminal::ClipboardPolicy::Write,
@@ -296,6 +297,7 @@ impl Pane {
                     &cfg.terminal.word_separators,
                     cfg.terminal.kitty_keyboard,
                     osc52,
+                    cfg.terminal.grapheme_width == nox_config::GraphemeWidth::Unicode,
                     cursor_style(&cfg),
                 );
             }

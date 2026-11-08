@@ -1,6 +1,7 @@
 //! `nox_terminal` — terminal sessions without any UI dependency (SPEC §13).
 //!
-//! PTY spawn / resize / kill, the reader thread, the OSC sniffer, the `Term` wrapper, the key
+//! PTY spawn / resize / kill, the reader thread, the OSC sniffer, grapheme-aware input, the `Term`
+//! wrapper, the key
 //! encoder, process inspection (foreground process, cwd) and shell integration snippets.
 
 // `cargo lint` runs clippy::pedantic. These lints are allowed on purpose: numeric casts are
@@ -24,6 +25,7 @@
     clippy::maybe_infinite_iter
 )]
 
+pub mod grapheme;
 pub mod keys;
 pub mod mouse;
 pub mod osc;

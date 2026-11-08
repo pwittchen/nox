@@ -26,6 +26,8 @@
 - **Settings window**: `[icons]` / `[shell.env]` entries can be removed but not added inline
   (edit `config.toml`); fade/slide animations of palette and sheets.
 - **Iosevka** is not bundled (size, see ARCH.md).
+- **Mode 2027** (grapheme clustering query, §7.1): emoji clusters are merged, but `DECRQM ?2027`
+  isn't answered, so programs can't detect it and adjust their width tables.
 
 ## Later
 

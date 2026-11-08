@@ -93,6 +93,7 @@ notifications = true         # macOS notification when a job finishes or waits f
 attention_min_duration = 10  # s; shorter commands finish without a chime or notification
 close_on_exit = "clean"      # "always" | "clean" | "never"
 osc52 = "write"              # "write" | "read-write" | "off"
+grapheme_width = "unicode"   # "unicode": emoji sequences are one 2-column cell | "legacy": per code point
 kitty_keyboard = false
 minimum_contrast = 1.0
 

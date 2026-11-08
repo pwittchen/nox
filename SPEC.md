@@ -587,6 +587,15 @@ tabs and splits, and the agent sessions that were running in them.
 - Unicode: wide characters and emoji per alacritty's width tables; combining characters kept in
   the cell. Glyphs missing from the configured font fall back through Core Text's cascade list
   (so CJK and emoji render without configuration).
+- Emoji grapheme clusters (`terminal.grapheme_width = "unicode"`, default): a code point that
+  continues the emoji cluster in the previous cell is stored in that cell instead of a new one,
+  so the whole sequence is one 2-column cell shaped as one glyph — ZWJ sequences (👨‍👩‍👧, 🏳️‍🌈),
+  regional-indicator pairs (🇵🇱), skin-tone modifiers (👍🏽) and tag flags. VS16 after a narrow
+  base (❤️, ☺️, 1️⃣) widens the cell to 2 columns (wrapping first if it is in the last column).
+  Other scripts keep per-code-point widths. Programs that size text with `wcwidth` per code point
+  (e.g. zsh's line editor) can disagree about these sequences; `"legacy"` turns the merging off
+  and uses alacritty's per-code-point widths. Mode 2027 (grapheme cluster query) isn't
+  reported.
 - Kitty keyboard protocol: supported by `alacritty_terminal`; enabled with
   `terminal.kitty_keyboard = true` (default `false` in v1).
 
@@ -1218,6 +1227,7 @@ notifications = true         # macOS notification when a job finishes or waits f
 attention_min_duration = 10  # s; shorter commands finish without a chime or notification
 close_on_exit = "clean"      # "always" | "clean" | "never"
 osc52 = "write"              # "write" | "read-write" | "off"
+grapheme_width = "unicode"   # "unicode": emoji sequences are one 2-column cell | "legacy": per code point
 kitty_keyboard = false
 minimum_contrast = 1.0
 

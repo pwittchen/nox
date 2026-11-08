@@ -418,6 +418,7 @@ fn from_table(root: &Table, notices: &mut Vec<Notice>) -> Config {
         s.int("attention_min_duration", &mut t.attention_min_duration);
         s.enumeration("close_on_exit", &mut t.close_on_exit);
         s.enumeration("osc52", &mut t.osc52);
+        s.enumeration("grapheme_width", &mut t.grapheme_width);
         s.bool("kitty_keyboard", &mut t.kitty_keyboard);
         s.float("minimum_contrast", &mut t.minimum_contrast);
         s.finish();

@@ -9,6 +9,8 @@ alacritty_terminal.workspace = true
 libc.workspace = true
 log.workspace = true
 async-channel = "2"
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true
