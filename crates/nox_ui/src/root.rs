@@ -805,7 +805,11 @@ impl Root {
             PaneEvent::CommandFinished { command, exit, duration } => {
                 let looked_at = self.is_looked_at(pane);
                 if !looked_at && let Some(p) = self.panes.get(&pane) {
-                    p.update(cx, |p, _| p.done_unseen = true);
+                    let failed = exit.is_some_and(|c| c != 0);
+                    p.update(cx, |p, _| {
+                        p.done_unseen = true;
+                        p.done_failed = failed;
+                    });
                 }
                 let min = Duration::from_secs(Settings::global(cx).config.terminal.attention_min_duration);
                 let is_agent = self.panes.get(&pane).is_some_and(|p| p.read(cx).is_agent());
@@ -896,7 +900,10 @@ impl Root {
                 if t.to == AgentState::Idle
                     && let Some(p) = self.panes.get(&pane)
                 {
-                    p.update(cx, |p, _| p.done_unseen = true);
+                    p.update(cx, |p, _| {
+                        p.done_unseen = true;
+                        p.done_failed = false;
+                    });
                 }
                 let name = self.pane_name(pane, cx);
                 let msg = self.panes.get(&pane).and_then(|p| {

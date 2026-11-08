@@ -115,21 +115,25 @@ so they carry over unchanged.
   `#469 - cleanup after migration`):
   - **yellow** (`ansi.yellow`) — **running**: a command is executing in one of the tab's panes.
     Shown on every tab, the active one included, for as long as the command runs.
-  - **blue** (`ansi.blue`) — **done**: a command finished while the tab was not active. It stays
-    until the tab is visited; a command that finishes in the active tab leaves no dot. It may
-    also play the attention sound and post a notification (see 7.11).
-  - **magenta** (`ansi.magenta`) — **needs input**: a coding agent in one of the tab's panes is
-    blocked on the user (a permission prompt or a question, see 7.12). Shown on every tab, the
-    active one included, until the agent continues.
-  - **accent** — **bell**: a bell rang in a background tab (see 7.10); until the tab is visited.
-  - Priority when several apply: bell > needs input > running > done. No dot when the tab is
+  - **green** (`ansi.green`) — **done**: a command finished successfully while the tab was not
+    being looked at. It stays until the tab is visited (opened or focused, with the window
+    active); a command that finishes in the tab being looked at leaves no dot. It may also play
+    the attention sound and post a notification (see 7.11).
+  - **red** (`ansi.red`) — **failed**: like done, but the command exited with a non-zero status
+    (OSC 133 `D` with an exit code; without shell integration the status is unknown and the dot
+    is green). Cleared the same way.
+  - **blue** (`ansi.blue`) — **waiting**: something needs the user. Either a coding agent in one
+    of the tab's panes is blocked on the user (a permission prompt or a question, see 7.12),
+    shown on every tab, the active one included, until the agent continues; or a bell rang in
+    a background tab (see 7.10), until the tab is visited.
+  - Priority when several apply: waiting > running > failed > done. No dot when the tab is
     idle and seen.
 - "Running" means, with shell integration (see 4.5), the span between OSC 133 `C` (command
   start) and `D` (command end); without it, the PTY's foreground process (`tcgetpgrp`) is not
   the shell. "Done" is the transition back to the prompt (OSC 133 `D`, or the foreground process
   returning to the shell). Long-lived interactive programs (`vim`, `ssh`) count as running while
   they are in the foreground. Coding agents are the exception: their dot follows the agent state
-  (see 7.12) — working = running, turn finished = done, blocked on the user = needs input.
+  (see 7.12) — working = running, turn finished = done, blocked on the user = waiting.
 
 ### 4.3 Pane
 - A pane is one terminal session: one PTY, one shell process, one `alacritty_terminal::Term`.
@@ -202,8 +206,9 @@ so they carry over unchanged.
 - An icon for an unknown process is the default `>_`; it is never blank.
 - User mappings in config (`[icons]`, see 11) add executables to a built-in icon or point to a
   custom SVG in `~/.nox/icons/`; they take precedence over the built-in table.
-- The status dot (running / done / bell, see 4.2) overlays the icon's top-right corner instead
-  of taking extra space (as in the screenshot on `#469 - cleanup after migration`).
+- The status dot (running / done / failed / waiting, see 4.2) overlays the icon's top-right
+  corner instead of taking extra space (as in the screenshot on `#469 - cleanup after
+  migration`).
 - `tabs.icons = false` hides process icons and shows the plain `>_` everywhere.
 
 ### 4.7 Workspace

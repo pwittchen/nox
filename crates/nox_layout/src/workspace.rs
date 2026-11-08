@@ -9,12 +9,18 @@ use crate::tab::Tab;
 /// Status dot of a tab or workspace (SPEC §4.2). Ordered by priority:
 /// `Bell > NeedsInput > Running > Done > None`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Ordered by priority (lowest first): a tab shows the highest status of its panes.
 pub enum TabStatus {
     #[default]
     None,
+    /// A command finished successfully (or an agent's turn ended) while unseen.
     Done,
+    /// A command finished with a non-zero exit status while unseen.
+    Failed,
     Running,
+    /// Waiting for the user: an agent blocked on input.
     NeedsInput,
+    /// Waiting for the user: a bell rang while unseen.
     Bell,
 }
 
@@ -469,6 +475,8 @@ mod tests {
         assert_eq!(aggregate_status([]), None);
         assert_eq!(aggregate_status([Done, None]), Done);
         assert_eq!(aggregate_status([Done, Running]), Running);
+        assert_eq!(aggregate_status([Done, Failed]), Failed);
+        assert_eq!(aggregate_status([Failed, Running]), Running);
         assert_eq!(aggregate_status([Running, NeedsInput, Done]), NeedsInput);
         assert_eq!(aggregate_status([NeedsInput, Bell, Running]), Bell);
     }

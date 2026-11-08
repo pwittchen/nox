@@ -742,7 +742,7 @@ fn agents_items(root: &Root, cx: &mut Context<Root>) -> Vec<PaletteItem> {
                     detail.push(format!("{} claim(s)", e.claims.len()));
                 }
                 let color = match a.tracker.state() {
-                    AgentState::NeedsInput => Some(theme.ansi(5)),
+                    AgentState::NeedsInput => Some(theme.ansi(4)),
                     AgentState::Working => Some(theme.ansi(3)),
                     _ => None,
                 };

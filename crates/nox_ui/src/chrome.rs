@@ -245,7 +245,9 @@ fn render_workspace_chip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement 
             .map(|(_, w)| root.workspace_status(w, cx)),
     );
     let other_dot = match others {
-        TabStatus::NeedsInput | TabStatus::Bell | TabStatus::Done => status_dot(&theme, others),
+        TabStatus::NeedsInput | TabStatus::Bell | TabStatus::Done | TabStatus::Failed => {
+            status_dot(&theme, others)
+        }
         _ => None,
     };
     let tip = {
@@ -305,7 +307,7 @@ fn tab_pill(root: &Root, ws_idx: usize, index: usize, active: bool, cx: &mut Con
     let status = root.tab_status(tab, cx);
     let dot = match status {
         // A finished command in the active tab leaves no dot.
-        TabStatus::Done | TabStatus::Bell if active && root.window_active => None,
+        TabStatus::Done | TabStatus::Failed | TabStatus::Bell if active && root.window_active => None,
         s => status_dot(&theme, s),
     };
     let icon = root.panes.get(&tab.focused).map_or(nox_agents::Icon::TERMINAL, |p| p.read(cx).icon.clone());
@@ -473,7 +475,7 @@ fn sidebar_row(root: &Root, ws_idx: usize, index: usize, cx: &mut Context<Root>)
     let title = root.tab_title(tab, index, cx);
     let status = root.tab_status(tab, cx);
     let dot = match status {
-        TabStatus::Done | TabStatus::Bell if active && root.window_active => None,
+        TabStatus::Done | TabStatus::Failed | TabStatus::Bell if active && root.window_active => None,
         s => status_dot(&theme, s),
     };
     let pane = root.panes.get(&tab.focused).map(|p| p.read(cx));

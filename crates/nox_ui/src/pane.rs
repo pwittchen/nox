@@ -143,6 +143,8 @@ pub struct Pane {
     pub shell_integration: bool,
     pub running_since: Option<Instant>,
     pub done_unseen: bool,
+    /// The unseen finished command exited non-zero (red dot instead of green).
+    pub done_failed: bool,
     pub bell_unseen: bool,
     pub bell_flash: Option<Instant>,
     pub exited: Option<Option<i32>>,
@@ -246,6 +248,7 @@ impl Pane {
             shell_integration: false,
             running_since: None,
             done_unseen: false,
+            done_failed: false,
             bell_unseen: false,
             bell_flash: None,
             exited: None,
@@ -769,7 +772,7 @@ impl Pane {
             return TabStatus::Running;
         }
         if self.done_unseen {
-            return TabStatus::Done;
+            return if self.done_failed { TabStatus::Failed } else { TabStatus::Done };
         }
         TabStatus::None
     }
@@ -777,6 +780,7 @@ impl Pane {
     /// Mark everything as seen (the user is looking at this pane).
     pub fn mark_seen(&mut self) {
         self.done_unseen = false;
+        self.done_failed = false;
         self.bell_unseen = false;
     }
 
@@ -1681,7 +1685,7 @@ impl Pane {
                 AgentState::Exited => "exited".into(),
             };
             let color = match a.tracker.state() {
-                AgentState::NeedsInput => theme.ansi(5),
+                AgentState::NeedsInput => theme.ansi(4),
                 AgentState::Working => theme.ansi(3),
                 _ => theme.text_muted,
             };
@@ -2140,9 +2144,10 @@ impl Render for Pane {
 pub fn status_color(theme: &Theme, status: TabStatus) -> Option<Hsla> {
     match status {
         TabStatus::None => None,
-        TabStatus::Done => Some(theme.ansi(4)),
+        TabStatus::Done => Some(theme.ansi(2)),
+        TabStatus::Failed => Some(theme.ansi(1)),
         TabStatus::Running => Some(theme.ansi(3)),
-        TabStatus::NeedsInput => Some(theme.ansi(5)),
-        TabStatus::Bell => Some(theme.accent),
+        // Waiting for the user (agent input, bell): blue.
+        TabStatus::NeedsInput | TabStatus::Bell => Some(theme.ansi(4)),
     }
 }

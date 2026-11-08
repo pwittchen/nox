@@ -208,6 +208,7 @@ pub fn workspace_menu(root: &mut Root, window: &mut Window, cx: &mut Context<Roo
             nox_layout::TabStatus::NeedsInput => "  ● needs input",
             nox_layout::TabStatus::Running => "  ● running",
             nox_layout::TabStatus::Done => "  ● done",
+            nox_layout::TabStatus::Failed => "  ● failed",
             nox_layout::TabStatus::Bell => "  ● bell",
             nox_layout::TabStatus::None => "",
         };
