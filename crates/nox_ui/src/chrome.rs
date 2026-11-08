@@ -180,7 +180,7 @@ fn render_titlebar(root: &mut Root, window: &mut Window, cx: &mut Context<Root>)
                 .child(render_workspace_chip(root, cx))
                 .child(render_tab_strip(root, cx))
                 .child(drag_region("titlebar-drag"))
-                .child(palette_and_plus(cx));
+                .child(title_bar_buttons(cx));
         }
         nox_config::TabsPosition::Bottom => {
             bar = bar.child(drag_region("titlebar-drag"));
@@ -196,19 +196,26 @@ fn render_titlebar(root: &mut Root, window: &mut Window, cx: &mut Context<Root>)
                         })),
                 )
                 .child(drag_region("titlebar-drag"))
-                .child(palette_and_plus(cx));
+                .child(title_bar_buttons(cx));
         }
     }
     bar.into_any_element()
 }
 
-fn palette_and_plus(cx: &mut Context<Root>) -> AnyElement {
+fn title_bar_buttons(cx: &mut Context<Root>) -> AnyElement {
     let theme = Theme::global(cx).clone();
     div()
         .flex()
         .flex_none()
         .items_center()
         .gap_1()
+        .child(
+            icon_button("settings-button", "icons/ui/settings.svg", &theme)
+                .tooltip(|window, cx| crate::util::tooltip("Settings  ⌘,".into(), window, cx))
+                .on_click(cx.listener(|_, _, window, cx| {
+                    window.dispatch_action(Box::new(crate::actions::OpenSettings), cx);
+                })),
+        )
         .child(
             icon_button("palette-button", "icons/ui/command.svg", &theme)
                 .tooltip(|window, cx| crate::util::tooltip("Command Palette  ⌘K".into(), window, cx))
@@ -452,7 +459,7 @@ fn render_bottom_bar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         .child(render_workspace_chip(root, cx))
         .child(render_tab_strip(root, cx))
         .child(div().flex_1())
-        .child(palette_and_plus(cx))
+        .child(title_bar_buttons(cx))
         .into_any_element()
 }
 

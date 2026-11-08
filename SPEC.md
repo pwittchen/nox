@@ -281,7 +281,7 @@ precedence where details differ):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ● ● ●  [▢ nox]  [>_ 1 ~      ]  [>_ 2 ~            ]              ⌘   +  │  title bar (38px)
+│ ● ● ●  [▢ nox]  [>_ 1 ~      ]  [>_ 2 ~            ]           ⚙  ⌘   +  │  title bar (38px)
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
 │ │ >_ pw@mbp:~                                          ◫  ⊟  ⤢  ×      │ │  pane header (28px)
 │ │                                                                      │ │
@@ -311,7 +311,8 @@ Title bar (left to right):
   automatic title).
 - Empty space in the title bar drags the window (`window.start_window_move()`); double-click
   zooms or minimizes per the system setting.
-- Right side: **⌘** opens the command palette (see 5.6); **+** opens a new tab.
+- Right side: **⚙** opens Settings (`⌘,`, see 5.9); **⌘** opens the command palette (see 5.6);
+  **+** opens a new tab.
 
 Pane card:
 - Each tab's content is a card inset 6 px from the window edges, `bg` fill, 1px `border`
@@ -329,7 +330,7 @@ Pane card:
 
 ### 5.3 Tabs on the bottom
 
-Same as 5.2, with the tab strip, the workspace chip, `⌘` and `+` moved to a 34 px bar under the
+Same as 5.2, with the tab strip, the workspace chip, `⚙`, `⌘` and `+` moved to a 34 px bar under the
 pane card. The title bar keeps only the traffic lights and stays draggable; its height shrinks to
 28 px. No sidebar.
 
@@ -337,7 +338,7 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ● ● ●  [◧]                                                        ⌘   +  │
+│ ● ● ●  [◧]                                                     ⚙  ⌘   +  │
 │ ┌────────────────┐┌──────────────────────────────────────────────────────┐│
 │ │ ▢ nox        ⌄ ││ >_ pw@mbp:~                            ◫  ⊟  ⤢  ×    ││
 │ │ ▢ blog      •  ││                                                      ││
