@@ -357,19 +357,35 @@ impl Render for DialogView {
             .map(|(i, b)| {
                 let is_default = i == self.default_button;
                 let ring = buttons_focused && i == self.focused_button;
+                // The focus ring is a separate outline 2 px outside the button (always laid out,
+                // transparent when unfocused), so focus doesn't resize the button and the fill
+                // never sits under a differently colored border.
                 div()
                     .id(("dialog-button", i))
-                    .px(px(14.))
-                    .py(px(5.))
-                    .rounded(px(6.))
-                    .text_size(px(13.))
+                    .p(px(2.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if ring { theme.accent } else { gpui::transparent_black() })
                     .cursor_pointer()
-                    .when(is_default, |d| d.bg(theme.text).text_color(theme.bg))
-                    .when(!is_default, |d| d.border_1().border_color(theme.border).text_color(theme.text))
-                    .when(ring, |d| d.border_2().border_color(theme.accent))
-                    .hover(|s| s.opacity(0.9))
                     .on_click(cx.listener(move |this, _, window, cx| this.press(i, window, cx)))
-                    .child(b.label.clone())
+                    .child(
+                        div()
+                            .px(px(14.))
+                            .py(px(4.))
+                            .rounded(px(6.))
+                            .border_1()
+                            .text_size(px(13.))
+                            .when(is_default, |d| {
+                                d.bg(theme.text).border_color(theme.text).text_color(theme.bg)
+                            })
+                            .when(!is_default, |d| {
+                                d.border_color(theme.border)
+                                    .text_color(theme.text)
+                                    .hover(|s| s.bg(theme.text.opacity(0.05)))
+                            })
+                            .when(is_default, |d| d.hover(|s| s.opacity(0.9)))
+                            .child(b.label.clone()),
+                    )
             })
             .collect();
         let extra = self.extra.clone().map(|f| f(window, cx));
@@ -413,7 +429,7 @@ impl Render for DialogView {
             .children(fields)
             .children(checks)
             .children(extra)
-            .child(div().flex().justify_end().gap_2().pt(px(4.)).children(buttons))
+            .child(div().flex().justify_end().gap_1().pt(px(1.)).mr(px(-3.)).children(buttons))
     }
 }
 

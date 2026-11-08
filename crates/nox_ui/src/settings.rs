@@ -310,23 +310,28 @@ impl SettingsView {
             ),
             SettingKind::Enum(opts) => {
                 let cur = value.and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                // A track with inset, individually rounded segments: GPUI clips children to a
+                // rectangle, so a fill flush with the rounded border would poke out at the corners.
                 div()
                     .flex()
-                    .rounded(px(6.))
+                    .gap(px(2.))
+                    .p(px(2.))
+                    .rounded(px(7.))
                     .border_1()
                     .border_color(theme.border)
-                    .overflow_hidden()
                     .children(opts.iter().map(|o| {
                         let on = cur == *o;
                         let o2: &'static str = o;
                         div()
                             .id(SharedString::from(format!("seg-{key}-{o}")))
-                            .px(px(9.))
-                            .py(px(3.))
+                            .px(px(8.))
+                            .py(px(2.))
+                            .rounded(px(5.))
                             .text_size(px(12.))
                             .cursor_pointer()
                             .text_color(if on { theme.bg } else { theme.text })
                             .when(on, |d| d.bg(theme.text))
+                            .when(!on, |d| d.hover(|s| s.bg(theme.text.opacity(0.06))))
                             .when(!disabled, |d| d.on_click(move |_, _, cx| set_value(cx, key, o2)))
                             .child(*o)
                     }))
@@ -758,6 +763,7 @@ fn stepper(
             .flex()
             .items_center()
             .justify_center()
+            .rounded(px(4.))
             .cursor_pointer()
             .hover(|s| s.bg(theme.text.opacity(0.06)))
             .child(label)
