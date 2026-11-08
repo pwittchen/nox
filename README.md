@@ -29,6 +29,7 @@ Requires macOS 13+ on Apple Silicon and Rust 1.99 (`rust-toolchain.toml`).
 scripts/run.sh                      # build and run from the checkout (as "nox")
 cargo run -p nox --bin nox-app      # run the bare binary
 cargo test --workspace              # tests
+scripts/test.sh                     # audit, fmt check, lint, tests + summary table
 cargo bench -p nox_terminal         # parser / encoder benches
 scripts/bundle.sh                   # dist/nox.app (ad-hoc signed)
 scripts/release/make_dmg.sh         # dist/nox-macos-aarch64.dmg
@@ -37,6 +38,12 @@ scripts/release/make_dmg.sh         # dist/nox-macos-aarch64.dmg
 `scripts/run.sh` builds the app and the `nox` CLI and runs them from a small dev bundle,
 `target/debug/nox.app`, so the menu bar and the Dock show "nox" (a bare `cargo run` shows up in
 the Dock as `nox-app`). Arguments are passed through to the app.
+
+`scripts/test.sh` runs the checks CI runs (`cargo audit`, `cargo fmt --check`, `cargo lint`,
+`cargo test --workspace`) and prints a table with each step's result, time and details; it
+exits non-zero if any step failed. Name steps to run only those (`scripts/test.sh fmt lint`),
+`-v` streams their output, and `--coverage` runs the tests under `cargo llvm-cov` and adds a
+per-crate coverage table. Logs go to `target/test-logs/`.
 
 `NOX_HOME=/some/dir` runs nox with a separate config, session and socket directory.
 
