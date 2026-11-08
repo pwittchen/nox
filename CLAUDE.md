@@ -16,7 +16,7 @@ cargo lint                                        # clippy::pedantic, -D warning
 cargo audit                                       # advisories; accepted ones in .cargo/audit.toml (CI)
 cargo fmt --all                                   # rustfmt.toml: max_width 110
 cargo bench -p nox_terminal                       # parser / encoder benches
-scripts/test.sh [audit|fmt|lint|test] [-v]        # CI checks locally + summary table
+scripts/test.sh [steps] [-v] [--coverage]         # CI checks locally + summary table
 scripts/bundle.sh                                 # dist/nox.app (ad-hoc signed)
 scripts/release/make_dmg.sh                       # dist/nox-macos-aarch64.dmg
 ```
