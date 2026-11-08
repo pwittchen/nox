@@ -1551,8 +1551,8 @@ shell ◀───────────────────────�
 - SemVer. A release is cut by pushing a tag `vX.Y.Z`; the tag is the source of truth for the
   version. The release workflow writes it into the workspace `version` in `Cargo.toml` and the
   workspace entries of `Cargo.lock` (`scripts/release/set_version.sh`) before building, and for
-  stable tags commits that bump to `master` afterwards, so `Cargo.toml` there always holds the
-  latest released version. A tag that isn't valid SemVer fails the release.
+  stable tags first commits that bump to `master`, before the build, so `Cargo.toml` there
+  always holds the latest released version. A tag that isn't valid SemVer fails the release.
 - `CHANGELOG.md`: changes for the next release go into the `## [Unreleased]` section at the top
   (optional). On release, `scripts/release/changelog.sh` takes the notes from that section if it
   has content, else from an existing `## [X.Y.Z]` section, else from the commit subjects since
@@ -1584,9 +1584,13 @@ Names and flow are shared with the author's other macOS apps (kayet, zora):
 | `SPARKLE_ED_PRIVATE_KEY`       | EdDSA private key for signing update archives (see 15.3); not set until public |
 | `HOMEBREW_TAP_TOKEN`           | PAT that can start workflows in `pwittchen/homebrew-tap`; not set until public |
 
-`release.yml` (triggered by `push: tags: ['v*']`; a `build` job on `macos-15` arm64, then a
-`release` job on Linux):
+`release.yml` (triggered by `push: tags: ['v*']`; a `commit-version` job on Linux, then a
+`build` job on `macos-15` arm64, then a `release` job on Linux):
 
+0. Stable tags on `master` only: commit the version bump and the new `CHANGELOG.md` section as
+   `Release X.Y.Z` (by `github-actions[bot]`, rebased onto the current `master`) and push it.
+   This runs before anything is built, so a rejected push fails the release early; pre-release
+   tags and tags not on `master` skip the commit and go straight to the build.
 1. Check out, set the workspace version from the tag (15.1), `cargo test --release`.
 2. `cargo build --release --target aarch64-apple-darwin`, bundle `nox.app` (Info.plist with
    version numbers from 15.1, `SUFeedURL`, `SUPublicEDKey`), embed `Sparkle.framework` in
@@ -1621,9 +1625,6 @@ Names and flow are shared with the author's other macOS apps (kayet, zora):
     half-uploaded release.
 12. Start the `update-formulae.yml` workflow of `pwittchen/homebrew-tap` (cask `nox`) with
     `HOMEBREW_TAP_TOKEN` (stable releases of a public repository only).
-13. Stable tags on `master` only: commit the version bump and the new `CHANGELOG.md` section as
-    `Release X.Y.Z` (by `github-actions[bot]`, rebased onto the current `master`) and push it.
-    This runs after the release is published, so a rejected push doesn't affect the release.
 
 The same steps live in `scripts/release/*.sh`, so a release can be built and notarized locally
 from a Mac with the certificate in the login keychain, if CI is unavailable:
