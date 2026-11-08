@@ -692,7 +692,7 @@ impl Root {
     }
 
     pub fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::dialog::is_open(cx) || self.palette.is_some() || self.rename.is_some() {
+        if crate::dialog::is_open(window, cx) || self.palette.is_some() || self.rename.is_some() {
             return;
         }
         if let Some(p) = self.focused_pane() {

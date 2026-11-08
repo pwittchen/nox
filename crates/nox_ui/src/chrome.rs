@@ -76,7 +76,7 @@ pub fn render_root(root: &mut Root, window: &mut Window, cx: &mut Context<Root>)
         let top = (area.y + (area.h - crate::palette::PALETTE_MAX_HEIGHT) / 2.).max(area.y + 8.);
         div().absolute().top(px(top)).left(px(left)).w(px(w)).child(p.clone())
     });
-    let dialog = crate::dialog::render_overlay(cx);
+    let dialog = crate::dialog::render_overlay(window, cx);
     let toasts = crate::toast::render(cx);
 
     let mut el = div()

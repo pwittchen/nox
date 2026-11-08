@@ -414,7 +414,9 @@ keeps the toggle and the buttons.
   monochrome-filled and focused, `Esc` cancels, `Tab` cycles). Used for: closing a tab / pane /
   the app while a process other than the shell is running (`Cancel` / `Close`); closing a
   workspace (with the number of running processes and working agents); trusting a project file
-  (see 4.7); resuming agents on launch (see 7.12).
+  (see 4.7); resuming agents on launch (see 7.12). A sheet opens over the window that asked for
+  it: one started from Settings (e.g. Install Agent Hooks…) shows in the Settings window, not
+  behind it in the main window.
 - Non-blocking notices (toast, bottom-right of the window, 4 s): config parse errors, invalid
   values, unknown theme, shell failed to start (with the error), font not found.
 

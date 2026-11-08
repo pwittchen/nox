@@ -5,8 +5,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Global, KeyBinding,
-    SharedString, Window, actions, div, prelude::*, px,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Global,
+    KeyBinding, SharedString, Window, actions, div, prelude::*, px,
 };
 
 use crate::text_input::{InputEvent, TextInput};
@@ -67,8 +67,10 @@ pub struct DialogView {
     restore_focus: Option<FocusHandle>,
 }
 
+/// The open sheet and the window it belongs to (the one that opened it, e.g. Settings), so it
+/// renders there and not behind it in the main window.
 #[derive(Default)]
-pub struct ActiveDialog(pub Option<Entity<DialogView>>);
+pub struct ActiveDialog(pub Option<(Entity<DialogView>, AnyWindowHandle)>);
 impl Global for ActiveDialog {}
 
 impl Focusable for DialogView {
@@ -194,7 +196,7 @@ impl DialogBuilder {
                 window.focus(&v.focus);
             }
         }
-        cx.set_global(ActiveDialog(Some(view)));
+        cx.set_global(ActiveDialog(Some((view, window.window_handle()))));
         window.refresh();
     }
 }
@@ -216,8 +218,11 @@ pub fn confirm(
         .show(window, cx);
 }
 
-pub fn is_open(cx: &App) -> bool {
-    cx.try_global::<ActiveDialog>().is_some_and(|d| d.0.is_some())
+/// Whether a sheet is open in `window`.
+pub fn is_open(window: &Window, cx: &App) -> bool {
+    cx.try_global::<ActiveDialog>()
+        .and_then(|d| d.0.as_ref())
+        .is_some_and(|(_, w)| *w == window.window_handle())
 }
 
 fn close(window: &mut Window, cx: &mut App, restore: Option<FocusHandle>) {
@@ -412,9 +417,13 @@ impl Render for DialogView {
     }
 }
 
-/// The overlay (dimmed backdrop + centered sheet) for the root view.
-pub fn render_overlay(cx: &App) -> Option<AnyElement> {
-    let view = cx.try_global::<ActiveDialog>()?.0.clone()?;
+/// The overlay (dimmed backdrop + centered sheet) for a window's root view; `None` unless the
+/// open sheet belongs to `window`.
+pub fn render_overlay(window: &Window, cx: &App) -> Option<AnyElement> {
+    let (view, handle) = cx.try_global::<ActiveDialog>()?.0.clone()?;
+    if handle != window.window_handle() {
+        return None;
+    }
     let theme = Theme::global(cx);
     Some(
         div()

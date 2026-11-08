@@ -815,11 +815,13 @@ impl Render for SettingsView {
                 .child(s.label())
         });
         let _ = section_of_key;
+        let dialog = crate::dialog::render_overlay(window, cx);
         div()
             .id("settings-root")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .size_full()
+            .relative()
             .flex()
             .bg(theme.bg)
             .text_color(theme.text)
@@ -919,5 +921,6 @@ impl Render for SettingsView {
                             )),
                     ),
             )
+            .children(dialog)
     }
 }
