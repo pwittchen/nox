@@ -9,6 +9,13 @@
   `app.confirm_quit` (Settings → General). The window's close button hides nox; the
   Dock icon brings it back.
 
+## [0.1.1] — 2026-11-08
+
+- Show the Claude icon while Claude Code is working (757cb49)
+- Keep Claude's agent state correct when hooks miss a turn (5436c3e)
+- Add install and update instructions to the README (5618d8a)
+- Take the release version from the git tag and update the changelog (c6f87d7)
+
 ## [0.1.0] — unreleased
 
 First implementation of SPEC.md: GPUI terminal with splits, tabs (top / bottom / sidebar),
