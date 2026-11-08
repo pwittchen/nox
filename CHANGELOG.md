@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.1.2 — 2026-11-08
+
 - nox updates itself: nox → Check for Updates…, the palette, the About window and Settings check
   GitHub Releases, then download, verify (SHA-256 + Developer ID signature) and install the
   update with a relaunch. A daily automatic check is on by default (`app.check_for_updates`).
