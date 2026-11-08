@@ -312,7 +312,8 @@ impl Root {
         cx.notify();
     }
 
-    /// A tab was dropped on another tab: reorder, or move between workspaces.
+    /// A tab was dropped on another tab (or past the last one, `index` = tab count): it takes
+    /// that tab's place, moving between workspaces when it came from another one.
     pub fn drop_tab(
         &mut self,
         d: &DraggedTab,
@@ -321,14 +322,45 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if d.ws == ws_idx {
-            if let Some(from) = self.ws.list[ws_idx].tab_index(d.tab) {
-                self.ws.list[ws_idx].move_tab(from, index);
+        if ws_idx >= self.ws.len() {
+            return;
+        }
+        if d.ws != ws_idx {
+            let target = self.ws.list[ws_idx].id;
+            self.move_tab_to_workspace(d.ws, d.tab, ws_idx, window, cx);
+            // Closing an emptied source workspace may have shifted the indices.
+            let Some(w) = self.ws.index_of(target) else { return };
+            if let Some(from) = self.ws.list[w].tab_index(d.tab)
+                && self.ws.list[w].move_tab(from, index)
+            {
                 self.session_changed(cx);
                 cx.notify();
             }
-        } else {
-            self.move_tab_to_workspace(d.ws, d.tab, ws_idx, window, cx);
+        } else if let Some(from) = self.ws.list[ws_idx].tab_index(d.tab)
+            && self.ws.list[ws_idx].move_tab(from, index)
+        {
+            self.session_changed(cx);
+            cx.notify();
+        }
+        // The press that started the drag focused the root; give the keys back to the pane.
+        self.focus_active(window, cx);
+    }
+
+    /// Workspace reordering by drag in the sidebar (SPEC §6.7); the active one stays active.
+    pub fn reorder_workspace(&mut self, from: usize, to: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ws.reorder(from, to) {
+            self.session_changed(cx);
+            cx.notify();
+        }
+        self.focus_active(window, cx);
+    }
+
+    /// Folds / unfolds a workspace's tabs in the sidebar's all-workspaces list (SPEC §5.4).
+    pub fn toggle_workspace_collapsed(&mut self, ws_idx: usize, cx: &mut Context<Self>) {
+        if let Some(w) = self.ws.list.get_mut(ws_idx) {
+            w.collapsed = !w.collapsed;
+            self.session_changed(cx);
+            cx.notify();
         }
     }
 
@@ -888,15 +920,51 @@ panes = [{ command = "true two" }, {}]
             assert!(r.panes.contains_key(&p1));
             assert_eq!(r.pane_workspace(p1), Some(r.ws.list[1].id));
             // Reorder inside the destination by drop.
-            let d = DraggedTab { ws: 1, tab: t1, label: "x".into() };
+            let d = DraggedTab { ws: 1, index: 1, tab: t1, label: "x".into() };
             r.drop_tab(&d, 1, 0, w, cx);
             assert_eq!(r.ws.list[1].tabs[0].id, t1);
-            // Dropping the last tab of workspace 0 elsewhere closes it (close_when_empty).
-            let d = DraggedTab { ws: 0, tab: t0, label: "y".into() };
-            r.drop_tab(&d, 1, 0, w, cx);
+            // Dropped past the last tab: goes to the end.
+            let d = DraggedTab { ws: 1, index: 0, tab: t1, label: "x".into() };
+            r.drop_tab(&d, 1, 2, w, cx);
+            assert_eq!(r.ws.list[1].tabs[1].id, t1);
+            // Dropping the last tab of workspace 0 on a tab elsewhere closes it
+            // (close_when_empty) and puts the tab in that tab's place, though indices shifted.
+            let d = DraggedTab { ws: 0, index: 0, tab: t0, label: "y".into() };
+            r.drop_tab(&d, 1, 1, w, cx);
             assert_eq!(r.ws.len(), 1);
             assert_eq!(r.ws.list[0].name, "dest");
             assert_eq!(r.ws.list[0].tabs.len(), 3);
+            assert_eq!(r.ws.list[0].tabs[1].id, t0);
+            // Out of range target: nothing happens.
+            r.drop_tab(&d, 5, 0, w, cx);
+        });
+    }
+
+    #[gpui::test]
+    fn reordering_and_folding_workspaces(cx: &mut TestAppContext) {
+        let (root, cx) = open(cx, quiet_config());
+        root.update_in(cx, |r, w, cx| {
+            for name in ["b", "c"] {
+                let idx = r.create_workspace(Some(name.into()), None, w, cx);
+                r.add_tab(idx, PaneSpawn::default(), w, cx);
+            }
+            r.switch_workspace(1, w, cx);
+            let names = |r: &Root| r.ws.list.iter().map(|w| w.name.clone()).collect::<Vec<_>>();
+            let first = r.ws.list[0].name.clone();
+            r.reorder_workspace(0, 2, w, cx);
+            assert_eq!(names(r), ["b".to_string(), "c".into(), first]);
+            assert_eq!(r.ws.active().name, "b", "the active workspace stays active");
+            assert_eq!(r.ws.active, 0);
+            r.reorder_workspace(2, 0, w, cx);
+            assert_eq!(r.ws.active().name, "b");
+            assert_eq!(r.ws.active, 1);
+            r.reorder_workspace(9, 0, w, cx);
+            assert!(!r.ws.list[1].collapsed);
+            r.toggle_workspace_collapsed(1, cx);
+            assert!(r.ws.list[1].collapsed);
+            r.toggle_workspace_collapsed(1, cx);
+            assert!(!r.ws.list[1].collapsed);
+            r.toggle_workspace_collapsed(9, cx);
         });
     }
 

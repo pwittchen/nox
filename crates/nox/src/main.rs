@@ -136,6 +136,7 @@ fn main() {
         let window = cx
             .open_window(options, |window, cx| {
                 nox_ui::window_bg::apply(window, nox_ui::theme::Theme::global(cx));
+                nox_ui::window_bg::take_over_window_drag(window);
                 cx.new(|cx| Root::new(initial, window, cx))
             })
             .expect("open the nox window");

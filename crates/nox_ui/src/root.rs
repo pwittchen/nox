@@ -81,6 +81,12 @@ pub struct Root {
     pub rename: Option<Rename>,
     pub drag_divider: Option<SplitPath>,
     pub drag_sidebar: bool,
+    /// The tab strip's horizontal scroll (top / bottom bar, SPEC §5.2).
+    pub tab_strip: gpui::ScrollHandle,
+    /// The tab the strip last scrolled into view; a different active tab scrolls again.
+    pub tab_strip_revealed: Option<TabId>,
+    /// Whether the last render showed the strip's arrows (they change its width).
+    pub tab_strip_arrows: bool,
     pub focus_handle: FocusHandle,
     pub ipc: Option<crate::coop::IpcState>,
     pub attention: crate::attention::Attention,
@@ -146,6 +152,9 @@ impl Root {
             rename: None,
             drag_divider: None,
             drag_sidebar: false,
+            tab_strip: gpui::ScrollHandle::new(),
+            tab_strip_revealed: None,
+            tab_strip_arrows: false,
             focus_handle,
             ipc: None,
             attention: crate::attention::Attention::default(),

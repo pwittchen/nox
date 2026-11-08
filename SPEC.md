@@ -320,12 +320,22 @@ Title bar (left to right):
   `ansi.green` at low alpha when the tab is active, muted otherwise), the index and the title. Active tab:
   `bg-elevated` fill with a hairline border; inactive: no fill, `text-muted` label. Pills share
   the available width, between 120 px and 260 px each; when they don't fit, the strip scrolls
-  horizontally (trackpad / wheel), keeping the active tab in view. Hovering a pill shows its `×`
-  in place of the icon; middle-click closes. Drag to reorder (GPUI `on_drag` / `on_drop`);
-  double-click to rename inline (`Enter` confirms, `Esc` cancels, an empty name restores the
+  horizontally (trackpad / wheel), keeping the active tab in view (it scrolls to a tab that
+  becomes active), and two small arrows `‹ ›` appear right after it: each click scrolls by about
+  the strip's width, snapping to a tab edge; an arrow dims when there's nothing more on its side.
+  They go away once all tabs fit. Hovering a pill shows its `×`
+  in place of the icon; middle-click closes. Drag to reorder (GPUI `on_drag` / `on_drop`): a
+  dropped pill takes the place of the pill it's dropped on, and a 2 px `accent` edge on that
+  pill marks the side it lands on; dropped on the empty space after the strip it goes last.
+  Double-click to rename inline (`Enter` confirms, `Esc` cancels, an empty name restores the
   automatic title).
-- Empty space in the title bar drags the window (`window.start_window_move()`); double-click
-  zooms or minimizes per the system setting.
+- Empty space in the title bar drags the window: the bar's background, the gaps between and
+  around the pills and the stretch after the strip, which never shrinks below 56 px (when the
+  pills don't fit, the strip scrolls instead), so the window can always be grabbed, however
+  many tabs are open. A double-click there zooms or minimizes per the system setting. Pills,
+  the chip and the buttons never move the window: `AppKit`'s own title-bar dragging is turned
+  off for the main window (`-mouseDownCanMoveWindow` → `NO`), and empty space starts the move
+  with `performWindowDragWithEvent:`.
 - Right side: **⚙** opens Settings (`⌘,`, see 5.9); **⌘** opens the command palette (see 5.6);
   **+** opens a new tab.
 
@@ -377,7 +387,10 @@ keeps the toggle and the buttons.
   line, come the tabs of the active workspace.
 - `tabs.sidebar_workspaces = "all"` lists every workspace as a collapsible group (header row +
   its tabs) instead: one column showing all projects and all their agents. Clicking a tab of
-  another workspace switches to it. Default `"all"`.
+  another workspace switches to it. Default `"all"`. Hovering a header turns its color swatch
+  into a disclosure chevron (`⌄`, `›` when folded); clicking it folds or unfolds the group's
+  tabs without switching workspace. A folded header shows its tab count, muted. The folded
+  state is per workspace and persisted in the session.
 - Pinned to the bottom of the sidebar, under a 1 px line, an **Agents** section (`Agents · n`)
   lists every running agent of every workspace, one row each: process icon, agent name (see
   4.8), a muted second line with its workspace and state (needs input / idle · unseen /
@@ -386,7 +399,12 @@ keeps the toggle and the buttons.
   has the background pill; clicking a row jumps to that pane (switching workspace and tab). The
   section takes at most 45 % of the sidebar height and scrolls; it is not shown when no agent
   runs, or when `tabs.sidebar_agents = false` (default `true`).
-- Drag to reorder, double-click to rename, context menu as for pills (see 5.5).
+- Drag to reorder, double-click to rename, context menu as for pills (see 5.5). Tab rows drop
+  like pills (a 2 px `accent` edge above or below marks where it lands); a row dropped on a
+  row of another workspace (`"all"`) moves there, into that row's place.
+- Drag a workspace header to reorder workspaces: dropped on another workspace's block (its
+  header, plus its tabs in `"all"` mode) it takes that workspace's place, marked by an `accent`
+  edge above or below the block. The active workspace stays active.
 - Sidebar width: drag its 1px divider, min 160 px, max 360 px, default 220 px; persisted.
 - `⌘\` or the sidebar toggle `[◧]` in the title bar hides and shows it; the state is persisted.
   While hidden, `⌘1…9` and the palette still switch tabs.
@@ -618,7 +636,8 @@ tabs and splits, and the agent sessions that were running in them.
 - **Move a tab** to another workspace (tab context menu, Move to Workspace ▸, or drag a tab onto
   a workspace in the sidebar / switcher): its panes keep running; agents in it join the target
   workspace's bus (their claims are released).
-- **Reorder** workspaces by dragging in the switcher or the sidebar (`"all"` mode).
+- **Reorder** workspaces by dragging their headers in the sidebar (both `sidebar_workspaces`
+  modes, see 5.4).
 - **Close** a workspace (chip menu, palette, `⌃⌘W`): closes all its tabs, asking first when
   processes or agents are running (see 5.7). Closing the last tab of a workspace closes the
   workspace (`workspaces.close_when_empty = true`; otherwise a new tab opens in its root) and

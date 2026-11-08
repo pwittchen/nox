@@ -17,6 +17,8 @@ use crate::theme::Theme;
 #[derive(Clone)]
 pub struct DraggedTab {
     pub ws: usize,
+    /// Its index when the drag started (where the drop marker goes).
+    pub index: usize,
     pub tab: TabId,
     pub label: SharedString,
 }
@@ -37,6 +39,57 @@ impl Render for DraggedTab {
     }
 }
 
+/// Dragged workspace payload (reorder in the sidebar).
+#[derive(Clone)]
+pub struct DraggedWorkspace {
+    pub ws: usize,
+    pub label: SharedString,
+    pub swatch: Hsla,
+}
+
+impl Render for DraggedWorkspace {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::global(cx);
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(10.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .bg(theme.bg_elevated)
+            .border_1()
+            .border_color(theme.border)
+            .text_size(px(12.))
+            .text_color(theme.text)
+            .child(div().size(px(9.)).rounded(px(2.)).bg(self.swatch))
+            .child(self.label.clone())
+    }
+}
+
+/// Where a dragged item lands relative to the drop target: before it (dragged from further
+/// down / right, or from another list) or after it.
+fn lands_after(from_same_list: bool, from: usize, target: usize) -> bool {
+    from_same_list && from < target
+}
+
+/// A 2 px accent edge on the side of a drop target where the dragged item will land; the
+/// negative margin cancels the border so nothing shifts.
+fn drop_marker(s: gpui::StyleRefinement, vertical: bool, after: bool, accent: Hsla) -> gpui::StyleRefinement {
+    let s = s.border_color(accent);
+    match (vertical, after) {
+        (false, false) => s.border_l_2().ml(px(-2.)),
+        (false, true) => s.border_r_2().mr(px(-2.)),
+        (true, false) => s.border_t_2().mt(px(-2.)),
+        (true, true) => s.border_b_2().mb(px(-2.)),
+    }
+}
+
+/// Mouse-downs on interactive title-bar items stop here, so they don't move the window.
+fn keep_press(_: &MouseDownEvent, _: &mut Window, cx: &mut gpui::App) {
+    cx.stop_propagation();
+}
+
 #[must_use]
 pub fn status_dot(theme: &Theme, status: TabStatus) -> Option<Hsla> {
     crate::pane::status_color(theme, status)
@@ -53,6 +106,7 @@ fn icon_button(id: impl Into<SharedString>, icon: &'static str, theme: &Theme) -
         .rounded(px(6.))
         .text_color(theme.text_muted)
         .hover(|s| s.bg(theme.text.opacity(0.07)).text_color(theme.text))
+        .on_mouse_down(MouseButton::Left, keep_press)
         .child(svg().path(icon).size(px(14.)).text_color(theme.text_muted))
 }
 
@@ -151,14 +205,34 @@ fn on_root_mouse_up(root: &mut Root, _: &MouseUpEvent, _: &mut Window, cx: &mut 
 
 // ---- title bar -------------------------------------------------------------------------------
 
-fn drag_region(id: &'static str) -> Stateful<Div> {
-    div().id(id).flex_1().h_full().on_mouse_down(MouseButton::Left, |ev: &MouseDownEvent, window, _| {
-        if ev.click_count == 2 {
-            window.titlebar_double_click();
-        } else {
-            window.start_window_move();
-        }
-    })
+/// Empty title-bar space (the bar's background, the gaps between and around the pills, and this
+/// grab area) moves the window; a double-click zooms or minimizes per the system setting. The
+/// interactive items on the bar keep their presses ([`keep_press`]).
+fn on_titlebar_press(ev: &MouseDownEvent, window: &mut Window, _: &mut gpui::App) {
+    if ev.click_count == 2 {
+        window.titlebar_double_click();
+    } else {
+        crate::window_bg::start_move(window);
+    }
+}
+
+/// Smallest empty stretch kept next to the tab strip, so the window can still be grabbed when
+/// the tabs overflow (the strip scrolls instead).
+pub const MIN_GRAB_PX: f32 = 56.;
+
+/// The flexible space after the tab strip: a tab dropped here goes to the end. In the title bar
+/// it never shrinks below [`MIN_GRAB_PX`], which keeps a place to grab the window.
+fn strip_tail(root: &Root, id: &'static str, grab: bool, cx: &mut Context<Root>) -> AnyElement {
+    let ws = root.ws.active;
+    let n = root.ws.active().tabs.len();
+    div()
+        .id(id)
+        .debug_selector(|| id.to_string())
+        .flex_1()
+        .h_full()
+        .when(grab, |d| d.min_w(px(MIN_GRAB_PX)))
+        .on_drop(cx.listener(move |root, d: &DraggedTab, window, cx| root.drop_tab(d, ws, n, window, cx)))
+        .into_any_element()
 }
 
 fn render_titlebar(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
@@ -176,17 +250,19 @@ fn render_titlebar(root: &mut Root, window: &mut Window, cx: &mut Context<Root>)
         .pl(px(lights))
         .pr(px(8.))
         .gap_2()
-        .bg(theme.bg_sidebar);
+        .bg(theme.bg_sidebar)
+        .on_mouse_down(MouseButton::Left, on_titlebar_press);
     match pos {
         nox_config::TabsPosition::Bottom => {
-            bar = bar.child(drag_region("titlebar-drag"));
+            bar = bar.child(div().id("titlebar-drag").flex_1().h_full());
         }
         nox_config::TabsPosition::Top | nox_config::TabsPosition::Left => {
             bar = bar.child(sidebar_toggle(root, &theme, cx));
-            if root.tab_bar_shown(cx) {
+            let tabs = root.tab_bar_shown(cx);
+            if tabs {
                 bar = bar.child(render_workspace_chip(root, cx)).child(render_tab_strip(root, cx));
             }
-            bar = bar.child(drag_region("titlebar-drag")).child(title_bar_buttons(cx));
+            bar = bar.child(strip_tail(root, "titlebar-drag", tabs, cx)).child(title_bar_buttons(cx));
         }
     }
     bar.into_any_element()
@@ -277,6 +353,7 @@ fn render_workspace_chip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement 
         .text_size(px(12.))
         .cursor_pointer()
         .hover(|s| s.bg(theme.text.opacity(0.05)))
+        .on_mouse_down(MouseButton::Left, keep_press)
         .child(div().size(px(9.)).rounded(px(2.)).bg(swatch))
         .child(
             div()
@@ -380,14 +457,11 @@ fn tab_pill(root: &Root, ws_idx: usize, index: usize, active: bool, cx: &mut Con
             .into_any_element()
     };
 
-    div()
+    let pill = div()
         .id(SharedString::from(format!("tab-pill-{tab_id}")))
         .group(group)
         .flex()
-        .flex_1()
-        .min_w(px(120.))
-        .max_w(px(260.))
-        .h(px(28.))
+        .size_full()
         .px(px(9.))
         .gap(px(7.))
         .items_center()
@@ -414,6 +488,7 @@ fn tab_pill(root: &Root, ws_idx: usize, index: usize, active: bool, cx: &mut Con
                 root.activate_tab(index, window, cx);
             }
         }))
+        .on_mouse_down(MouseButton::Left, keep_press)
         .on_mouse_down(
             MouseButton::Middle,
             cx.listener(move |root, _, window, cx| root.request_close_tab(ws_idx, tab_id, window, cx)),
@@ -424,20 +499,144 @@ fn tab_pill(root: &Root, ws_idx: usize, index: usize, active: bool, cx: &mut Con
                 crate::menus::tab_context_menu(root, ws_idx, tab_id, window, cx);
             }),
         )
-        .on_drag(DraggedTab { ws: ws_idx, tab: tab_id, label }, |d, _, _, cx| cx.new(|_| d.clone()))
-        .drag_over::<DraggedTab>(move |s, _, _, cx| s.bg(Theme::global(cx).accent.opacity(0.12)))
+        .on_drag(DraggedTab { ws: ws_idx, index, tab: tab_id, label }, |d, _, _, cx| cx.new(|_| d.clone()));
+    // The drop target wraps the pill, so its marker sits at the pill's edge.
+    div()
+        .id(SharedString::from(format!("tab-drop-{tab_id}")))
+        .debug_selector(|| format!("tab-pill-{index}"))
+        .flex()
+        .flex_1()
+        .min_w(px(120.))
+        .max_w(px(260.))
+        .h(px(28.))
+        .child(pill)
+        .drag_over::<DraggedTab>(move |s, d, _, cx| {
+            if d.tab == tab_id {
+                return s;
+            }
+            drop_marker(s, false, lands_after(d.ws == ws_idx, d.index, index), Theme::global(cx).accent)
+        })
         .on_drop(
             cx.listener(move |root, d: &DraggedTab, window, cx| root.drop_tab(d, ws_idx, index, window, cx)),
         )
         .into_any_element()
 }
 
+/// What the strip's arrows show: whether the tabs overflow, and whether there is more to the left
+/// / right. Read from the scroll state of the last layout.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StripOverflow {
+    pub overflows: bool,
+    pub more_left: bool,
+    pub more_right: bool,
+}
+
+impl StripOverflow {
+    #[must_use]
+    pub fn of(handle: &gpui::ScrollHandle) -> Self {
+        let max = f32::from(handle.max_offset().width);
+        let x = f32::from(handle.offset().x);
+        Self { overflows: max > 0.5, more_left: x < -0.5, more_right: max > 0.5 && x > -max + 0.5 }
+    }
+}
+
+/// Scrolls the strip by about its visible width (`dir` −1 = left, 1 = right), keeping a sliver of
+/// the previous view for context, then snaps so the tab nearest the leading edge (left when going
+/// left, right when going right) lines up with it rather than ending half cut off.
+pub fn scroll_tab_strip(handle: &gpui::ScrollHandle, dir: f32) {
+    let max = f32::from(handle.max_offset().width);
+    let strip = handle.bounds();
+    let (left, right) = (f32::from(strip.left()), f32::from(strip.right()));
+    let page = (f32::from(strip.size.width) - 48.).max(80.);
+    let off = handle.offset();
+    let target = f32::from(off.x) - dir * page;
+    let mut best: Option<f32> = None;
+    for ix in 0.. {
+        let Some(item) = handle.bounds_for_item(ix) else { break };
+        // The offset that puts this tab's edge on the strip's edge.
+        let x = if dir < 0. { left - f32::from(item.left()) } else { right - f32::from(item.right()) };
+        if best.is_none_or(|b| (x - target).abs() < (b - target).abs()) {
+            best = Some(x);
+        }
+    }
+    let x = best.unwrap_or(target).clamp(-max, 0.);
+    handle.set_offset(gpui::point(px(x), off.y));
+}
+
+/// Scrolls the strip so tab `ix` is fully visible, measured on the current layout. True when the
+/// offset changed.
+fn reveal_tab(handle: &gpui::ScrollHandle, ix: usize) -> bool {
+    let Some(item) = handle.bounds_for_item(ix) else { return false };
+    let strip = handle.bounds();
+    let max = handle.max_offset().width;
+    let off = handle.offset();
+    let mut x = off.x;
+    if item.left() + x < strip.left() {
+        x = strip.left() - item.left();
+    } else if item.right() + x > strip.right() {
+        x = strip.right() - item.right();
+    }
+    let x = x.clamp(-max, px(0.));
+    if (x - off.x).abs() < px(0.5) {
+        return false;
+    }
+    handle.set_offset(gpui::point(x, off.y));
+    true
+}
+
+fn strip_arrow(
+    id: &'static str,
+    dir: f32,
+    enabled: bool,
+    handle: &gpui::ScrollHandle,
+    theme: &Theme,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let angle = if dir < 0. { std::f32::consts::FRAC_PI_2 } else { -std::f32::consts::FRAC_PI_2 };
+    let handle = handle.clone();
+    div()
+        .id(id)
+        .debug_selector(|| id.to_string())
+        .size(px(22.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .on_mouse_down(MouseButton::Left, keep_press)
+        .child(
+            svg()
+                .path("icons/ui/chevron-down.svg")
+                .size(px(12.))
+                .text_color(if enabled { theme.text_muted } else { theme.text_muted.opacity(0.35) })
+                .with_transformation(gpui::Transformation::rotate(gpui::radians(angle))),
+        )
+        .when(enabled, |d| {
+            d.cursor_pointer().hover(|s| s.bg(theme.text.opacity(0.07))).on_click(cx.listener(
+                move |_, _, _, cx| {
+                    scroll_tab_strip(&handle, dir);
+                    cx.notify();
+                },
+            ))
+        })
+        .into_any_element()
+}
+
 fn render_tab_strip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
+    let theme = Theme::global(cx).clone();
     let w = root.ws.active;
     let active = root.ws.active().active_tab;
     let n = root.ws.active().tabs.len();
     let pills: Vec<AnyElement> = (0..n).map(|i| tab_pill(root, w, i, i == active, cx)).collect();
-    div()
+    let handle = root.tab_strip.clone();
+    let state = StripOverflow::of(&handle);
+    // Keep the active tab in view when it changes (new tab, ⌘1…9, switching workspaces), and
+    // when the arrows come or go (they change the strip's width).
+    let active_id = root.ws.active().active().map(|t| t.id);
+    let reveal = active_id != root.tab_strip_revealed || state.overflows != root.tab_strip_arrows;
+    root.tab_strip_revealed = active_id;
+    root.tab_strip_arrows = state.overflows;
+    let strip = div()
         .id("tab-strip")
         .flex()
         .flex_shrink()
@@ -445,7 +644,41 @@ fn render_tab_strip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         .gap(px(4.))
         .items_center()
         .overflow_x_scroll()
-        .children(pills)
+        .track_scroll(&handle)
+        .children(pills);
+    // The scroll state above is from the last layout. Once this one is laid out (the strip
+    // prepaints before this canvas), reveal the active tab and redraw if the offset or the arrows
+    // would change (tabs added or closed, window resized, wheel scrolled). GPUI's own
+    // `scroll_to_item` would measure against the previous frame's strip width.
+    let check = {
+        let handle = handle.clone();
+        gpui::canvas(
+            move |_, window, _| {
+                if reveal && reveal_tab(&handle, active) {
+                    window.request_animation_frame();
+                }
+                if StripOverflow::of(&handle) != state {
+                    window.request_animation_frame();
+                }
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .size_0()
+    };
+    div()
+        .flex()
+        .flex_shrink()
+        .min_w(px(0.))
+        .items_center()
+        .gap(px(2.))
+        .relative()
+        .child(strip)
+        .when(state.overflows, |d| {
+            d.child(strip_arrow("tab-strip-left", -1., state.more_left, &handle, &theme, cx))
+                .child(strip_arrow("tab-strip-right", 1., state.more_right, &handle, &theme, cx))
+        })
+        .child(check)
         .into_any_element()
 }
 
@@ -464,12 +697,14 @@ fn render_bottom_bar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     if tabs {
         bar = bar.child(render_workspace_chip(root, cx)).child(render_tab_strip(root, cx));
     }
-    bar.child(div().flex_1()).child(title_bar_buttons(cx)).into_any_element()
+    bar.child(strip_tail(root, "bottom-bar-tail", false, cx)).child(title_bar_buttons(cx)).into_any_element()
 }
 
 // ---- sidebar ---------------------------------------------------------------------------------
 
-fn sidebar_row(root: &Root, ws_idx: usize, index: usize, cx: &mut Context<Root>) -> AnyElement {
+/// One tab row in the sidebar; `inset` adds the side margin rows inside a workspace block get
+/// from the block.
+fn sidebar_row(root: &Root, ws_idx: usize, index: usize, inset: bool, cx: &mut Context<Root>) -> AnyElement {
     let theme = Theme::global(cx).clone();
     let ws = &root.ws.list[ws_idx];
     let tab = &ws.tabs[index];
@@ -503,9 +738,8 @@ fn sidebar_row(root: &Root, ws_idx: usize, index: usize, cx: &mut Context<Root>)
     } else {
         div().whitespace_nowrap().overflow_hidden().text_ellipsis().child(title).into_any_element()
     };
-    div()
+    let row = div()
         .id(SharedString::from(format!("side-row-{tab_id}")))
-        .mx(px(6.))
         .px(px(8.))
         .py(px(5.))
         .rounded(px(6.))
@@ -549,24 +783,83 @@ fn sidebar_row(root: &Root, ws_idx: usize, index: usize, cx: &mut Context<Root>)
                 crate::menus::tab_context_menu(root, ws_idx, tab_id, window, cx);
             }),
         )
-        .on_drag(DraggedTab { ws: ws_idx, tab: tab_id, label }, |d, _, _, cx| cx.new(|_| d.clone()))
-        .drag_over::<DraggedTab>(move |s, _, _, cx| s.bg(Theme::global(cx).accent.opacity(0.12)))
+        .on_drag(DraggedTab { ws: ws_idx, index, tab: tab_id, label }, |d, _, _, cx| cx.new(|_| d.clone()));
+    div()
+        .id(SharedString::from(format!("side-drop-{tab_id}")))
+        .when(inset, |d| d.mx(px(6.)))
+        .child(row)
+        .drag_over::<DraggedTab>(move |s, d, _, cx| {
+            if d.tab == tab_id {
+                return s;
+            }
+            drop_marker(s, true, lands_after(d.ws == ws_idx, d.index, index), Theme::global(cx).accent)
+        })
         .on_drop(
             cx.listener(move |root, d: &DraggedTab, window, cx| root.drop_tab(d, ws_idx, index, window, cx)),
         )
         .into_any_element()
 }
 
-fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyElement {
+/// A workspace's row in the sidebar. With `groups` (the all-workspaces list) the swatch turns
+/// into a disclosure chevron on hover that folds the group's tabs; a folded group shows its tab
+/// count. The row drags to reorder workspaces.
+fn sidebar_ws_header(root: &Root, ws_idx: usize, groups: bool, cx: &mut Context<Root>) -> AnyElement {
     let theme = Theme::global(cx).clone();
     let ws = &root.ws.list[ws_idx];
     let swatch = ws.color.as_deref().and_then(|c| theme.named(c)).unwrap_or(theme.text_muted.opacity(0.5));
     let status = root.workspace_status(ws, cx);
     let dot = status_dot(&theme, status);
     let active = ws_idx == root.ws.active;
+    let collapsed = groups && ws.collapsed;
+    let group = SharedString::from(format!("side-ws-{}", ws.id.0));
+    let label: SharedString = ws.name.clone().into();
+
+    let swatch_el = div().size(px(9.)).rounded(px(2.)).bg(swatch);
+    let lead: AnyElement = if groups {
+        let chevron = svg()
+            .path("icons/ui/chevron-down.svg")
+            .size(px(12.))
+            .text_color(theme.text_muted)
+            .when(collapsed, |s| {
+                s.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                    -std::f32::consts::FRAC_PI_2,
+                )))
+            });
+        div()
+            .id(("side-ws-fold", ws_idx))
+            .relative()
+            .size(px(14.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(3.))
+            .hover(|s| s.bg(theme.text.opacity(0.1)))
+            .child(div().group_hover(group.clone(), gpui::Styled::invisible).child(swatch_el))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .invisible()
+                    .group_hover(group.clone(), gpui::Styled::visible)
+                    .child(chevron),
+            )
+            .debug_selector(|| format!("side-ws-fold-{ws_idx}"))
+            .on_mouse_down(MouseButton::Left, keep_press)
+            .on_click(cx.listener(move |root, _, _, cx| root.toggle_workspace_collapsed(ws_idx, cx)))
+            .into_any_element()
+    } else {
+        swatch_el.flex_none().into_any_element()
+    };
+    let count = collapsed.then(|| div().text_color(theme.text_muted).child(ws.tabs.len().to_string()));
+
     div()
         .id(("side-ws", ws_idx))
-        .mx(px(6.))
+        .debug_selector(|| format!("side-ws-{ws_idx}"))
+        .group(group)
         .px(px(8.))
         .h(px(30.))
         .flex()
@@ -578,7 +871,7 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
         .cursor_pointer()
         .when(active, |d| d.bg(theme.text.opacity(0.08)).text_color(theme.text))
         .when(!active, |d| d.text_color(theme.text_muted).hover(|s| s.bg(theme.text.opacity(0.04))))
-        .child(div().size(px(9.)).rounded(px(2.)).bg(swatch).flex_none())
+        .child(lead)
         .child(
             div()
                 .flex_1()
@@ -588,6 +881,7 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
                 .text_ellipsis()
                 .child(ws.name.clone()),
         )
+        .children(count)
         .children(dot.map(|c| div().size(px(6.)).rounded_full().bg(c)))
         .when(active, |d| {
             d.child(svg().path("icons/ui/chevron-down.svg").size(px(12.)).text_color(theme.text_muted))
@@ -603,9 +897,35 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
             MouseButton::Right,
             cx.listener(|root, _, window, cx| crate::menus::workspace_menu(root, window, cx)),
         )
-        .drag_over::<DraggedTab>(move |s, _, _, cx| s.bg(Theme::global(cx).accent.opacity(0.12)))
+        .on_drag(DraggedWorkspace { ws: ws_idx, label, swatch }, |d, _, _, cx| cx.new(|_| d.clone()))
+        .drag_over::<DraggedTab>(move |s, d, _, cx| {
+            if d.ws == ws_idx { s } else { s.bg(Theme::global(cx).accent.opacity(0.12)) }
+        })
         .on_drop(cx.listener(move |root, d: &DraggedTab, window, cx| {
             root.move_tab_to_workspace(d.ws, d.tab, ws_idx, window, cx);
+        }))
+        .into_any_element()
+}
+
+/// A workspace's block in the sidebar (its header, plus its tabs in the all-workspaces list):
+/// the drop target for reordering workspaces, marked on the side the dragged one lands.
+fn sidebar_ws_group(ws_idx: usize, rows: Vec<AnyElement>, pad: f32, cx: &mut Context<Root>) -> AnyElement {
+    div()
+        .id(("side-ws-group", ws_idx))
+        .mx(px(6.))
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .pb(px(pad))
+        .children(rows)
+        .drag_over::<DraggedWorkspace>(move |s, d, _, cx| {
+            if d.ws == ws_idx {
+                return s;
+            }
+            drop_marker(s, true, lands_after(true, d.ws, ws_idx), Theme::global(cx).accent)
+        })
+        .on_drop(cx.listener(move |root, d: &DraggedWorkspace, window, cx| {
+            root.reorder_workspace(d.ws, ws_idx, window, cx);
         }))
         .into_any_element()
 }
@@ -722,23 +1042,26 @@ fn render_sidebar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     let all = Settings::global(cx).config.tabs.sidebar_workspaces == nox_config::SidebarWorkspaces::All;
     let mut rows: Vec<AnyElement> = Vec::new();
     if all {
-        // Every workspace as a group: its header row followed by its tabs.
+        // Every workspace as a group: its header row followed by its tabs (unless folded).
         for w in 0..root.ws.len() {
-            rows.push(sidebar_ws_header(root, w, cx));
-            for i in 0..root.ws.list[w].tabs.len() {
-                rows.push(sidebar_row(root, w, i, cx));
+            let mut group = vec![sidebar_ws_header(root, w, true, cx)];
+            if !root.ws.list[w].collapsed {
+                for i in 0..root.ws.list[w].tabs.len() {
+                    group.push(sidebar_row(root, w, i, false, cx));
+                }
             }
-            rows.push(div().h(px(6.)).into_any_element());
+            rows.push(sidebar_ws_group(w, group, 6., cx));
         }
     } else {
         // All workspaces on top, a separator line, then the active workspace's tabs.
         for w in 0..root.ws.len() {
-            rows.push(sidebar_ws_header(root, w, cx));
+            let header = sidebar_ws_header(root, w, false, cx);
+            rows.push(sidebar_ws_group(w, vec![header], 0., cx));
         }
         rows.push(div().mx(px(14.)).my(px(4.)).h(px(1.)).bg(theme.border).into_any_element());
         let w = root.ws.active;
         for i in 0..root.ws.list[w].tabs.len() {
-            rows.push(sidebar_row(root, w, i, cx));
+            rows.push(sidebar_row(root, w, i, true, cx));
         }
     }
     let agents = render_sidebar_agents(root, cx);
@@ -1123,11 +1446,157 @@ mod tests {
         assert!(!root.read_with(cx, |r, _| r.drag_sidebar));
     }
 
+    fn bounds(cx: &mut VisualTestContext, sel: &'static str) -> gpui::Bounds<gpui::Pixels> {
+        cx.debug_bounds(sel).unwrap_or_else(|| panic!("{sel} is rendered"))
+    }
+
+    /// Press at `from`, move past GPUI's drag threshold to `to`, release.
+    fn drag(cx: &mut VisualTestContext, from: gpui::Point<gpui::Pixels>, to: gpui::Point<gpui::Pixels>) {
+        cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(from + point(px(5.), px(0.)), MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    fn tab_ids(root: &Entity<Root>, cx: &mut VisualTestContext, w: usize) -> Vec<TabId> {
+        root.read_with(cx, |r, _| r.ws.list[w].tabs.iter().map(|t| t.id).collect())
+    }
+
+    #[gpui::test]
+    fn dragging_tab_pills_reorders_and_empty_title_bar_moves_the_window(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |_| {});
+        root.update_in(cx, |r, window, cx| {
+            r.new_tab(window, cx);
+            r.new_tab(window, cx);
+        });
+        redraw(&root, cx);
+        let ids = tab_ids(&root, cx, 0);
+        let moves = crate::window_bg::tests::moves();
+
+        // First pill onto the third: it takes the third's place.
+        let (p0, p2) = (bounds(cx, "tab-pill-0"), bounds(cx, "tab-pill-2"));
+        drag(cx, p0.center(), p2.center());
+        assert_eq!(tab_ids(&root, cx, 0), vec![ids[1], ids[2], ids[0]]);
+        // Last onto the first: back to the start.
+        let (p0, p2) = (bounds(cx, "tab-pill-0"), bounds(cx, "tab-pill-2"));
+        drag(cx, p2.center(), p0.center());
+        assert_eq!(tab_ids(&root, cx, 0), ids);
+        // Onto the empty space after the strip: to the end.
+        let (p0, tail) = (bounds(cx, "tab-pill-0"), bounds(cx, "titlebar-drag"));
+        drag(cx, p0.center(), tail.center());
+        assert_eq!(tab_ids(&root, cx, 0), vec![ids[1], ids[2], ids[0]]);
+        assert_eq!(crate::window_bg::tests::moves(), moves, "pills never move the window");
+
+        // A press on empty title bar space (after the strip, or between pills) moves the window.
+        let tail = bounds(cx, "titlebar-drag");
+        cx.simulate_mouse_down(tail.center(), MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(tail.center(), MouseButton::Left, Modifiers::none());
+        let (p0, p1) = (bounds(cx, "tab-pill-0"), bounds(cx, "tab-pill-1"));
+        let gap = point(p0.right() + (p1.left() - p0.right()) / 2., p0.center().y);
+        cx.simulate_mouse_down(gap, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(gap, MouseButton::Left, Modifiers::none());
+        assert_eq!(crate::window_bg::tests::moves(), moves + 2);
+    }
+
+    #[gpui::test]
+    fn overflowing_tabs_leave_room_to_grab_the_window(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |_| {});
+        root.update_in(cx, |r, window, cx| {
+            for _ in 0..30 {
+                r.new_tab(window, cx);
+            }
+        });
+        redraw(&root, cx);
+        let tail = bounds(cx, "titlebar-drag");
+        assert!(f32::from(tail.size.width) >= MIN_GRAB_PX - 0.5, "{tail:?}");
+        let moves = crate::window_bg::tests::moves();
+        cx.simulate_mouse_down(tail.center(), MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(tail.center(), MouseButton::Left, Modifiers::none());
+        assert_eq!(crate::window_bg::tests::moves(), moves + 1);
+
+        // The newest (active) tab was scrolled into view: more to the left, nothing to the right.
+        redraw(&root, cx);
+        let state = |cx: &mut VisualTestContext| root.read_with(cx, |r, _| StripOverflow::of(&r.tab_strip));
+        assert_eq!(state(cx), StripOverflow { overflows: true, more_left: true, more_right: false });
+        let offset =
+            |cx: &mut VisualTestContext| root.read_with(cx, |r, _| f32::from(r.tab_strip.offset().x));
+        let x0 = offset(cx);
+        // ‹ pages left, › back; neither moves the window.
+        let arrow = bounds(cx, "tab-strip-left").center();
+        cx.simulate_click(arrow, Modifiers::none());
+        redraw(&root, cx);
+        let x1 = offset(cx);
+        assert!(x1 > x0 + 100., "{x0} -> {x1}");
+        assert!(state(cx).more_right);
+        let arrow = bounds(cx, "tab-strip-right").center();
+        cx.simulate_click(arrow, Modifiers::none());
+        redraw(&root, cx);
+        assert!((offset(cx) - x0).abs() < 1., "back at the end");
+        assert_eq!(crate::window_bg::tests::moves(), moves + 1);
+        // Activating the first tab scrolls it into view.
+        root.update_in(cx, |r, window, cx| r.activate_tab(0, window, cx));
+        redraw(&root, cx);
+        redraw(&root, cx);
+        assert!(offset(cx).abs() < 1.);
+        assert!(!state(cx).more_left);
+    }
+
+    #[gpui::test]
+    fn few_tabs_show_no_strip_arrows(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |_| {});
+        redraw(&root, cx);
+        assert!(cx.debug_bounds("tab-strip-left").is_none());
+        assert!(!root.read_with(cx, |r, _| StripOverflow::of(&r.tab_strip).overflows));
+    }
+
+    #[gpui::test]
+    fn sidebar_workspaces_drag_to_reorder_and_fold(cx: &mut TestAppContext) {
+        let (root, cx) = root_with(cx, |c| {
+            c.tabs.position = TabsPosition::Left;
+            c.tabs.sidebar_workspaces = SidebarWorkspaces::All;
+            c.tabs.sidebar_agents = false;
+        });
+        populate(&root, cx);
+        redraw(&root, cx);
+        let names = |root: &Entity<Root>, cx: &mut VisualTestContext| {
+            root.read_with(cx, |r, _| r.ws.list.iter().map(|w| w.name.clone()).collect::<Vec<_>>())
+        };
+        let before = names(&root, cx);
+        // The first workspace's header onto the second's group.
+        let (h0, h1) = (bounds(cx, "side-ws-0"), bounds(cx, "side-ws-1"));
+        drag(cx, h0.center(), h1.center());
+        assert_eq!(names(&root, cx), vec![before[1].clone(), before[0].clone()]);
+        assert_eq!(root.read_with(cx, |r, _| r.ws.active().name.clone()), before[0], "still active");
+
+        // The fold control collapses the group: its tabs leave the list.
+        let rows = |cx: &mut VisualTestContext| {
+            root.read_with(cx, |r, _| r.ws.list[0].tabs.iter().map(|t| t.id).collect::<Vec<_>>())
+        };
+        assert!(!rows(cx).is_empty());
+        let fold = bounds(cx, "side-ws-fold-0");
+        cx.simulate_click(fold.center(), Modifiers::none());
+        redraw(&root, cx);
+        root.read_with(cx, |r, _| {
+            assert!(r.ws.list[0].collapsed);
+            assert_ne!(r.ws.active, 0, "folding doesn't switch workspaces");
+        });
+        let h0 = bounds(cx, "side-ws-0");
+        let h1 = bounds(cx, "side-ws-1");
+        assert!(h1.top() - h0.bottom() < px(16.), "nothing between a folded header and the next");
+        cx.simulate_click(fold.center(), Modifiers::none());
+        assert!(!root.read_with(cx, |r, _| r.ws.list[0].collapsed));
+    }
+
     #[gpui::test]
     fn dragged_tab_preview(cx: &mut TestAppContext) {
         crate::test_support::init(cx);
-        let (d, cx) = cx.add_window_view(|_, _| DraggedTab { ws: 0, tab: TabId(1), label: "zsh".into() });
+        let (d, cx) =
+            cx.add_window_view(|_, _| DraggedTab { ws: 0, index: 0, tab: TabId(1), label: "zsh".into() });
         d.read_with(cx, |d, _| assert_eq!(d.label.as_ref(), "zsh"));
+        let swatch = cx.read(|cx| Theme::global(cx).accent);
+        let (w, cx) = cx.add_window_view(|_, _| DraggedWorkspace { ws: 0, label: "nox".into(), swatch });
+        w.read_with(cx, |w, _| assert_eq!(w.label.as_ref(), "nox"));
     }
 
     #[gpui::test]

@@ -58,6 +58,8 @@ pub struct Workspace {
     pub active_tab: usize,
     /// The saved root no longer existed on restore (SPEC §6.6).
     pub root_missing: bool,
+    /// Its tabs are folded away in the sidebar's all-workspaces list (SPEC §5.4).
+    pub collapsed: bool,
 }
 
 impl Workspace {
@@ -72,6 +74,7 @@ impl Workspace {
             tabs: Vec::new(),
             active_tab: 0,
             root_missing: false,
+            collapsed: false,
         }
     }
 

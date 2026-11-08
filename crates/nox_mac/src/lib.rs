@@ -205,6 +205,89 @@ pub unsafe fn set_window_background(ns_view: *mut c_void, r: f64, g: f64, b: f64
     }
 }
 
+// ---- window dragging -------------------------------------------------------------------------
+
+extern "C-unwind" fn refuse_window_move(_this: &AnyObject, _cmd: Sel) -> Bool {
+    Bool::NO
+}
+
+/// The part of the view that is *not* a window-drag handle while it lies in the title bar: all of
+/// it. Since macOS 10.11 the window server tracks title-bar drags from regions it collects with
+/// this (private, long-stable) method; `mouseDownCanMoveWindow` alone isn't consulted there.
+extern "C-unwind" fn opaque_rect_in_titlebar(this: &AnyObject, _cmd: Sel) -> objc2_foundation::NSRect {
+    unsafe { msg_send![this, bounds] }
+}
+
+/// Stops `AppKit` from moving the window on its own when a press in the (transparent) title bar
+/// area is dragged. Without this, a drag that starts on a tab pill or a button moves the window
+/// and the app never sees the drag. The app then moves the window itself, from the empty parts of
+/// its title bar only, via [`start_window_drag`].
+///
+/// Only this view changes: it is switched to a runtime subclass of its class (GPUI's content
+/// view) whose `-mouseDownCanMoveWindow` returns `NO` and whose whole bounds are opaque to title
+/// bar dragging, so other windows keep the native behaviour.
+///
+/// # Safety
+/// `ns_view` must be a valid `NSView` pointer (or null); call on the main thread.
+pub unsafe fn disable_native_window_drag(ns_view: *mut c_void) {
+    static SUBCLASS: OnceLock<Option<usize>> = OnceLock::new();
+    if ns_view.is_null() {
+        return;
+    }
+    unsafe {
+        let view = ns_view.cast::<AnyObject>();
+        let cls = objc2::ffi::object_getClass(view);
+        if cls.is_null() {
+            return;
+        }
+        let sub = SUBCLASS.get_or_init(|| {
+            let mut b = objc2::runtime::ClassBuilder::new(c"NoxNoWindowDragView", &*cls)?;
+            b.add_method(sel!(mouseDownCanMoveWindow), refuse_window_move as extern "C-unwind" fn(_, _) -> _);
+            b.add_method(
+                sel!(_opaqueRectForWindowMoveWhenInTitlebar),
+                opaque_rect_in_titlebar as extern "C-unwind" fn(_, _) -> _,
+            );
+            Some(std::ptr::from_ref(b.register()) as usize)
+        });
+        if let Some(sub) = *sub {
+            let sub = sub as *const AnyClass;
+            // Only from the class the subclass was made for (and not twice).
+            if (*sub).superclass().is_some_and(|s| std::ptr::eq(s, cls)) {
+                objc2::ffi::object_setClass(view, sub);
+            }
+        }
+    }
+}
+
+/// Starts a native window move for the mouse-down being handled (`performWindowDragWithEvent:`
+/// with the app's current event): the system tracks the drag, with its usual snapping and
+/// Spaces behaviour. Call from a left-mouse-down handler only.
+///
+/// # Safety
+/// `ns_view` must be a valid `NSView` pointer (or null); call on the main thread.
+pub unsafe fn start_window_drag(ns_view: *mut c_void) {
+    if ns_view.is_null() {
+        return;
+    }
+    let Some(app_cls) = class("NSApplication") else { return };
+    unsafe {
+        let window: *mut AnyObject = msg_send![ns_view.cast::<AnyObject>(), window];
+        if window.is_null() {
+            return;
+        }
+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+        let event: *mut AnyObject = msg_send![app, currentEvent];
+        if event.is_null() {
+            return;
+        }
+        // Only for a mouse-down (NSEventTypeLeftMouseDown = 1): AppKit raises otherwise.
+        let kind: u64 = msg_send![event, type];
+        if kind == 1 {
+            let _: () = msg_send![window, performWindowDragWithEvent: event];
+        }
+    }
+}
+
 // ---- attention chime -------------------------------------------------------------------------
 
 struct SoundPtr(*mut AnyObject);

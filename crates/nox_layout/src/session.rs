@@ -46,6 +46,9 @@ pub struct WorkspaceSnapshot {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub active_tab: usize,
+    /// Folded in the sidebar's all-workspaces list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
     #[serde(default)]
     pub tabs: Vec<TabSnapshot>,
 }
@@ -185,6 +188,7 @@ impl Workspaces {
                     color: w.color.clone(),
                     env: w.env.clone(),
                     active_tab: w.active_tab,
+                    collapsed: w.collapsed,
                     tabs: w
                         .tabs
                         .iter()
@@ -229,6 +233,7 @@ impl Workspaces {
             let mut w = Workspace::new(id, ws.name, None);
             w.color = ws.color;
             w.env = ws.env;
+            w.collapsed = ws.collapsed;
             match ws.root {
                 Some(r) if root_exists(&r) => w.root = Some(r),
                 Some(_) => w.root_missing = true,
@@ -287,7 +292,8 @@ mod tests {
         w1.env.insert("FOO".into(), "bar baz".into());
         w1.add_tab_after_active(Tab::new(TabId(11), PaneId(4)));
         w1.select_tab(0);
-        let w2 = Workspace::new(WorkspaceId(6), "scratch", None).with_tab(Tab::new(TabId(12), PaneId(5)));
+        let mut w2 = Workspace::new(WorkspaceId(6), "scratch", None).with_tab(Tab::new(TabId(12), PaneId(5)));
+        w2.collapsed = true;
         let mut all = Workspaces::new(w1);
         all.push(w2);
         all.switch_to(1);
@@ -317,6 +323,9 @@ mod tests {
         assert_eq!(back, file, "{text}");
         assert!(text.contains("[workspaces.tabs.panes.3.agent]"));
         assert!(text.contains("ratio = 0.3\n"), "{text}");
+        // Only a collapsed workspace writes the flag.
+        assert_eq!(text.matches("collapsed = true").count(), 1, "{text}");
+        assert!(!text.contains("collapsed = false"), "{text}");
     }
 
     #[test]
@@ -374,6 +383,7 @@ mod tests {
         assert_eq!(all.list[0].env.get("FOO").map(String::as_str), Some("bar baz"));
         assert_eq!(all.list[0].active_tab, 0);
         assert_eq!(all.list[1].name, "scratch");
+        assert!(!all.list[0].collapsed && all.list[1].collapsed);
         assert_eq!(r.panes.len(), 5);
         assert_eq!(r.id_map.len(), 5);
 
@@ -409,6 +419,7 @@ mod tests {
             color: None,
             env: BTreeMap::new(),
             active_tab: 0,
+            collapsed: false,
             tabs: vec![],
         });
         let r = Workspaces::restore(file, |p| p != Path::new("/gone")).unwrap();

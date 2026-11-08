@@ -72,7 +72,7 @@ crates/
 ├── nox_config/     config model, lenient loading, comment-preserving writes, watcher, schema
 ├── nox_theme/      colors, theme files (bundled from themes/), contrast helpers, 256-color table
 ├── nox_mac/        objc2: NSMenu context menus, notifications, accessibility, Dock bounce, NSSound,
-│                   IOPMAssertion, NSWindow background, Option-key side
+│                   IOPMAssertion, NSWindow background + window dragging, Option-key side
 └── nox_ui/         GPUI views and elements (below)
 ```
 
@@ -103,7 +103,7 @@ Only `nox_ui` and `nox` depend on GPUI; everything else builds and tests without
 `test_support.rs` installs the globals `main.rs` sets up (settings, theme, icons, input keys),
 points `NOX_HOME` at a per-process temp dir and uses a plain `/bin/sh` (no `-l`, no rc files)
 with IPC off. Test windows have no native handle, so `window_bg::apply` is a no-op under
-`cfg(test)`, and `menus.rs` hands context menus to the test instead of showing an `NSMenu`.
+`cfg(test)` and `window_bg::start_move` only counts window moves, and `menus.rs` hands context menus to the test instead of showing an `NSMenu`.
 Tests that write the shared `config.toml` or `session.toml` take the lock in
 `config_io::tests` / `persist::tests` (PTY creation is serialized by
 `TerminalSession::spawn` itself, see below). What stays untested is native
@@ -184,4 +184,10 @@ PTY ─▶ reader thread: poll + read 64 KiB ─▶ OscSniffer (OSC 7/133/9/777,
   `font.size_applies_to = "pane"`); ⌘0 resets to `font.size`. They don't write the config.
 - **Agent hooks**: "Install Agent Hooks…" writes Claude Code hooks; Codex and Gemini CLI hook
   installers are not implemented yet.
+- **Window dragging**: GPUI 0.2.2's `start_window_move` does nothing on macOS, and `AppKit`
+  moves a transparent-titlebar window for any drag in the title-bar band, which swallowed tab
+  drags. `window_bg::take_over_window_drag` switches the main window's content view to a runtime
+  subclass whose `-mouseDownCanMoveWindow` returns `NO` (Settings and About keep the native
+  behaviour); the empty title-bar space calls `window_bg::start_move`
+  (`performWindowDragWithEvent:`), and interactive items stop the mouse-down.
 - See [ROADMAP.md](ROADMAP.md) for features not implemented yet.
