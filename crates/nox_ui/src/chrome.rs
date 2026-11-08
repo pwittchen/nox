@@ -552,23 +552,7 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
     let swatch = ws.color.as_deref().and_then(|c| theme.named(c)).unwrap_or(theme.text_muted.opacity(0.5));
     let status = root.workspace_status(ws, cx);
     let dot = status_dot(&theme, status);
-    let all = Settings::global(cx).config.tabs.sidebar_workspaces == nox_config::SidebarWorkspaces::All;
-    let others = if all {
-        None
-    } else {
-        let s = nox_layout::aggregate_status(
-            root.ws
-                .list
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != ws_idx)
-                .map(|(_, w)| root.workspace_status(w, cx)),
-        );
-        match s {
-            TabStatus::NeedsInput | TabStatus::Bell | TabStatus::Done => status_dot(&theme, s),
-            _ => None,
-        }
-    };
+    let active = ws_idx == root.ws.active;
     div()
         .id(("side-ws", ws_idx))
         .mx(px(6.))
@@ -581,7 +565,8 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
         .text_size(px(12.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .cursor_pointer()
-        .hover(|s| s.bg(theme.text.opacity(0.04)))
+        .when(active, |d| d.bg(theme.text.opacity(0.08)).text_color(theme.text))
+        .when(!active, |d| d.text_color(theme.text_muted).hover(|s| s.bg(theme.text.opacity(0.04))))
         .child(div().size(px(9.)).rounded(px(2.)).bg(swatch).flex_none())
         .child(
             div()
@@ -592,8 +577,10 @@ fn sidebar_ws_header(root: &Root, ws_idx: usize, cx: &mut Context<Root>) -> AnyE
                 .text_ellipsis()
                 .child(ws.name.clone()),
         )
-        .children(if all { dot } else { others }.map(|c| div().size(px(6.)).rounded_full().bg(c)))
-        .child(svg().path("icons/ui/chevron-down.svg").size(px(12.)).text_color(theme.text_muted))
+        .children(dot.map(|c| div().size(px(6.)).rounded_full().bg(c)))
+        .when(active, |d| {
+            d.child(svg().path("icons/ui/chevron-down.svg").size(px(12.)).text_color(theme.text_muted))
+        })
         .on_click(cx.listener(move |root, _, window, cx| {
             if ws_idx == root.ws.active {
                 crate::menus::workspace_menu(root, window, cx);
@@ -617,14 +604,24 @@ fn render_sidebar(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     let width = root.sidebar_width(cx);
     let all = Settings::global(cx).config.tabs.sidebar_workspaces == nox_config::SidebarWorkspaces::All;
     let mut rows: Vec<AnyElement> = Vec::new();
-    let indices: Vec<usize> = if all { (0..root.ws.len()).collect() } else { vec![root.ws.active] };
-    for w in indices {
-        rows.push(sidebar_ws_header(root, w, cx));
+    if all {
+        // Every workspace as a group: its header row followed by its tabs.
+        for w in 0..root.ws.len() {
+            rows.push(sidebar_ws_header(root, w, cx));
+            for i in 0..root.ws.list[w].tabs.len() {
+                rows.push(sidebar_row(root, w, i, cx));
+            }
+            rows.push(div().h(px(6.)).into_any_element());
+        }
+    } else {
+        // All workspaces on top, a separator line, then the active workspace's tabs.
+        for w in 0..root.ws.len() {
+            rows.push(sidebar_ws_header(root, w, cx));
+        }
+        rows.push(div().mx(px(14.)).my(px(4.)).h(px(1.)).bg(theme.border).into_any_element());
+        let w = root.ws.active;
         for i in 0..root.ws.list[w].tabs.len() {
             rows.push(sidebar_row(root, w, i, cx));
-        }
-        if all {
-            rows.push(div().h(px(6.)).into_any_element());
         }
     }
     div()

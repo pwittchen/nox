@@ -340,8 +340,10 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 │ ● ● ●  [◧]                                                        ⌘   +  │
 │ ┌────────────────┐┌──────────────────────────────────────────────────────┐│
 │ │ ▢ nox        ⌄ ││ >_ pw@mbp:~                            ◫  ⊟  ⤢  ×    ││
+│ │ ▢ blog      •  ││                                                      ││
+│ │ ────────────── ││ ❯ █                                                  ││
 │ │ >_ 1  ~        ││                                                      ││
-│ │ >_ 2  ~/nox    ││ ❯ █                                                  ││
+│ │ >_ 2  ~/nox    ││                                                      ││
 │ │    vim         ││                                                      ││
 │ │ >_ 3  htop  •  ││                                                      ││
 │ └────────────────┘└──────────────────────────────────────────────────────┘│
@@ -351,11 +353,14 @@ pane card. The title bar keeps only the traffic lights and stays draggable; its 
 - `tabs.position = "left"`: tabs are rows in a sidebar on the left (`bg-sidebar`), one row per
   tab: process icon (see 4.6), index, title; a second muted line shows the working directory when it differs from
   the title. The active row has a subtle background pill. Status dot (see 4.2) on the right.
-- The top row of the sidebar is the workspace header: color swatch, workspace name, the status
-  dot of the other workspaces and `⌄`, which opens the same menu as the workspace chip (see 5.2).
+- The top of the sidebar lists all workspaces, one row each: color swatch, workspace name and its
+  status dot (see 4.2). The active workspace's row has the background pill and `⌄`; clicking it
+  opens the same menu as the workspace chip (see 5.2), clicking another row switches to that
+  workspace. Dropping a tab on a row moves the tab there. Below the list, separated by a 1 px
+  line, come the tabs of the active workspace.
 - `tabs.sidebar_workspaces = "all"` lists every workspace as a collapsible group (header row +
-  its tabs) instead of only the active one: one column showing all projects and all their
-  agents. Clicking a tab of another workspace switches to it. Default `"active"`.
+  its tabs) instead: one column showing all projects and all their agents. Clicking a tab of
+  another workspace switches to it. Default `"active"`.
 - Drag to reorder, double-click to rename, context menu as for pills (see 5.5).
 - Sidebar width: drag its 1px divider, min 160 px, max 360 px, default 220 px; persisted.
 - `⌘\` or the sidebar toggle `[◧]` in the title bar hides and shows it; the state is persisted.
