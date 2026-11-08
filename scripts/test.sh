@@ -40,9 +40,19 @@ fi
 # Results, one entry per step (bash 3.2 has no associative arrays).
 NAMES=() RESULTS=() TIMES=() DETAILS=()
 
+# Wall-clock seconds with millisecond precision (bash 3.2 has no $EPOCHREALTIME; perl ships with
+# macOS). Falls back to whole seconds.
+now() {
+  perl -MTime::HiRes=time -e 'printf "%.3f", time' 2>/dev/null || date +%s
+}
+
+# `0.4s`, `12.3s`, `1m 05.2s` for the seconds between two `now` values.
 duration() {
-  local s=$1
-  if [ "$s" -ge 60 ]; then printf '%dm %02ds' $((s / 60)) $((s % 60)); else printf '%ds' "$s"; fi
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    d = b - a; if (d < 0) d = 0
+    if (d >= 60) printf "%dm %04.1fs", int(d / 60), d - 60 * int(d / 60)
+    else printf "%.1fs", d
+  }'
 }
 
 command_for() {
@@ -89,15 +99,25 @@ detail_for() {
   esac
 }
 
+# Pad the commands so the live PASS / FAIL column lines up.
+CMD_W=0
+for step in "${STEPS[@]}"; do
+  c=$(command_for "$step")
+  [ ${#c} -gt $CMD_W ] && CMD_W=${#c}
+done
+
+TOTAL_START=$(now)
 for step in "${STEPS[@]}"; do
   log="$LOGS/$step.log"
   cmd=$(command_for "$step")
-  printf '%s▸ %-6s%s %s%s%s\n' "$BOLD" "$step" "$RESET" "$DIM" "$cmd" "$RESET"
+  printf "%s▸ %-6s%s %s%-${CMD_W}s%s" "$BOLD" "$step" "$RESET" "$DIM" "$cmd" "$RESET"
+  [ "$VERBOSE" -eq 1 ] && echo
   if [ "$step" = audit ] && ! command -v cargo-audit >/dev/null 2>&1; then
     NAMES+=("$step") RESULTS+=(SKIP) TIMES+=(-) DETAILS+=("cargo-audit not installed (cargo install cargo-audit)")
+    printf '  %sSKIP%s\n' "$YELLOW" "$RESET"
     continue
   fi
-  start=$SECONDS
+  start=$(now)
   if [ "$VERBOSE" -eq 1 ]; then
     $cmd 2>&1 | tee "$log"
     status=${PIPESTATUS[0]}
@@ -105,15 +125,29 @@ for step in "${STEPS[@]}"; do
     $cmd >"$log" 2>&1
     status=$?
   fi
-  elapsed=$((SECONDS - start))
-  if [ "$status" -eq 0 ]; then result=PASS; else result=FAIL; fi
-  NAMES+=("$step") RESULTS+=("$result") TIMES+=("$(duration "$elapsed")")
+  took=$(duration "$start" "$(now)")
+  if [ "$status" -eq 0 ]; then result=PASS color=$GREEN; else result=FAIL color=$RED; fi
+  [ "$VERBOSE" -eq 1 ] && printf '%s▸ %-6s%s' "$BOLD" "$step" "$RESET"
+  printf '  %s%s%s %s\n' "$color" "$result" "$RESET" "$took"
+  NAMES+=("$step") RESULTS+=("$result") TIMES+=("$took")
   DETAILS+=("$(detail_for "$step" "$log" "$status" | tr -d '\n')")
 done
 
+TOTAL=$(duration "$TOTAL_START" "$(now)")
+
 # ---- summary table ----------------------------------------------------------------------------
 
-w1=4 w2=6 w3=4 w4=7 # header widths: Step, Result, Time, Details
+passed=0 failed=0
+for r in "${RESULTS[@]}"; do
+  case "$r" in
+    PASS) passed=$((passed + 1)) ;;
+    FAIL) failed=$((failed + 1)) ;;
+  esac
+done
+TOTAL_DETAIL="$passed of ${#NAMES[@]} passed"
+
+w1=5 w2=6 w3=${#TOTAL} w4=${#TOTAL_DETAIL} # widths: "total", "Result", time, details
+[ $w4 -lt 7 ] && w4=7
 for i in "${!NAMES[@]}"; do
   [ ${#NAMES[$i]} -gt $w1 ] && w1=${#NAMES[$i]}
   [ ${#TIMES[$i]} -gt $w3 ] && w3=${#TIMES[$i]}
@@ -129,11 +163,10 @@ echo
 rule
 printf "| %-${w1}s | %-${w2}s | %${w3}s | %-${w4}s |\n" Step Result Time Details
 rule
-failed=0
 for i in "${!NAMES[@]}"; do
   case "${RESULTS[$i]}" in
     PASS) color=$GREEN ;;
-    FAIL) color=$RED failed=1 ;;
+    FAIL) color=$RED ;;
     *) color=$YELLOW ;;
   esac
   # Pad outside the color codes so the columns stay aligned.
@@ -141,14 +174,20 @@ for i in "${!NAMES[@]}"; do
     "${NAMES[$i]}" "$color" "${RESULTS[$i]}" "$RESET" "${TIMES[$i]}" "${DETAILS[$i]}"
 done
 rule
+if [ "$failed" -gt 0 ]; then total_result=FAIL color=$RED; else total_result=PASS color=$GREEN; fi
+printf "| %s%-${w1}s%s | %s%-${w2}s%s | %s%${w3}s%s | %-${w4}s |\n" "$BOLD" total "$RESET" \
+  "$color" "$total_result" "$RESET" "$BOLD" "$TOTAL" "$RESET" "$TOTAL_DETAIL"
+rule
 
-if [ "$failed" -eq 1 ]; then
+if [ "$failed" -gt 0 ]; then
   for i in "${!NAMES[@]}"; do
     [ "${RESULTS[$i]}" = FAIL ] || continue
     echo
     echo "${RED}${BOLD}${NAMES[$i]} failed${RESET} — last lines of $LOGS/${NAMES[$i]}.log:"
     tail -n 25 "$LOGS/${NAMES[$i]}.log" | sed 's/^/  /'
   done
+  echo
+  echo "${RED}${BOLD}$failed of ${#NAMES[@]} checks failed${RESET} in $TOTAL. Logs: $LOGS/"
   exit 1
 fi
-echo "${GREEN}${BOLD}All checks passed.${RESET} Logs: $LOGS/"
+echo "${GREEN}${BOLD}All checks passed${RESET} in $TOTAL. Logs: $LOGS/"
