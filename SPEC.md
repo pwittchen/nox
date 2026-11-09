@@ -1655,7 +1655,8 @@ scripts/release/notarize.sh dist/nox.app`, `SIGN_IDENTITY=… scripts/release/ma
 failing audit fails the run. The run's summary page shows the audit result (vulnerabilities,
 warnings, ignored advisories) and test coverage per crate (`scripts/ci/*_summary.sh`). A newer
 run for the same branch or PR cancels the one still in progress. It has no access to signing
-secrets.
+secrets. It doesn't run when a change touches only Markdown files and / or `website/`, or when
+the commit message (push) or PR title contains `#no-deploy`.
 
 ### 15.3 Automatic updates
 nox updates itself from GitHub Releases with a small built-in updater (`nox_ui::updater`), not

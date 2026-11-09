@@ -4,15 +4,15 @@
 # No access to signing secrets (SPEC §15.2).
 #
 # Skipped when:
-# - only Markdown files changed (README.md, SPEC.md, docs …);
+# - only Markdown files and / or the website (website/) changed;
 # - the commit message (push) or the PR title (pull request) contains #no-deploy.
 name: ci
 on:
   pull_request:
-    paths-ignore: ['**.md']
+    paths-ignore: ['**.md', 'website/**']
   push:
     branches: [master]
-    paths-ignore: ['**.md']
+    paths-ignore: ['**.md', 'website/**']
 
 # A newer run for the same branch / PR cancels the one still in progress.
 concurrency:

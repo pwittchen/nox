@@ -74,5 +74,5 @@ or locally with a comment.
 - Scale the message to the change: a small change gets a short subject (maybe one sentence of
   body); a large one gets a body that describes it in detail (why, what changed, notable
   decisions, side effects). Changes to unrelated areas go into separate commits, not one.
-- CI skips Markdown-only changes and commits / PR titles containing `#no-deploy`.
+- CI skips changes that touch only Markdown files and / or `website/`, and commits / PR titles containing `#no-deploy`.
 - Never commit `.macos-signing/` (private signing keys; it's gitignored).
