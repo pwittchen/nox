@@ -127,9 +127,72 @@ impl ScrollState {
     }
 }
 
+/// Width of the strip at the pane's right edge that grabs the scrollbar (px).
+pub const SCROLLBAR_HIT_WIDTH: f32 = 12.0;
+/// Minimum thumb height (px).
+const MIN_THUMB: f32 = 24.0;
+
+/// Vertical position of the scrollbar thumb inside its track, in px from the track's top.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Thumb {
+    pub top: f32,
+    pub height: f32,
+}
+
+impl Thumb {
+    /// The thumb for a track `track_h` px tall showing `screen` rows of `history + screen` lines,
+    /// scrolled up by `offset` lines. `None` when there is nothing to scroll.
+    #[must_use]
+    pub fn new(track_h: f32, history: usize, screen: usize, offset: usize) -> Option<Self> {
+        if history == 0 || track_h <= 0.0 {
+            return None;
+        }
+        let total = (history + screen) as f32;
+        let height = (track_h * screen as f32 / total).max(MIN_THUMB).min(track_h);
+        let travel = track_h - height;
+        let top = travel * (history - offset.min(history)) as f32 / history as f32;
+        Some(Self { top, height })
+    }
+
+    /// Inverse of [`Thumb::new`]: the display offset that puts the thumb's top at `top`.
+    #[must_use]
+    pub fn offset_for_top(&self, top: f32, track_h: f32, history: usize) -> usize {
+        let travel = track_h - self.height;
+        if travel <= 0.0 {
+            return 0;
+        }
+        let t = (top / travel).clamp(0.0, 1.0);
+        history - (t * history as f32).round() as usize
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumb_tracks_the_display_offset() {
+        assert!(Thumb::new(500.0, 0, 50, 0).is_none(), "no history");
+        let bottom = Thumb::new(500.0, 50, 50, 0).unwrap();
+        assert!((bottom.height - 250.0).abs() < 1e-3);
+        assert!((bottom.top - 250.0).abs() < 1e-3, "at the bottom of the track");
+        let top = Thumb::new(500.0, 50, 50, 50).unwrap();
+        assert!(top.top.abs() < 1e-3);
+        // Long history: the thumb keeps a minimum height.
+        let long = Thumb::new(500.0, 100_000, 50, 0).unwrap();
+        assert!((long.height - MIN_THUMB).abs() < 1e-3);
+    }
+
+    #[test]
+    fn offset_for_top_inverts_the_thumb() {
+        let t = Thumb::new(500.0, 50, 50, 0).unwrap();
+        for off in [0, 1, 17, 49, 50] {
+            let at = Thumb::new(500.0, 50, 50, off).unwrap();
+            assert_eq!(t.offset_for_top(at.top, 500.0, 50), off);
+        }
+        assert_eq!(t.offset_for_top(-40.0, 500.0, 50), 50, "clamped to the top");
+        assert_eq!(t.offset_for_top(9999.0, 500.0, 50), 0, "clamped to the bottom");
+    }
 
     #[test]
     fn accumulates_fraction_and_whole_lines() {

@@ -80,6 +80,7 @@ scrollback = 10000
 scroll_multiplier = 3
 smooth_scroll_duration = 100 # ms, mouse wheels only; 0 disables
 scroll_on_input = true
+always_show_scrollbar = false # otherwise shown only while scrolling
 cursor_style = "block"       # "block" | "bar" | "underline"
 cursor_blink = false
 padding = [8, 6]             # [horizontal, vertical] px

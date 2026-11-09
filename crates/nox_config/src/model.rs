@@ -329,6 +329,8 @@ pub struct TerminalConfig {
     /// Milliseconds; 0 disables.
     pub smooth_scroll_duration: u32,
     pub scroll_on_input: bool,
+    /// Keep the overlay scrollbar visible instead of only while scrolling.
+    pub always_show_scrollbar: bool,
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
     /// `[horizontal, vertical]` px.
@@ -358,6 +360,7 @@ impl Default for TerminalConfig {
             scroll_multiplier: 3.0,
             smooth_scroll_duration: 100,
             scroll_on_input: true,
+            always_show_scrollbar: false,
             cursor_style: CursorStyle::Block,
             cursor_blink: false,
             padding: [8, 6],

@@ -30,7 +30,7 @@ use crate::actions::{
     RestartPane, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, SelectAll, SendShiftEnter,
 };
 use crate::icons::{IconRegistry, icon_element};
-use crate::scroll::ScrollState;
+use crate::scroll::{SCROLLBAR_HIT_WIDTH, ScrollState, Thumb};
 use crate::settings_state::Settings;
 use crate::terminal_element::{TerminalElement, position_to_point};
 use crate::text_input::{InputEvent, TextInput};
@@ -178,6 +178,10 @@ pub struct Pane {
     pub geom: Option<GridGeom>,
     pub scroll: ScrollState,
     pub new_output_below: bool,
+    /// The pointer is over the scrollbar strip.
+    pub scrollbar_hovered: bool,
+    /// Dragging the scrollbar thumb: where in the thumb it was grabbed (px from its top).
+    scrollbar_drag: Option<f32>,
     selecting: Option<SelectionType>,
     pending_selection: Option<Selection>,
     autoscroll: Option<Task<()>>,
@@ -278,6 +282,8 @@ impl Pane {
             geom: None,
             scroll: ScrollState::default(),
             new_output_below: false,
+            scrollbar_hovered: false,
+            scrollbar_drag: None,
             selecting: None,
             pending_selection: None,
             autoscroll: None,
@@ -1068,6 +1074,9 @@ impl Pane {
         if !was_focused {
             window.focus(&self.focus_handle);
         }
+        if ev.button == MouseButton::Left && self.start_scrollbar_drag(ev.position, cx) {
+            return;
+        }
         let click_through = Settings::global(cx).config.ui.focus_click_through;
         if (was_focused || click_through)
             && self.report_mouse(button_of(ev.button), MouseAction::Press, ev.modifiers, ev.position)
@@ -1125,6 +1134,13 @@ impl Pane {
     }
 
     fn on_mouse_up(&mut self, ev: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scrollbar_drag.take().is_some() {
+            // Fade out from here (unless still hovered / always shown).
+            self.scroll.last_scroll = Some(Instant::now());
+            self.scrollbar_hovered = self.over_scrollbar(ev.position);
+            cx.notify();
+            return;
+        }
         if self.report_mouse(button_of(ev.button), MouseAction::Release, ev.modifiers, ev.position)
             && self.selecting.is_none()
         {
@@ -1150,6 +1166,14 @@ impl Pane {
             self.hovered_link = link;
             cx.notify();
         }
+        if self.scrollbar_drag.is_some() {
+            self.drag_scrollbar(ev, cx);
+            return;
+        }
+        self.set_scrollbar_hovered(self.over_scrollbar(ev.position), cx);
+        if self.scrollbar_hovered && ev.pressed_button.is_none() {
+            return;
+        }
         if self.selecting.is_none() {
             let button = ev.pressed_button.map_or(mouse::MouseButton::None, button_of);
             self.report_mouse(button, MouseAction::Motion, ev.modifiers, ev.position);
@@ -1162,14 +1186,132 @@ impl Pane {
     /// grid's `on_mouse_move` only while the pointer is over it, so the element registers a
     /// window-level listener for moves outside the grid (SPEC §7.6: dragging past the edges).
     pub fn on_drag_outside(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if self.selecting.is_some() {
+        if self.scrollbar_drag.is_some() {
+            self.drag_scrollbar(ev, cx);
+        } else if self.selecting.is_some() {
             self.drag_selection(ev, cx);
         }
+        self.set_scrollbar_hovered(false, cx);
+    }
+
+    /// Whether the element needs mouse moves from outside the grid (a drag, or the scrollbar
+    /// hover to clear).
+    #[must_use]
+    pub fn wants_outside_moves(&self) -> bool {
+        self.selecting.is_some() || self.scrollbar_drag.is_some() || self.scrollbar_hovered
     }
 
     #[must_use]
     pub fn is_selecting(&self) -> bool {
         self.selecting.is_some()
+    }
+
+    // ---- scrollbar (SPEC §7.3) ------------------------------------------------------------
+
+    /// History size and display offset when the scrollbar applies (primary screen with
+    /// scrollback).
+    fn scrollbar_range(&self) -> Option<(usize, usize, usize)> {
+        let s = self.session.as_ref()?;
+        let term = s.term().lock();
+        if term.mode().contains(TermMode::ALT_SCREEN) {
+            return None;
+        }
+        let grid = term.grid();
+        let history = grid.history_size();
+        (history > 0).then(|| (history, term.screen_lines(), grid.display_offset()))
+    }
+
+    fn scrollbar_thumb(&self) -> Option<(Thumb, usize)> {
+        let geom = self.geom.as_ref()?;
+        let (history, screen, offset) = self.scrollbar_range()?;
+        Some((Thumb::new(f32::from(geom.bounds.size.height), history, screen, offset)?, history))
+    }
+
+    fn over_scrollbar(&self, pos: Point<Pixels>) -> bool {
+        let Some(geom) = &self.geom else { return false };
+        let b = geom.bounds;
+        b.contains(&pos) && pos.x >= b.right() - px(SCROLLBAR_HIT_WIDTH) && self.scrollbar_range().is_some()
+    }
+
+    fn set_scrollbar_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        if self.scrollbar_hovered != hovered {
+            self.scrollbar_hovered = hovered;
+            if !hovered {
+                // Fade out from here rather than vanishing.
+                self.scroll.last_scroll = Some(Instant::now());
+            }
+            cx.notify();
+        }
+    }
+
+    /// A left click on the scrollbar strip: grab the thumb, or jump so the thumb is centred on
+    /// the click and grab it there.
+    fn start_scrollbar_drag(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        if !self.over_scrollbar(pos) {
+            return false;
+        }
+        let Some((thumb, _)) = self.scrollbar_thumb() else { return false };
+        let Some(geom) = &self.geom else { return false };
+        let y = f32::from(pos.y - geom.bounds.top());
+        let grab = if (thumb.top..=thumb.top + thumb.height).contains(&y) {
+            y - thumb.top
+        } else {
+            thumb.height / 2.0
+        };
+        self.scrollbar_drag = Some(grab);
+        self.scroll_thumb_to(y - grab, cx);
+        true
+    }
+
+    fn drag_scrollbar(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(grab) = self.scrollbar_drag else { return };
+        if ev.pressed_button != Some(MouseButton::Left) {
+            // Released where no mouse-up reached us.
+            self.scrollbar_drag = None;
+            self.scroll.last_scroll = Some(Instant::now());
+            cx.notify();
+            return;
+        }
+        let Some(geom) = &self.geom else { return };
+        let y = f32::from(ev.position.y - geom.bounds.top());
+        self.scroll_thumb_to(y - grab, cx);
+    }
+
+    /// Scroll so the thumb's top sits `top` px below the track's top.
+    fn scroll_thumb_to(&mut self, top: f32, cx: &mut Context<Self>) {
+        let Some((thumb, history)) = self.scrollbar_thumb() else { return };
+        let Some(geom) = &self.geom else { return };
+        let target = thumb.offset_for_top(top, f32::from(geom.bounds.size.height), history);
+        let Some(s) = &self.session else { return };
+        self.scroll.reset();
+        self.scroll.last_scroll = Some(Instant::now());
+        let mut term = s.term().lock();
+        let current = term.grid().display_offset();
+        if target != current {
+            term.scroll_display(Scroll::Delta(target as i32 - current as i32));
+        }
+        if target == 0 {
+            self.new_output_below = false;
+        }
+        drop(term);
+        cx.notify();
+    }
+
+    /// Opacity of the scrollbar this frame: shown while scrolling, hovered or dragged, or always
+    /// with `terminal.always_show_scrollbar`.
+    #[must_use]
+    pub fn scrollbar_alpha(&self, now: Instant, always: bool) -> f32 {
+        if always || self.scrollbar_hovered || self.scrollbar_drag.is_some() {
+            1.0
+        } else {
+            self.scroll.scrollbar_alpha(now)
+        }
+    }
+
+    /// The scrollbar is being hovered or dragged (drawn a bit stronger).
+    #[must_use]
+    pub fn scrollbar_active(&self) -> bool {
+        self.scrollbar_hovered || self.scrollbar_drag.is_some()
     }
 
     fn drag_selection(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
@@ -2162,6 +2304,8 @@ impl Render for Pane {
                     .relative()
                     .cursor(if self.hovered_link.is_some() {
                         CursorStyle::PointingHand
+                    } else if self.scrollbar_active() {
+                        CursorStyle::Arrow
                     } else {
                         CursorStyle::IBeam
                     })
@@ -3017,6 +3161,35 @@ pub(crate) mod tests {
         let at = cell(&pane, cx, 0, 0);
         wheel(cx, at, ScrollDelta::Lines(point(0., 2.)), Modifiers::none());
         assert_eq!(offset(&pane, cx), 6, "2 notches × 3 lines");
+    }
+
+    #[gpui::test]
+    fn scrollbar_drags_and_jumps(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        fill_lines(&pane, cx, 200);
+        let hist = history(&pane, cx);
+        let b = geom(&pane, cx).bounds;
+        let x = b.right() - px(4.);
+        // Hovering the strip shows the scrollbar.
+        cx.simulate_mouse_move(point(x, b.bottom() - px(5.)), None, Modifiers::none());
+        assert!(pane.read_with(cx, |p, _| p.scrollbar_hovered));
+        // Grab the thumb (at the bottom) and drag it to the top, past the pane's edge.
+        mouse_down(cx, point(x, b.bottom() - px(5.)), 1, Modifiers::none());
+        cx.simulate_mouse_move(point(x, b.top() - px(200.)), MouseButton::Left, Modifiers::none());
+        assert_eq!(offset(&pane, cx), hist, "dragged to the top");
+        let no_selection = |cx: &mut VisualTestContext| {
+            pane.read_with(cx, |p, _| p.session.as_ref().unwrap().term().lock().selection.is_none())
+        };
+        assert!(no_selection(cx), "dragging the scrollbar doesn't select");
+        mouse_up(cx, point(x, b.top() - px(200.)));
+        // Clicking the track jumps there: the bottom end goes to the bottom.
+        mouse_down(cx, point(x, b.bottom() - px(1.)), 1, Modifiers::none());
+        mouse_up(cx, point(x, b.bottom() - px(1.)));
+        assert_eq!(offset(&pane, cx), 0, "jumped to the bottom");
+        // Leaving the strip lets it fade out.
+        let inside = cell(&pane, cx, 0, 0);
+        cx.simulate_mouse_move(inside, None, Modifiers::none());
+        assert!(!pane.read_with(cx, |p, _| p.scrollbar_hovered));
     }
 
     #[gpui::test]

@@ -339,6 +339,13 @@ fn build() -> Vec<SettingMeta> {
         m(Terminal, "terminal.scroll_on_input", "Scroll on input", "Jump to the bottom when typing.", Bool),
         m(
             Terminal,
+            "terminal.always_show_scrollbar",
+            "Always show scrollbar",
+            "Keep the scrollbar visible instead of only while scrolling.",
+            Bool,
+        ),
+        m(
+            Terminal,
             "terminal.cursor_style",
             "Cursor style",
             "Shape of the terminal cursor.",

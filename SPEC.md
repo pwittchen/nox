@@ -726,7 +726,11 @@ Goal: feel like iTerm on a MacBook trackpad.
 - Keys: `⇧PgUp` / `⇧PgDn` page, `⌘Home` / `⌘End` top / bottom, `⌘↑` / `⌘↓` previous / next
   prompt (with shell integration; otherwise one line).
 - Overlay scrollbar, macOS style: hidden until scrolling, 6 px thumb in `text-muted` at 40%,
-  fades out after 800 ms; draggable.
+  fades out after 800 ms (`terminal.always_show_scrollbar = true` keeps it visible). Draggable:
+  hovering the 12 px strip at the pane's right edge shows it (8 px wide, 60%, arrow cursor);
+  dragging the thumb scrolls (also with the pointer outside the pane), clicking the track jumps
+  there (thumb centred on the click). Clicks in the strip go to the scrollbar, not to selection
+  or mouse reporting; on the alternate screen (no scrollback) there's no scrollbar.
 
 ### 7.4 Resizing
 Goal: no flicker, no stretched or torn frames, no prompt duplication while dragging the window
@@ -1323,6 +1327,7 @@ scrollback = 10000
 scroll_multiplier = 3
 smooth_scroll_duration = 100 # ms, mouse wheels only; 0 disables
 scroll_on_input = true
+always_show_scrollbar = false # otherwise shown only while scrolling
 cursor_style = "block"       # "block" | "bar" | "underline"
 cursor_blink = false
 padding = [8, 6]             # [horizontal, vertical] px

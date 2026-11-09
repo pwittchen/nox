@@ -26,6 +26,7 @@ use nox_terminal::alacritty_terminal::term::color::Colors;
 use nox_terminal::alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
 use crate::pane::{GridGeom, Pane};
+use crate::scroll::Thumb;
 use crate::settings_state::Settings;
 use crate::theme::{Theme, to_hsla};
 
@@ -292,7 +293,8 @@ impl Element for TerminalElement {
         let cursor_on = pane.cursor_visible(now);
         let bold_bright = cfg.terminal.bold_is_bright;
         let min_contrast = cfg.terminal.minimum_contrast as f32;
-        let scroll_alpha = pane.scroll.scrollbar_alpha(now);
+        let scroll_alpha = pane.scrollbar_alpha(now, cfg.terminal.always_show_scrollbar);
+        let scrollbar_active = pane.scrollbar_active();
         let new_output = pane.new_output_below;
 
         let text_system = window.text_system().clone();
@@ -568,16 +570,23 @@ impl Element for TerminalElement {
             }
 
             // Overlay scrollbar.
-            if scroll_alpha > 0.0 && history > 0 {
-                let total = (history + screen) as f32;
-                let h = bounds.size.height;
-                let thumb_h = (h * (screen as f32 / total)).max(px(24.));
-                let top_frac = (history - offset) as f32 / total;
-                let y = bounds.origin.y
-                    + (h - thumb_h) * (top_frac / ((history as f32) / total).max(1e-6)).min(1.0);
+            if scroll_alpha > 0.0
+                && !mode.contains(TermMode::ALT_SCREEN)
+                && let Some(t) = Thumb::new(
+                    f32::from(bounds.size.height),
+                    history as usize,
+                    screen as usize,
+                    offset as usize,
+                )
+            {
+                // Wider and stronger while hovered or dragged.
+                let (w, a) = if scrollbar_active { (px(8.), 0.6) } else { (px(6.), 0.4) };
                 scrollbar = Some(Quad {
-                    bounds: Bounds::new(point(bounds.right() - px(8.), y), size(px(6.), thumb_h)),
-                    color: theme.text_muted.opacity(0.4 * scroll_alpha),
+                    bounds: Bounds::new(
+                        point(bounds.right() - px(2.) - w, bounds.origin.y + px(t.top)),
+                        size(w, px(t.height)),
+                    ),
+                    color: theme.text_muted.opacity(a * scroll_alpha),
                 });
             }
         }
@@ -624,9 +633,11 @@ impl Element for TerminalElement {
     ) {
         let focus = self.pane.read(cx).focus_handle.clone();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.pane.clone()), cx);
-        if self.pane.read(cx).is_selecting() {
-            // The grid only hears mouse moves over it; a selection drag needs them everywhere to
-            // auto-scroll past the edges (mouse-up outside goes through `on_mouse_up_out`).
+        if self.pane.read(cx).wants_outside_moves() {
+            // The grid only hears mouse moves over it; a selection or scrollbar drag needs them
+            // everywhere (to auto-scroll past the edges / keep tracking the thumb), and the
+            // scrollbar hover must clear when the pointer leaves (mouse-up outside goes through
+            // `on_mouse_up_out`).
             let pane = self.pane.clone();
             window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
                 if phase == DispatchPhase::Bubble && !bounds.contains(&ev.position) {
@@ -699,7 +710,7 @@ impl Element for TerminalElement {
             if let Some(q) = pre.scrollbar.take() {
                 window.paint_quad(quad(
                     q.bounds,
-                    px(3.),
+                    q.bounds.size.width / 2.,
                     q.color,
                     px(0.),
                     transparent_black(),
@@ -1119,6 +1130,22 @@ mod tests {
             cx.notify();
         });
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn scrollbar_can_be_always_shown(cx: &mut TestAppContext) {
+        let mut cfg = silent();
+        cfg.terminal.always_show_scrollbar = true;
+        let (pane, cx) = open(cx, cfg, PaneSpawn::default());
+        assert!(frame(&pane, cx, true).scrollbar.is_none(), "still hidden without scrollback");
+        let lines: String = (0..200).map(|i| format!("{i}\r\n")).collect::<Vec<_>>().concat();
+        feed(&pane, cx, lines.as_bytes());
+        let bar = frame(&pane, cx, true).scrollbar.expect("shown without scrolling");
+        let b = pane.read_with(cx, |p, _| p.geom.clone().unwrap().bounds);
+        assert!(
+            bar.bounds.bottom() <= b.bottom() && bar.bounds.bottom() > b.bottom() - px(1.),
+            "at the bottom"
+        );
     }
 
     #[gpui::test]

@@ -405,6 +405,7 @@ fn from_table(root: &Table, notices: &mut Vec<Notice>) -> Config {
         s.float("scroll_multiplier", &mut t.scroll_multiplier);
         s.int("smooth_scroll_duration", &mut t.smooth_scroll_duration);
         s.bool("scroll_on_input", &mut t.scroll_on_input);
+        s.bool("always_show_scrollbar", &mut t.always_show_scrollbar);
         s.enumeration("cursor_style", &mut t.cursor_style);
         s.bool("cursor_blink", &mut t.cursor_blink);
         s.int_pair("padding", &mut t.padding);

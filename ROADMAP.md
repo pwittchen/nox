@@ -16,7 +16,6 @@
 - **`latency-trace` feature** (§12): the flag exists; the key-event → frame-presented logging
   doesn't.
 - **Codex / Gemini CLI hook installers** in "Install Agent Hooks…" (Claude Code is done).
-- **Draggable overlay scrollbar**.
 - **Iosevka** is not bundled (size, see ARCH.md).
 - **Mode 2027** (grapheme clustering query, §7.1): emoji clusters are merged, but `DECRQM ?2027`
   isn't answered, so programs can't detect it and adjust their width tables.
