@@ -1,7 +1,5 @@
 # Changelog
 
-## [Unreleased]
-
 ## 0.1.3 — 2026-11-09
 
 - Let Option type national characters on non-US keyboard layouts (12a9215)

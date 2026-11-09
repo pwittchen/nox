@@ -6,8 +6,8 @@
 # Notes come from the `## [Unreleased]` section of CHANGELOG.md if it has content, else from
 # the section of this version (`## 1.2.0 …`, brackets optional), else from the commit subjects
 # since the previous `v*` tag (release commits excluded). Both sections are then replaced in
-# CHANGELOG.md by an empty `## [Unreleased]` and `## 1.2.0 — <date>` with the notes, above all
-# older sections.
+# CHANGELOG.md by `## 1.2.0 — <date>` with the notes, above all older sections (no empty
+# `## [Unreleased]` is left behind).
 # The notes are also written to the given file (default: notes.md).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -52,12 +52,11 @@ if [[ -z "${BODY//[[:space:]]/}" ]]; then
 fi
 printf '%s\n' "$BODY" > "$NOTES"
 
-# Drop the Unreleased and this version's sections; insert a fresh empty Unreleased section and
-# the new one before the first remaining "## " heading.
+# Drop the Unreleased and this version's sections; insert the new one before the first remaining
+# "## " heading.
 awk -v v="$VERSION" -v head="## $VERSION — $DATE" -v body_file="$NOTES" "$SECTION_AWK"'
   function insert() {
     if (done) return
-    print "## [Unreleased]"; print ""
     print head; print ""
     while ((getline l < body_file) > 0) print l
     print ""; done = 1
