@@ -8,7 +8,8 @@ bun run build     # production build into dist/
 bun run preview   # build, then serve dist/ (PORT env var, default 3000)
 ```
 
-The version pill in the download section (`v0.1.2`) is plain HTML: bump it with each release.
+The version pill in the download section is plain HTML; the release workflow bumps it (and the
+version in the `cargo test` demo in `script.js`) via `scripts/release/set_website_version.sh`.
 `llms.txt` (an [llmstxt.org](https://llmstxt.org) index), `llms-full.txt` (features, agent CLI,
 shortcuts and config in plain text) and `robots.txt` are copied into `dist/` as is. Keep the
 `llms` files in sync with `index.html` and SPEC.md.

@@ -2,7 +2,8 @@
 # and staples it, and publishes the dmg + zip to GitHub Releases (also kept as a workflow
 # artifact). Same secrets and flow as kayet / zora (SPEC §15.2). ci.yml stays unsigned.
 # The version comes from the tag (SPEC §15.1): the build sets it in Cargo.toml / Cargo.lock,
-# and for stable tags the bump and the new CHANGELOG.md section are first committed to master.
+# and for stable tags the bump, the new CHANGELOG.md section and the website's version are first
+# committed to master.
 name: release
 on:
   push:
@@ -20,11 +21,11 @@ env:
 
 jobs:
   commit-version:
-    # Stable tags only: commit the version bump and the new CHANGELOG.md section to the default
-    # branch, if the tagged commit is on it, before anything is built. A rejected push (e.g.
-    # branch protection) fails the release early. Pre-release tags and tags off the default
-    # branch skip the commit and go on to the build. A push with GITHUB_TOKEN doesn't start
-    # ci.yml.
+    # Stable tags only: commit the version bump, the new CHANGELOG.md section and the website's
+    # version (download pill) to the default branch, if the tagged commit is on it, before
+    # anything is built. A rejected push (e.g. branch protection) fails the release early.
+    # Pre-release tags and tags off the default branch skip the commit and go on to the build. A
+    # push with GITHUB_TOKEN doesn't start ci.yml.
     runs-on: ubuntu-24.04
     env:
       BRANCH: ${{ github.event.repository.default_branch }}
@@ -33,7 +34,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Commit version and changelog
+      - name: Commit version, changelog and website version
         if: ${{ !contains(github.ref_name, '-') }}
         run: |
           git fetch origin "$BRANCH"
@@ -43,9 +44,10 @@ jobs:
           fi
           scripts/release/set_version.sh "$GITHUB_REF_NAME"
           scripts/release/changelog.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/notes.md"
+          scripts/release/set_website_version.sh "$GITHUB_REF_NAME"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.toml Cargo.lock CHANGELOG.md
+          git add Cargo.toml Cargo.lock CHANGELOG.md website/index.html website/script.js
           if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
           git commit -m "Release ${GITHUB_REF_NAME#v}"
           git rebase "origin/$BRANCH"

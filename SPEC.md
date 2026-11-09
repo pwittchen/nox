@@ -1566,8 +1566,9 @@ shell ◀───────────────────────�
 - SemVer. A release is cut by pushing a tag `vX.Y.Z`; the tag is the source of truth for the
   version. The release workflow writes it into the workspace `version` in `Cargo.toml` and the
   workspace entries of `Cargo.lock` (`scripts/release/set_version.sh`) before building, and for
-  stable tags first commits that bump to `master`, before the build, so `Cargo.toml` there
-  always holds the latest released version. A tag that isn't valid SemVer fails the release.
+  stable tags first commits that bump to `master` (together with the website's download version,
+  `scripts/release/set_website_version.sh`), before the build, so `Cargo.toml` and the website
+  there always hold the latest released version. A tag that isn't valid SemVer fails the release.
 - `CHANGELOG.md`: changes for the next release go into the `## [Unreleased]` section at the top
   (optional). On release, `scripts/release/changelog.sh` takes the notes from that section if it
   has content, else from an existing `## X.Y.Z` section (brackets optional), else from the commit
