@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+## 0.1.3 — 2026-11-09
+
+- Let Option type national characters on non-US keyboard layouts (12a9215)
+- Lowercase the slogan in the website download section #no-deploy (87a15d4)
+- Add a static website built with Bun #no-deploy (a91d9d9)
+- Update CHANGELOG.md (050e7b3)
+
 ## 0.1.2 — 2026-11-08
 
 - nox updates itself: nox → Check for Updates…, the palette, the About window and Settings check
