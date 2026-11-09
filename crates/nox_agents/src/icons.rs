@@ -82,6 +82,8 @@ builtin_icons!(
     "amp",
     "goose",
     "ollama",
+    "antigravity",
+    "aictl",
     // languages / runtimes
     "python",
     "java",
@@ -164,6 +166,8 @@ pub const BUILTIN_AGENT_KINDS: &[(&str, &str)] = &[
     ("amp", "amp"),
     ("goose", "goose"),
     ("ollama", "ollama"),
+    ("agy", "antigravity"),
+    ("aictl", "aictl"),
 ];
 
 /// Executable → built-in agent kind.
@@ -181,6 +185,9 @@ const AGENT_EXES: &[(&str, &str)] = &[
     ("amp", "amp"),
     ("goose", "goose"),
     ("ollama", "ollama"),
+    ("agy", "agy"),
+    ("antigravity", "agy"),
+    ("aictl", "aictl"),
 ];
 
 /// Executable → built-in icon. Agent executables come from [`AGENT_EXES`].
@@ -702,7 +709,8 @@ pub fn brand_tint(name: &str) -> Option<u32> {
     Some(match name {
         "claude" => 0xD97757,
         "codex" => 0x10A37F,
-        "gemini" | "gcloud" => 0x4285F4,
+        "gemini" | "gcloud" | "antigravity" => 0x4285F4,
+        "aictl" => 0x5ED3F3,
         "copilot" => 0x8957E5,
         "aider" => 0x14B014,
         "python" => 0x3776AB,
@@ -963,6 +971,8 @@ mod tests {
         // Kinds without a built-in agent icon: a built-in icon of that name, else "agent".
         assert_eq!(t.icon_for_kind("python"), Icon::Builtin("python"));
         assert_eq!(t.icon_for_kind("weird"), Icon::Builtin("agent"));
+        assert_eq!(t.icon_for_kind("agy"), Icon::Builtin("antigravity"));
+        assert_eq!(t.icon_for_kind("aictl"), Icon::Builtin("aictl"));
         assert_eq!(builtin_icon_svg("no-such-icon"), None);
     }
 
@@ -980,6 +990,9 @@ mod tests {
             ("amp", "amp"),
             ("goose", "goose"),
             ("ollama", "ollama"),
+            ("agy", "agy"),
+            ("antigravity", "agy"),
+            ("aictl", "aictl"),
         ] {
             assert_eq!(t.agent_kind(Some(&p(exe, &[])), None).as_deref(), Some(kind));
         }

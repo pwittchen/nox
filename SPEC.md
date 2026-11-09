@@ -191,7 +191,7 @@ so they carry over unchanged.
 - Built-in set (bundled SVGs, monochrome line style matching 5.1, optionally tinted with the
   tool's brand color at low saturation so it reads in both light and dark mode):
   - **AI coding agents**: Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Aider, Cursor
-    Agent, opencode, Amp, Goose, Ollama.
+    Agent, opencode, Amp, Goose, Ollama, Google Antigravity (`agy`), aictl.
   - **Languages / runtimes / REPLs**: Python (`python`, `ipython`, `uv`, `poetry`), Java (`java`,
     `jshell`), Kotlin, Scala (`sbt`), Node.js (`node`, `npm`, `pnpm`, `yarn`, `npx`), Bun, Deno,
     Ruby (`ruby`, `irb`, `rails`), Go, Rust (`cargo`, `rustc`), Swift (`swift`, `xcodebuild`),
