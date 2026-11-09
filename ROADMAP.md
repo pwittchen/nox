@@ -20,10 +20,18 @@
 - **Mode 2027** (grapheme clustering query, §7.1): emoji clusters are merged, but `DECRQM ?2027`
   isn't answered, so programs can't detect it and adjust their width tables.
 
+## Planned
+
+- **Remote agents over SSH** ([docs/remote-agents.md](docs/remote-agents.md), proposal): agents
+  running on a VPS inside a nox pane join the local workspace's team. `nox ssh <host>` forwards
+  a per-session control socket (least-authority policy, no network port), ships a static Linux
+  `nox` CLI, and treats the remote agent as a normal agent pane (state, name, messages, claims).
+
 ## Later
 
 - Multiple windows (one workspace per window), "move tab to new window".
 - A `nox` terminfo entry.
 - tmux control mode, SSH profiles, broadcast input.
 - Inline images (Sixel, Kitty graphics, iTerm `imgcat`).
-- Intel / Linux builds.
+- Intel / Linux builds of the app (a Linux build of the `nox` CLI is part of remote agents,
+  above).
