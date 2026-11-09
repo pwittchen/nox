@@ -178,3 +178,11 @@ jobs:
         run: |
           gh workflow run update-formulae.yml -R pwittchen/homebrew-tap \
             -f formula=nox -f version="${GITHUB_REF_NAME#v}"
+
+  deploy-website:
+    # Stable releases only. The version commit is pushed with GITHUB_TOKEN, which doesn't start
+    # deploy-website.yml on its own, so call it once the release is published.
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    uses: ./.github/workflows/deploy-website.yml
+    secrets: inherit

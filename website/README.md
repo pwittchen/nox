@@ -13,3 +13,7 @@ version in the `cargo test` demo in `script.js`) via `scripts/release/set_websit
 `llms.txt` (an [llmstxt.org](https://llmstxt.org) index), `llms-full.txt` (features, agent CLI,
 shortcuts and config in plain text) and `robots.txt` are copied into `dist/` as is. Keep the
 `llms` files in sync with `index.html` and SPEC.md.
+
+Pushes to `master` that touch `website/` deploy the built site to the VPS
+(`.github/workflows/deploy-website.yml`); so does every stable release. `#no-deploy` in the
+commit message skips it.

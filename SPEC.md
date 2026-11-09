@@ -1658,6 +1658,12 @@ run for the same branch or PR cancels the one still in progress. It has no acces
 secrets. It doesn't run when a change touches only Markdown files and / or `website/`, or when
 the commit message (push) or PR title contains `#no-deploy`.
 
+`deploy-website.yml` builds the website (`website/`, Bun) and rsyncs `website/dist/` to
+`/var/www/noxterminal/` on the VPS (secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_PORT`).
+It runs on pushes to `master` that touch `website/` (skipped when the commit message contains
+`#no-deploy`), by hand, and from the release workflow after a stable release is published, so the
+site's download version matches the release.
+
 ### 15.3 Automatic updates
 nox updates itself from GitHub Releases with a small built-in updater (`nox_ui::updater`), not
 Sparkle: the release zip that CI already publishes is the update, so no appcast, EdDSA key or
