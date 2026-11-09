@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 — 2026-11-09
+
+- Make the overlay scrollbar draggable (3a56222)
+- Update README.md (80aa3ee)
+- Link the website in the README (05547c0)
+- Deploy the website to the VPS (07b918f)
+- Skip CI for website-only changes #no-deploy (4f51a98)
+- Add a contact link to the website menu (eb169ec)
+- Update the website version on release (0d4331a)
+- Stop adding an empty [Unreleased] section to the changelog on release (373d520)
+
 ## 0.1.3 — 2026-11-09
 
 - Let Option type national characters on non-US keyboard layouts (12a9215)
