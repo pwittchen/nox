@@ -4,6 +4,8 @@
 
 <h1 align="center">nox</h1>
 
+<p align="center"><a href="https://noxterminal.app">noxterminal.app</a></p>
+
 <p align="center">
   <a href="https://github.com/pwittchen/nox/actions/workflows/ci.yml"><img src="https://github.com/pwittchen/nox/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI"></a>
 </p>
