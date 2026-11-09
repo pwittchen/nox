@@ -1,6 +1,6 @@
 //! `nox_mac` — the thin `AppKit` layer (SPEC §13): native context menus, accessibility flags, Dock
 //! bounce, beep, the attention chime, system notifications, the `NSWindow` background color,
-//! keep-awake power assertions and which Option key is down.
+//! keep-awake power assertions, which Option key is down and the keyboard layout.
 //!
 //! Everything here is main-thread `AppKit` messaging through `objc2`; functions are no-ops (or
 //! return defaults) where the platform refuses (e.g. notifications from an unbundled binary).
@@ -179,12 +179,56 @@ pub fn bundle_resources_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Which Option keys are currently held: `(left, right)`, from the device-dependent bits of
-/// `[NSEvent modifierFlags]` (`NX_DEVICELALTKEYMASK` / `NX_DEVICERALTKEYMASK`).
+/// Which Option keys are currently held: `(left, right)`, from the device-dependent bits
+/// (`NX_DEVICELALTKEYMASK` / `NX_DEVICERALTKEYMASK`) of the event being dispatched
+/// (`[NSApp currentEvent]`), falling back to `[NSEvent modifierFlags]` outside an event.
 pub fn option_keys_down() -> (bool, bool) {
-    let Some(cls) = class("NSEvent") else { return (false, false) };
-    let flags: usize = unsafe { msg_send![cls, modifierFlags] };
+    let mut flags: usize = 0;
+    if let Some(app_cls) = class("NSApplication") {
+        unsafe {
+            let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+            if !app.is_null() {
+                let ev: *mut AnyObject = msg_send![app, currentEvent];
+                if !ev.is_null() {
+                    flags = msg_send![ev, modifierFlags];
+                }
+            }
+        }
+    }
+    if flags & 0x60 == 0
+        && let Some(cls) = class("NSEvent")
+    {
+        flags = unsafe { msg_send![cls, modifierFlags] };
+    }
     (flags & 0x20 != 0, flags & 0x40 != 0)
+}
+
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut c_void;
+    fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *const c_void;
+    static kTISPropertyInputSourceID: *const c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(cf: *const c_void);
+}
+
+/// The input source ID of the current keyboard layout (e.g. `com.apple.keylayout.PolishPro`).
+#[must_use]
+pub fn keyboard_layout_id() -> Option<String> {
+    unsafe {
+        let source = TISCopyCurrentKeyboardLayoutInputSource();
+        if source.is_null() {
+            return None;
+        }
+        let id = TISGetInputSourceProperty(source, kTISPropertyInputSourceID);
+        // CFStringRef is toll-free bridged to NSString; the property isn't owned by us.
+        let out = (!id.is_null()).then(|| (*id.cast::<NSString>()).to_string());
+        CFRelease(source);
+        out
+    }
 }
 
 /// Set the background color of the window that hosts `ns_view` (so areas exposed during live

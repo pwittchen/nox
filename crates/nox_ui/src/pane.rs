@@ -924,6 +924,11 @@ impl Pane {
         let alt_is_meta = m.alt && {
             let (l, r) = nox_mac::option_keys_down();
             match settings.config.terminal.option_as_meta {
+                // Layouts that type letters with Option (Polish ą, German ö, …) keep it for text.
+                nox_config::OptionAsMeta::Auto => {
+                    nox_mac::keyboard_layout_id().is_some_and(|id| keys::layout_uses_option_as_meta(&id))
+                        && (l || !r)
+                }
                 nox_config::OptionAsMeta::Left => l || !r,
                 nox_config::OptionAsMeta::Right => r,
                 nox_config::OptionAsMeta::Both => true,

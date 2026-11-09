@@ -97,7 +97,7 @@ config_enum!(
 );
 config_enum!(
     /// `terminal.option_as_meta`.
-    OptionAsMeta { Left => "left", Right => "right", Both => "both", None => "none" } default Left
+    OptionAsMeta { Auto => "auto", Left => "left", Right => "right", Both => "both", None => "none" } default Auto
 );
 config_enum!(
     /// `terminal.bell`.
@@ -364,7 +364,7 @@ impl Default for TerminalConfig {
             copy_on_select: true,
             confirm_multiline_paste: true,
             word_separators: " ()[]{}',\"`│".into(),
-            option_as_meta: OptionAsMeta::Left,
+            option_as_meta: OptionAsMeta::Auto,
             bold_is_bright: false,
             bell: Bell::Visual,
             attention_sound: true,

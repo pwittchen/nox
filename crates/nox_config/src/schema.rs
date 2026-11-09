@@ -377,7 +377,7 @@ fn build() -> Vec<SettingMeta> {
             Terminal,
             "terminal.option_as_meta",
             "Option as Meta",
-            "Which Option keys send Meta (Esc-prefixed) sequences.",
+            "Which Option keys send Meta (Esc-prefixed) sequences. Auto: left on US / ABC layouts, none on others (so Option types ą, ö, …).",
             Enum(OptionAsMeta::NAMES),
         ),
         m(

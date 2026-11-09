@@ -156,6 +156,15 @@ pub fn encode(input: &KeyInput<'_>, modes: KeyModes) -> Option<Vec<u8>> {
     None
 }
 
+/// Whether `terminal.option_as_meta = "auto"` makes the left Option key Meta on the keyboard
+/// layout with this input source ID: only on the US / ABC layouts, whose Option layer holds
+/// symbols nobody types in a shell. Other layouts (Polish Pro, German, French, …) need Option
+/// for their letters, so it types characters there.
+#[must_use]
+pub fn layout_uses_option_as_meta(layout_id: &str) -> bool {
+    matches!(layout_id, "com.apple.keylayout.US" | "com.apple.keylayout.ABC")
+}
+
 /// Keypad keys in application keypad mode. GPUI doesn't report keypad keys distinctly, so this
 /// is exposed for completeness and used when a platform layer can tell.
 #[must_use]
@@ -290,6 +299,17 @@ mod tests {
         let compose = KeyInput { key: "x", key_char: Some("≈"), mods: ALT, alt_is_meta: false };
         assert_eq!(encode(&compose, KeyModes::default()).unwrap(), "≈".as_bytes());
         assert_eq!(enc("a", Some("A"), Mods { shift: true, ..ALT }).unwrap(), b"\x1bA");
+        // Polish Pro: ⌥A types „ą" when Option isn't Meta.
+        let polish = KeyInput { key: "a", key_char: Some("ą"), mods: ALT, alt_is_meta: false };
+        assert_eq!(encode(&polish, KeyModes::default()).unwrap(), "ą".as_bytes());
+    }
+
+    #[test]
+    fn auto_option_as_meta_only_on_us_layouts() {
+        assert!(layout_uses_option_as_meta("com.apple.keylayout.US"));
+        assert!(layout_uses_option_as_meta("com.apple.keylayout.ABC"));
+        assert!(!layout_uses_option_as_meta("com.apple.keylayout.PolishPro"));
+        assert!(!layout_uses_option_as_meta("com.apple.keylayout.German"));
     }
 
     #[test]

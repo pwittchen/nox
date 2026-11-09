@@ -785,8 +785,11 @@ corner or a divider.
 - Key events (`KeyDownEvent` with `Keystroke`) are translated to bytes by nox's key encoder,
   honoring alacritty's mode flags (application cursor keys, application keypad, Kitty
   protocol when on).
-- `terminal.option_as_meta = "left" | "right" | "both" | "none"` (default `"left"`): the chosen
-  Option key sends `ESC`-prefixed sequences; the other one types special characters.
+- `terminal.option_as_meta = "auto" | "left" | "right" | "both" | "none"` (default `"auto"`): the
+  chosen Option key sends `ESC`-prefixed sequences; the other one types special characters.
+  `"auto"` is `"left"` on the US / ABC keyboard layouts and `"none"` on every other layout, whose
+  Option layer holds letters (Polish Pro `⌥A` → `ą`, …). Which Option key is down comes from the
+  device-dependent modifier bits of the key event being dispatched.
 - `⌥←` / `⌥→` send word-left / word-right (`ESC b` / `ESC f`), `⌘←` / `⌘→` send line start / end
   (`^A` / `^E`), `⌥⌫` deletes a word, `⌘⌫` deletes the line (`^U`) — iTerm "Natural Text
   Editing" defaults, overridable in `[keys]`.
@@ -1326,7 +1329,7 @@ padding = [8, 6]             # [horizontal, vertical] px
 copy_on_select = true
 confirm_multiline_paste = true
 word_separators = " ()[]{}',\"`│"
-option_as_meta = "left"      # "left" | "right" | "both" | "none"
+option_as_meta = "auto"      # "auto" | "left" | "right" | "both" | "none"
 bold_is_bright = false
 bell = "visual"              # "visual" | "sound" | "none"
 attention_sound = true       # soft chime when a job finishes or waits for input unseen (see 7.11)
