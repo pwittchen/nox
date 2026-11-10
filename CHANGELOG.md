@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 — 2026-11-10
+
+- Show only a stack icon in the workspace chip with one workspace (320d1ae)
+- Add Google Antigravity and aictl agent icons (089c83c)
+- moved design doc for remote agents into docs/design/ dir #no-deploy (6b8d8c1)
+- Add design doc for remote agents over SSH #no-deploy (d925d8d)
+- Add Datafast analytics to the website (f3beccd)
+- Add LinkedIn promo graphic (97712b4)
+
 ## 0.2.0 — 2026-11-09
 
 - Make the overlay scrollbar draggable (3a56222)

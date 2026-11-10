@@ -199,7 +199,7 @@ const SCRIPTS = {
   cargo: [
     ["wait", 7600],
     ["cmd", "cargo test -p nox_terminal"],
-    ["out", '   <span class="g"><b>Compiling</b></span> nox_terminal v0.2.0'],
+    ["out", '   <span class="g"><b>Compiling</b></span> nox_terminal v0.2.1'],
     ["wait", 1100],
     ["out", '    <span class="g"><b>Finished</b></span> `test` profile in 3.41s'],
     ["out", '     <span class="g"><b>Running</b></span> unittests src/lib.rs'],

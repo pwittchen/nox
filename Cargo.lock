@@ -3827,7 +3827,7 @@ dependencies = [
 
 [[package]]
 name = "nox"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-channel 2.5.0",
  "env_logger",
@@ -3843,7 +3843,7 @@ dependencies = [
 
 [[package]]
 name = "nox_agents"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dirs 6.0.0",
  "hex",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "nox_cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "libc",
@@ -3871,7 +3871,7 @@ dependencies = [
 
 [[package]]
 name = "nox_config"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dirs 6.0.0",
  "log",
@@ -3886,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "nox_ipc"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "libc",
  "log",
@@ -3899,7 +3899,7 @@ dependencies = [
 
 [[package]]
 name = "nox_layout"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proptest",
  "serde",
@@ -3910,7 +3910,7 @@ dependencies = [
 
 [[package]]
 name = "nox_mac"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "block2",
  "objc2",
@@ -3919,7 +3919,7 @@ dependencies = [
 
 [[package]]
 name = "nox_terminal"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "alacritty_terminal",
  "async-channel 2.5.0",
@@ -3933,7 +3933,7 @@ dependencies = [
 
 [[package]]
 name = "nox_theme"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "tempfile",
  "toml 0.8.23",
@@ -3941,7 +3941,7 @@ dependencies = [
 
 [[package]]
 name = "nox_ui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
