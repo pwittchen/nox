@@ -339,6 +339,8 @@ fn render_workspace_chip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement 
             .unwrap_or_default();
         format!("{}\nroot: {root_dir}\ncwd: {cwd}", ws.name)
     };
+    // With a single workspace the chip collapses to a stack icon (same tooltip, menu and drop).
+    let single = root.ws.list.len() < 2;
     div()
         .id("workspace-chip")
         .flex()
@@ -346,7 +348,7 @@ fn render_workspace_chip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement 
         .items_center()
         .gap(px(6.))
         .h(px(26.))
-        .px(px(8.))
+        .px(px(if single { 6. } else { 8. }))
         .rounded(px(6.))
         .border_1()
         .border_color(theme.border)
@@ -354,16 +356,21 @@ fn render_workspace_chip(root: &mut Root, cx: &mut Context<Root>) -> AnyElement 
         .cursor_pointer()
         .hover(|s| s.bg(theme.text.opacity(0.05)))
         .on_mouse_down(MouseButton::Left, keep_press)
-        .child(div().size(px(9.)).rounded(px(2.)).bg(swatch))
-        .child(
-            div()
-                .max_w(px(140.))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .child(ws.name.clone()),
-        )
-        .children(other_dot.map(|c| div().size(px(6.)).rounded_full().bg(c)))
+        .when(single, |d| {
+            d.child(svg().path("icons/ui/stack.svg").size(px(14.)).text_color(theme.text_muted))
+        })
+        .when(!single, |d| {
+            d.child(div().size(px(9.)).rounded(px(2.)).bg(swatch))
+                .child(
+                    div()
+                        .max_w(px(140.))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(ws.name.clone()),
+                )
+                .children(other_dot.map(|c| div().size(px(6.)).rounded_full().bg(c)))
+        })
         .tooltip(move |window, cx| crate::util::tooltip(tip.clone(), window, cx))
         .on_click(
             cx.listener(|root, _: &ClickEvent, window, cx| crate::menus::workspace_menu(root, window, cx)),

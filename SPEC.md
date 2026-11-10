@@ -314,7 +314,8 @@ Title bar (left to right):
 - **Sidebar toggle** `[◧]` (see 5.4).
 - **Workspace chip** `[▢ nox]`: the active workspace (see 4.7) — color swatch, name, and the
   workspace status dot when another workspace needs attention (so the user sees it without
-  opening anything). Hovering shows the root and the focused pane's cwd. Click → menu: the list
+  opening anything). With only one workspace open the chip shows just a stack icon, no swatch or
+  name (same tooltip, menu and drop). Hovering shows the root and the focused pane's cwd. Click → menu: the list
   of workspaces with their status dots (click to switch), New Workspace…, Open Folder as
   Workspace…, New Agent…, New Agent in Worktree…, Rename Workspace…, Set Color ▸, Copy Path, Reveal in
   Finder, Close Workspace. Dropping a folder on it opens that folder as a workspace. While the
