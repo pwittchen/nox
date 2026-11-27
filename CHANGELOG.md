@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 — 2026-11-27
+
+- Update url and libz-sys to fix cargo audit advisories (f8d7e04)
+- Add security-deps-fix Claude Code skill (2e3cd5d)
+
 ## 0.2.1 — 2026-11-10
 
 - Show only a stack icon in the workspace chip with one workspace (320d1ae)
