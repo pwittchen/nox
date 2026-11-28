@@ -241,7 +241,7 @@ impl DialogView {
         }
     }
 
-    fn press(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn press(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let values = self.values(cx);
         let cb = self.buttons.get(index).and_then(|b| b.on_click.clone());
         let restore = self.restore_focus.clone();

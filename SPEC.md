@@ -773,9 +773,13 @@ corner or a divider.
 
 ### 7.7 Links
 - OSC 8 hyperlinks (from the cell's hyperlink attribute) and plain URLs (regex over the hovered
-  line, wrapped lines joined) are underlined on hover with `⌘` held; `⌘`-click opens them with
-  `cx.open_url`. File paths relative to the pane's cwd are detected too; `⌘`-click opens them
+  line, wrapped lines joined) are underlined on hover with `⌘` or `⌃` held; `⌘`-click opens them
+  with `cx.open_url`. File paths relative to the pane's cwd are detected too; `⌘`-click opens them
   with the default app, `⌘⌥`-click reveals them in Finder (`cx.reveal_path`).
+- `⌃`-click does the same (`⌃⌥`-click reveals a path) but asks first: a sheet titled "Open
+  link?" ("Open file?" / "Reveal in Finder?" for paths) shows the target in monospace with
+  Cancel / Open (default, `↵`); `Esc` cancels. Like `⌘`-click, it only applies when the program
+  doesn't capture the mouse (or with `⇧` held, which forces local handling).
 
 ### 7.8 Find
 - `⌘F` opens a compact find bar at the top-right of the focused pane: query field, match count

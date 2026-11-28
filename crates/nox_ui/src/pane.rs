@@ -1086,18 +1086,14 @@ impl Pane {
         if ev.button != MouseButton::Left {
             return;
         }
-        if ev.modifiers.platform
+        if (ev.modifiers.platform || ev.modifiers.control)
             && let Some(link) = self.link_at(ev.position, cx)
         {
-            match link.target {
-                LinkTarget::Url(u) => cx.open_url(&u),
-                LinkTarget::Path(p) => {
-                    if ev.modifiers.alt {
-                        cx.reveal_path(&p);
-                    } else {
-                        cx.open_url(&format!("file://{}", p.display()));
-                    }
-                }
+            let reveal = ev.modifiers.alt;
+            if ev.modifiers.platform {
+                open_link(&link.target, reveal, cx);
+            } else {
+                confirm_open_link(link.target, reveal, window, cx);
             }
             return;
         }
@@ -1160,8 +1156,8 @@ impl Pane {
         if Settings::global(cx).config.ui.focus_follows_mouse && !self.focus_handle.is_focused(window) {
             window.focus(&self.focus_handle);
         }
-        // Link hover with ⌘.
-        let link = if ev.modifiers.platform { self.link_at(ev.position, cx) } else { None };
+        // Link hover with ⌘ (or ⌃, which asks before opening).
+        let link = if link_modifier(ev.modifiers) { self.link_at(ev.position, cx) } else { None };
         if link != self.hovered_link {
             self.hovered_link = link;
             cx.notify();
@@ -1551,10 +1547,10 @@ impl Pane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !ev.modifiers.platform && self.hovered_link.is_some() {
+        if !link_modifier(ev.modifiers) && self.hovered_link.is_some() {
             self.hovered_link = None;
             cx.notify();
-        } else if ev.modifiers.platform {
+        } else if link_modifier(ev.modifiers) {
             let pos = window.mouse_position();
             if self.geom.as_ref().is_some_and(|g| g.bounds.contains(&pos)) {
                 self.hovered_link = self.link_at(pos, cx);
@@ -2063,6 +2059,35 @@ impl Pane {
                 .into_any_element(),
         )
     }
+}
+
+/// `⌘` opens links directly, `⌃` asks first (SPEC §7.7).
+fn link_modifier(m: Modifiers) -> bool {
+    m.platform || m.control
+}
+
+/// Open a link: URLs in the browser, paths with their default app (or revealed in Finder).
+fn open_link(target: &LinkTarget, reveal: bool, cx: &App) {
+    match target {
+        LinkTarget::Url(u) => cx.open_url(u),
+        LinkTarget::Path(p) if reveal => cx.reveal_path(p),
+        LinkTarget::Path(p) => cx.open_url(&format!("file://{}", p.display())),
+    }
+}
+
+/// `⌃`-click: show the link in a sheet and open it only after the user confirms.
+fn confirm_open_link(target: LinkTarget, reveal: bool, window: &mut Window, cx: &mut App) {
+    let (title, shown, label) = match &target {
+        LinkTarget::Url(u) => ("Open link?", u.clone(), "Open"),
+        LinkTarget::Path(p) if reveal => ("Reveal in Finder?", p.display().to_string(), "Reveal"),
+        LinkTarget::Path(p) => ("Open file?", p.display().to_string(), "Open"),
+    };
+    crate::dialog::DialogBuilder::new(title)
+        .detail(shown)
+        .cancel("Cancel")
+        .button(label, move |_, _, cx| open_link(&target, reveal, cx))
+        .default_last()
+        .show(window, cx);
 }
 
 fn button_of(b: MouseButton) -> mouse::MouseButton {
@@ -3538,6 +3563,44 @@ pub(crate) mod tests {
         // Moving without ⌘ drops the hover.
         cx.simulate_mouse_move(at, None, Modifiers::none());
         assert!(pane.read_with(cx, |p, _| p.hovered_link.is_none()));
+    }
+
+    #[gpui::test]
+    fn ctrl_click_asks_before_opening_a_link(cx: &mut TestAppContext) {
+        let (pane, cx) = open(cx, silent(), PaneSpawn::default());
+        feed(&pane, cx, b"go to https://nox.dev/x now");
+        let at = cell(&pane, cx, 10, 0);
+        cx.simulate_mouse_move(at, None, Modifiers::control());
+        assert!(pane.read_with(cx, |p, _| p.hovered_link.is_some()), "⌃ underlines like ⌘");
+        let sheet = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                cx.try_global::<crate::dialog::ActiveDialog>().and_then(|d| d.0.as_ref().map(|d| d.0.clone()))
+            })
+        };
+        let click = |cx: &mut VisualTestContext| {
+            mouse_down(cx, at, 1, Modifiers::control());
+            cx.run_until_parked();
+            let v = sheet(cx).expect("a confirmation sheet");
+            v.read_with(cx, |v, _| {
+                assert_eq!(v.title.as_ref(), "Open link?");
+                assert_eq!(v.detail.as_deref(), Some("https://nox.dev/x"));
+                let labels: Vec<_> = v.buttons.iter().map(|b| b.label.to_string()).collect();
+                assert_eq!(labels, ["Cancel", "Open"]);
+                assert_eq!(v.default_button, 1);
+            });
+            v
+        };
+        // Cancel: nothing opens.
+        let v = click(cx);
+        v.update_in(cx, |v, window, cx| v.press(0, window, cx));
+        assert_eq!(cx.opened_url(), None);
+        assert!(sheet(cx).is_none());
+        assert_eq!(selection(&pane, cx), None, "⌃-click on a link doesn't select");
+        // Open: the link opens.
+        let v = click(cx);
+        v.update_in(cx, |v, window, cx| v.press(1, window, cx));
+        assert_eq!(cx.opened_url().as_deref(), Some("https://nox.dev/x"));
+        assert!(sheet(cx).is_none());
     }
 
     #[gpui::test]
