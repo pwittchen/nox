@@ -149,14 +149,18 @@ pub fn pane_context_menu(root: &mut Root, pane: PaneId, window: &mut Window, cx:
         match link.target {
             crate::pane::LinkTarget::Url(u) => {
                 let u2 = u.clone();
-                m.add("Open Link", move |_, _, cx| cx.open_url(&u));
+                m.add("Open Link", move |_, window, cx| {
+                    crate::links::confirm_open_link(crate::pane::LinkTarget::Url(u), false, window, cx);
+                });
                 m.add("Copy Link", move |_, _, cx| {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(u2));
                 });
             }
             crate::pane::LinkTarget::Path(p) => {
                 let (p2, p3) = (p.clone(), p.clone());
-                m.add("Open", move |_, _, cx| cx.open_url(&format!("file://{}", p.display())));
+                m.add("Open", move |_, window, cx| {
+                    crate::links::confirm_open_link(crate::pane::LinkTarget::Path(p), false, window, cx);
+                });
                 m.add("Copy Path", move |_, _, cx| {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(p2.to_string_lossy().into_owned()));
                 });

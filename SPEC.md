@@ -428,7 +428,7 @@ keeps the toggle and the buttons.
   Workspace ▸ (the other workspaces, New Workspace…), Close Tab, Close Other Tabs.
 - Pane (right-click in the terminal): Copy, Copy Last Output, Send Selection to… (see 7.12),
   Paste, Select All, Clear Buffer, Split Vertically, Split Horizontally, Maximize Pane, Rename
-  Pane…, Close Pane. With a URL or path under the pointer: Open, Copy Link, Reveal in Finder.
+  Pane…, Close Pane. With a URL or path under the pointer: Open (asks first, see 7.7), Copy Link, Reveal in Finder.
   In an agent pane also: Show in Agents Panel, Release Claims (when it holds any, see 7.13).
 
 ### 5.6 Command palette
@@ -773,13 +773,19 @@ corner or a divider.
 
 ### 7.7 Links
 - OSC 8 hyperlinks (from the cell's hyperlink attribute) and plain URLs (regex over the hovered
-  line, wrapped lines joined) are underlined on hover with `⌘` or `⌃` held; `⌘`-click opens them
-  with `cx.open_url`. File paths relative to the pane's cwd are detected too; `⌘`-click opens them
-  with the default app, `⌘⌥`-click reveals them in Finder (`cx.reveal_path`).
-- `⌃`-click does the same (`⌃⌥`-click reveals a path) but asks first: a sheet titled "Open
-  link?" ("Open file?" / "Reveal in Finder?" for paths) shows the target in monospace with
-  Cancel / Open (default, `↵`); `Esc` cancels. Like `⌘`-click, it only applies when the program
-  doesn't capture the mouse (or with `⇧` held, which forces local handling).
+  line, wrapped lines joined) are underlined on hover with `⌘` or `⌃` held. File paths relative
+  to the pane's cwd are detected too.
+- `⌘`-click or `⌃`-click never opens a link right away: a sheet titled "Open link?" ("Open
+  file?" for paths, "Reveal in Finder?" with `⌥` added) shows the target in monospace with
+  Cancel / Open (default, `↵`); `Esc` cancels. On confirm URLs open with `cx.open_url`, paths with
+  their default app (or `cx.reveal_path`). The context menu's Open Link / Open ask the same way
+  (Reveal in Finder there doesn't). Clicks only apply when the program doesn't capture the
+  mouse (or with `⇧` held, which forces local handling). GPUI delivers a macOS `⌃`-click as a
+  right click with `⌃` cleared, so the pane tells them apart by the native event
+  (`nox_mac::is_ctrl_left_click`); `⌃`-click off a link still opens the context menu.
+- URLs stop at `\` (shell escapes like `\e` aren't part of them). Links are opened via
+  `links::open_link`, which percent-encodes characters `NSURL` rejects (a nil `NSURL` makes
+  `openURL:` raise and crash the app); paths open as percent-encoded `file://` URLs.
 
 ### 7.8 Find
 - `⌘F` opens a compact find bar at the top-right of the focused pane: query field, match count

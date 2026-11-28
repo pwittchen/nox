@@ -712,6 +712,27 @@ pub fn open_notification_settings() {
         .spawn();
 }
 
+/// Whether the event being dispatched (`[NSApp currentEvent]`) is a left mouse-down with ⌃
+/// held. GPUI delivers such a click as a right click with ⌃ cleared, so this is the only way
+/// to tell a ⌃-click from a real right click.
+pub fn is_ctrl_left_click() -> bool {
+    let Some(app_cls) = class("NSApplication") else { return false };
+    unsafe {
+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+        if app.is_null() {
+            return false;
+        }
+        let event: *mut AnyObject = msg_send![app, currentEvent];
+        if event.is_null() {
+            return false;
+        }
+        // NSEventTypeLeftMouseDown = 1, NSEventModifierFlagControl = 1 << 18.
+        let kind: u64 = msg_send![event, type];
+        let flags: usize = msg_send![event, modifierFlags];
+        kind == 1 && flags & (1 << 18) != 0
+    }
+}
+
 /// Whether ⇧ is held right now (`NSEventModifierFlagShift`).
 pub fn shift_key_down() -> bool {
     let Some(cls) = class("NSEvent") else { return false };

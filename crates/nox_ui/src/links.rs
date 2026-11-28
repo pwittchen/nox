@@ -1,16 +1,19 @@
 //! Link detection on a terminal line (SPEC §7.7): URLs and file paths relative to the pane's
 //! cwd. (OSC 8 hyperlinks come from the cells themselves.)
 
+use std::fmt::Write as _;
 use std::ops::Range;
 use std::path::Path;
 use std::sync::LazyLock;
 
+use gpui::{App, Window};
 use regex::Regex;
 
 use crate::pane::LinkTarget;
 
 static URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\b(?:https?|ftp|file|ssh|git)://[^\s<>"'`\x00-\x1f]+|\bmailto:[^\s<>"'`]+"#).unwrap()
+    Regex::new(r#"(?i)\b(?:https?|ftp|file|ssh|git)://[^\s<>"'`\\\x00-\x1f]+|\bmailto:[^\s<>"'`\\]+"#)
+        .unwrap()
 });
 
 static PATH: LazyLock<Regex> = LazyLock::new(|| {
@@ -74,6 +77,62 @@ fn strip_line_suffix(s: &str) -> &str {
     out
 }
 
+/// Open a link (SPEC §7.7): URLs with the default handler, paths with their default app, or
+/// revealed in Finder. Never hands `AppKit` a string it can't parse: `NSURL` returns `nil` for e.g.
+/// a backslash, and `openURL:` with `nil` raises (crashing the app).
+pub fn open_link(target: &LinkTarget, reveal: bool, cx: &App) {
+    match target {
+        LinkTarget::Url(u) => cx.open_url(&encode_url(u)),
+        LinkTarget::Path(p) if reveal => cx.reveal_path(p),
+        LinkTarget::Path(p) => cx.open_url(&file_url(p)),
+    }
+}
+
+/// Show the link in a sheet and open it only after the user confirms (SPEC §7.7): used for
+/// `⌘`- / `⌃`-click and the context menu's Open Link / Open.
+pub fn confirm_open_link(target: LinkTarget, reveal: bool, window: &mut Window, cx: &mut App) {
+    let (title, shown, label) = match &target {
+        LinkTarget::Url(u) => ("Open link?", u.clone(), "Open"),
+        LinkTarget::Path(p) if reveal => ("Reveal in Finder?", p.display().to_string(), "Reveal"),
+        LinkTarget::Path(p) => ("Open file?", p.display().to_string(), "Open"),
+    };
+    crate::dialog::DialogBuilder::new(title)
+        .detail(shown)
+        .cancel("Cancel")
+        .button(label, move |_, _, cx| open_link(&target, reveal, cx))
+        .default_last()
+        .show(window, cx);
+}
+
+/// Percent-encode the ASCII characters RFC 3986 doesn't allow in a URL (space, `\`, `"`, `<`,
+/// `{`, `|`, …, and `%` not starting an escape). Non-ASCII stays (`NSURL` accepts it).
+fn encode_url(u: &str) -> String {
+    encode(u, "-._~:/?#[]@!$&'()*+,;=", true)
+}
+
+/// A `file://` URL for `p`, with everything that isn't a plain path character escaped (so
+/// names with spaces, `#`, `?` or `%` open the right file).
+#[must_use]
+pub fn file_url(p: &Path) -> String {
+    format!("file://{}", encode(&p.to_string_lossy(), "-._~/!$&'()*+,;=:@", false))
+}
+
+fn encode(u: &str, allowed: &str, keep_escapes: bool) -> String {
+    let b = u.as_bytes();
+    let mut out = String::with_capacity(u.len());
+    for (i, c) in u.char_indices() {
+        let escape = keep_escapes
+            && c == '%'
+            && b.get(i + 1..i + 3).is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit));
+        if !c.is_ascii() || c.is_ascii_alphanumeric() || allowed.contains(c) || escape {
+            out.push(c);
+        } else {
+            let _ = write!(out, "%{:02X}", c as u32);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +145,23 @@ mod tests {
         assert_eq!(&t[r], "https://example.com/a(b)c");
         assert_eq!(target, LinkTarget::Url("https://example.com/a(b)c".into()));
         assert!(find_link(t, 0, None).is_none());
+    }
+
+    #[test]
+    fn urls_stop_at_backslashes() {
+        // A shell command with an OSC 8 escape typed out: `\e` isn't part of the URL.
+        let t = r"printf 'osc8 link: \e]8;;https://github.com\e\\click me\e]8;;\e\\\n'";
+        let (r, _) = find_link(t, t.find("github").unwrap(), None).unwrap();
+        assert_eq!(&t[r], "https://github.com");
+    }
+
+    #[test]
+    fn urls_are_encoded_for_appkit() {
+        assert_eq!(encode_url("https://x.dev/a?b=1&c=%20#f"), "https://x.dev/a?b=1&c=%20#f");
+        assert_eq!(encode_url(r"https://x.dev/a\b c"), "https://x.dev/a%5Cb%20c");
+        assert_eq!(encode_url("https://x.dev/{a}|^`%zz"), "https://x.dev/%7Ba%7D%7C%5E%60%25zz");
+        assert_eq!(encode_url("https://x.dev/zażółć"), "https://x.dev/zażółć");
+        assert_eq!(file_url(Path::new("/tmp/a b/#1?%.md")), "file:///tmp/a%20b/%231%3F%25.md");
     }
 
     #[test]
