@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3 — 2026-11-28
+
+- Confirm every link open and fix crash on invalid URLs (e318e82)
+- Ask before opening links on Ctrl-click (ea64655)
+
 ## 0.2.2 — 2026-11-27
 
 - Update url and libz-sys to fix cargo audit advisories (f8d7e04)
